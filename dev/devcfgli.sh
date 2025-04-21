@@ -369,23 +369,24 @@ inst_init() {
     echo "port=\$PGPORT"                    >> \$PGDATA/postgresql.conf #Change it to substitution with SED
     echo "unix_socket_directories='/tmp'"   >> \$PGDATA/postgresql.conf
 
-    #echo "---------------------------------------------------------"
-    #echo "Configuring SHARED PRELOAD LIBRARIES"
-    #echo "---------------------------------------------------------"
+    echo "---------------------------------------------------------"
+    echo "Configuring SHARED PRELOAD LIBRARIES"
+    echo "---------------------------------------------------------"
     #echo "shared_preload_libraries='online_analyze,plantuner,dbcopies_decoding'" >> \$PGDATA/postgresql.conf
+    echo "shared_preload_libraries='pg_tde'" >> \$PGDATA/postgresql.conf
 
-    echo "---------------------------------------------------------"
-    echo "Configuring logical replication"
-    echo "---------------------------------------------------------"
+    #echo "---------------------------------------------------------"
+    #echo "Configuring logical replication"
+    #echo "---------------------------------------------------------"
 
-    echo "wal_level = 'logical'"            >> \$PGDATA/postgresql.conf
-    echo "max_replication_slots = 1"        >> \$PGDATA/postgresql.conf
-    echo "max_wal_senders = 4"              >> \$PGDATA/postgresql.conf
-    echo "shared_preload_libraries='test_decoding'" >> \$PGDATA/postgresql.conf
+    #echo "wal_level = 'logical'"            >> \$PGDATA/postgresql.conf
+    #echo "max_replication_slots = 1"        >> \$PGDATA/postgresql.conf
+    #echo "max_wal_senders = 4"              >> \$PGDATA/postgresql.conf
+    #echo "shared_preload_libraries='test_decoding'" >> \$PGDATA/postgresql.conf
 
-    echo "========================================================="
-    echo "BALOO: CLUSTER INITIALISATION FINISHED"
-    echo "========================================================="
+    #echo "========================================================="
+    #echo "BALOO: CLUSTER INITIALISATION FINISHED"
+    #echo "========================================================="
 }
 
 inst_start() {
