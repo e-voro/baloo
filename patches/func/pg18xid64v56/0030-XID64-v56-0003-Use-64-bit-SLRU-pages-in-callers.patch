@@ -1,0 +1,97 @@
+From dcc6a54d5b43d0fdd3ccffb1f27d3c600f9d7a75 Mon Sep 17 00:00:00 2001
+From: Maxim Orlov <m.orlov@postgrespro.ru>
+Date: Thu, 7 Dec 2023 18:52:45 +0300
+Subject: [PATCH v55 3/5] Use 64-bit SLRU pages in callers.
+
+TODO:
+ - add upgrade for slru segments
+---
+ src/backend/access/transam/clog.c           | 2 +-
+ src/backend/access/transam/commit_ts.c      | 2 +-
+ src/backend/access/transam/multixact.c      | 4 ++--
+ src/backend/access/transam/subtrans.c       | 2 +-
+ src/backend/storage/lmgr/predicate.c        | 2 +-
+ src/bin/pg_verifybackup/t/003_corruption.pl | 2 +-
+ 6 files changed, 7 insertions(+), 7 deletions(-)
+
+diff --git a/src/backend/access/transam/clog.c b/src/backend/access/transam/clog.c
+index 44c253246b..41ae3da851 100644
+--- a/src/backend/access/transam/clog.c
++++ b/src/backend/access/transam/clog.c
+@@ -810,7 +810,7 @@ CLOGShmemInit(void)
+ 	XactCtl->PagePrecedes = CLOGPagePrecedes;
+ 	SimpleLruInit(XactCtl, "transaction", CLOGShmemBuffers(), CLOG_LSNS_PER_PAGE,
+ 				  "pg_xact", LWTRANCHE_XACT_BUFFER,
+-				  LWTRANCHE_XACT_SLRU, SYNC_HANDLER_CLOG, false);
++				  LWTRANCHE_XACT_SLRU, SYNC_HANDLER_CLOG, true);
+ 	SlruPagePrecedesUnitTests(XactCtl, CLOG_XACTS_PER_PAGE);
+ }
+ 
+diff --git a/src/backend/access/transam/commit_ts.c b/src/backend/access/transam/commit_ts.c
+index 00c1f29302..a46602f91f 100644
+--- a/src/backend/access/transam/commit_ts.c
++++ b/src/backend/access/transam/commit_ts.c
+@@ -558,7 +558,7 @@ CommitTsShmemInit(void)
+ 				  "pg_commit_ts", LWTRANCHE_COMMITTS_BUFFER,
+ 				  LWTRANCHE_COMMITTS_SLRU,
+ 				  SYNC_HANDLER_COMMIT_TS,
+-				  false);
++				  true);
+ 	SlruPagePrecedesUnitTests(CommitTsCtl, COMMIT_TS_XACTS_PER_PAGE);
+ 
+ 	commitTsShared = ShmemInitStruct("CommitTs shared",
+diff --git a/src/backend/access/transam/multixact.c b/src/backend/access/transam/multixact.c
+index 97e6403e8a..7b76ef1cca 100644
+--- a/src/backend/access/transam/multixact.c
++++ b/src/backend/access/transam/multixact.c
+@@ -1906,7 +1906,7 @@ MultiXactShmemInit(void)
+ 				  "pg_multixact/members", LWTRANCHE_MULTIXACTMEMBER_BUFFER,
+ 				  LWTRANCHE_MULTIXACTMEMBER_SLRU,
+ 				  SYNC_HANDLER_MULTIXACT_MEMBER,
+-				  false);
++				  true);
+ 	/* doesn't call SimpleLruTruncate() or meet criteria for unit tests */
+ 
+ 	/* Initialize our shared state struct */
+diff --git a/src/backend/access/transam/subtrans.c b/src/backend/access/transam/subtrans.c
+index 3f0fdeb10e..9d762b75c2 100644
+--- a/src/backend/access/transam/subtrans.c
++++ b/src/backend/access/transam/subtrans.c
+@@ -244,7 +244,7 @@ SUBTRANSShmemInit(void)
+ 	SubTransCtl->PagePrecedes = SubTransPagePrecedes;
+ 	SimpleLruInit(SubTransCtl, "subtransaction", SUBTRANSShmemBuffers(), 0,
+ 				  "pg_subtrans", LWTRANCHE_SUBTRANS_BUFFER,
+-				  LWTRANCHE_SUBTRANS_SLRU, SYNC_HANDLER_NONE, false);
++				  LWTRANCHE_SUBTRANS_SLRU, SYNC_HANDLER_NONE, true);
+ 	SlruPagePrecedesUnitTests(SubTransCtl, SUBTRANS_XACTS_PER_PAGE);
+ }
+ 
+diff --git a/src/backend/storage/lmgr/predicate.c b/src/backend/storage/lmgr/predicate.c
+index 3539eb489a..98f330b9ac 100644
+--- a/src/backend/storage/lmgr/predicate.c
++++ b/src/backend/storage/lmgr/predicate.c
+@@ -814,7 +814,7 @@ SerialInit(void)
+ 	SimpleLruInit(SerialSlruCtl, "serializable",
+ 				  serializable_buffers, 0, "pg_serial",
+ 				  LWTRANCHE_SERIAL_BUFFER, LWTRANCHE_SERIAL_SLRU,
+-				  SYNC_HANDLER_NONE, false);
++				  SYNC_HANDLER_NONE, true);
+ #ifdef USE_ASSERT_CHECKING
+ 	SerialPagePrecedesLogicallyUnitTests();
+ #endif
+diff --git a/src/bin/pg_verifybackup/t/003_corruption.pl b/src/bin/pg_verifybackup/t/003_corruption.pl
+index ae91e04338..b4ea3a8bd9 100644
+--- a/src/bin/pg_verifybackup/t/003_corruption.pl
++++ b/src/bin/pg_verifybackup/t/003_corruption.pl
+@@ -182,7 +182,7 @@ sub mutilate_extra_tablespace_file
+ sub mutilate_missing_file
+ {
+ 	my ($backup_path) = @_;
+-	my $pathname = "$backup_path/pg_xact/0000";
++	my $pathname = "$backup_path/pg_xact/000000000000000";
+ 	unlink($pathname) || die "$pathname: $!";
+ 	return;
+ }
+-- 
+2.45.2
+

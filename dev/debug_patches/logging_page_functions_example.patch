@@ -1,0 +1,67 @@
+diff --git a/src/backend/access/transam/xlogrecovery.c b/src/backend/access/transam/xlogrecovery.c
+index ebce5ae3ec8..12a0588d7e5 100644
+--- a/src/backend/access/transam/xlogrecovery.c
++++ b/src/backend/access/transam/xlogrecovery.c
+@@ -2543,6 +2543,9 @@ verifyBackupPageConsistency(XLogReaderState *record)
+ 					(errcode(ERRCODE_INTERNAL_ERROR),
+ 					 errmsg_internal("%s", record->errormsg_buf)));
+ 
++		baloo_log_page_X(rlocator, primary_image_masked, "primary_image_UNMASKED");
++		baloo_log_page_X(rlocator, replay_image_masked, "replay_image_UNMASKED");
++
+ 		/*
+ 		 * If masking function is defined, mask both the primary and replay
+ 		 * images
+@@ -2556,8 +2559,51 @@ verifyBackupPageConsistency(XLogReaderState *record)
+ 		/* Time to compare the primary and replay images. */
+ 		if (memcmp(replay_image_masked, primary_image_masked, BLCKSZ) != 0)
+ 		{
++		    /* EVORO Print header details */
++    		PageHeader primary_header = (PageHeader) primary_image_masked;
++    		PageHeader replayed_header = (PageHeader) replay_image_masked;
++
++			HeapPageSpecial primary_special;
++			HeapPageSpecial replay_special;
++
++			primary_special = (HeapPageSpecial)((char *) primary_image_masked +
++								((PageHeader) primary_image_masked)->pd_special);
++
++			replay_special = (HeapPageSpecial)((char *) replay_image_masked +
++								((PageHeader) replay_image_masked)->pd_special);
++
++    		/* Print header details */
++			elog(WARNING,
++				"Page Headers ========\n"
++				"        | primary_image_masked | replay_image_masked\n"
++				"checksum| %u | %u\n" 
++				"flags   | %u | %u\n"
++				"lower   | %u | %u\n"
++				"upper   | %u | %u\n"
++				"special | %u | %u\n"
++				"pagesize_version| %u, %u\n"
++				"pd_prune_xid | %u, %u\n"
++				"pd_lsn | %X/%X-%06X, %X/%X-%06X\n"
++				"xid_base | %lu | %lu\n"
++				"multi_base | %lu | %lu\n",
++				primary_header->pd_checksum, replayed_header->pd_checksum,
++				primary_header->pd_flags, replayed_header->pd_flags,
++				primary_header->pd_lower, replayed_header->pd_lower,
++				primary_header->pd_upper, replayed_header->pd_upper,
++				primary_header->pd_special, replayed_header->pd_special,
++				primary_header->pd_pagesize_version, replayed_header->pd_pagesize_version,
++				primary_header->pd_prune_xid, replayed_header->pd_prune_xid,
++				primary_header->pd_lsn.xlogid >> 16, primary_header->pd_lsn.xlogid & 0x00FFFFFF, primary_header->pd_lsn.xrecoff,
++				replayed_header->pd_lsn.xlogid >> 16, replayed_header->pd_lsn.xlogid & 0x00FFFFFF, replayed_header->pd_lsn.xrecoff,
++				primary_special->pd_xid_base, replay_special->pd_xid_base,
++				primary_special->pd_multi_base, replay_special->pd_multi_base
++				);
++
++			baloo_log_page(primary_image_masked, "primary_image_masked");
++			baloo_log_page(replay_image_masked, "replay_image_masked");
++
+ 			elog(FATAL,
+-				 "inconsistent page found, rel %u/%u/%u, forknum %u, blkno %u",
++				 "XXX inconsistent page found, rel %u/%u/%u, forknum %u, blkno %u",
+ 				 rlocator.spcOid, rlocator.dbOid, rlocator.relNumber,
+ 				 forknum, blkno);
+ 		}

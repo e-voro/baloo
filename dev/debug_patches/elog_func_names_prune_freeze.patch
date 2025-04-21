@@ -1,0 +1,134 @@
+diff --git a/src/backend/access/heap/heapam.c b/src/backend/access/heap/heapam.c
+index 728bc6f3c7f..76b2922d516 100644
+--- a/src/backend/access/heap/heapam.c
++++ b/src/backend/access/heap/heapam.c
+@@ -4608,6 +4608,8 @@ heap_lock_tuple(Relation relation, HeapTuple tuple,
+ 	bool		have_tuple_lock = false;
+ 	bool		cleared_all_frozen = false;
+ 
++	elog(WARNING,"heap_lock_tuple-->");
++
+ 	*buffer = ReadBuffer(relation, ItemPointerGetBlockNumber(tid));
+ 	block = ItemPointerGetBlockNumber(tid);
+ 
+@@ -5749,6 +5751,8 @@ heap_lock_updated_tuple_rec(Relation rel, ItemPointer tid, TransactionId xid,
+ 	Buffer		vmbuffer = InvalidBuffer;
+ 	BlockNumber block;
+ 
++elog(WARNING, "heap_lock_updated_tuple_rec--->");
++
+ 	ItemPointerCopy(tid, &tupid);
+ 
+ 	for (;;)
+@@ -6780,6 +6784,8 @@ FreezeMultiXactId(MultiXactId multi, uint16 t_infomask,
+ 	TransactionId update_xid;
+ 	bool		update_committed;
+ 	TransactionId FreezePageRelfrozenXid;
++	
++	elog(WARNING, "FreezeMultiXactId");
+ 
+ 	*flags = 0;
+ 
+@@ -7138,6 +7144,8 @@ heap_prepare_freeze_tuple(HeapTuple htup,
+ 	TransactionId xid;
+ 	HeapTupleHeader tuple = htup->t_data;
+ 
++elog(WARNING,"heap_prepare_freeze_tuple-->");
++
+ 	frz->xmax = HeapTupleGetRawXmax(htup);
+ 	frz->t_infomask2 = tuple->t_infomask2;
+ 	frz->t_infomask = tuple->t_infomask;
+@@ -7247,7 +7255,10 @@ heap_prepare_freeze_tuple(HeapTuple htup,
+ 			frz->t_infomask &= ~HEAP_XMAX_BITS;
+ 			frz->xmax = newxmax;
+ 			if (flags & FRM_MARK_COMMITTED)
++			{
++				elog(WARNING,"heap_prepare_freeze_tuple--> frz->t_infomask |= HEAP_XMAX_COMMITTED;");
+ 				frz->t_infomask |= HEAP_XMAX_COMMITTED;
++			}
+ 			replace_xmax = true;
+ 		}
+ 		else if (flags & FRM_RETURN_IS_MULTI)
+@@ -7370,6 +7381,7 @@ heap_prepare_freeze_tuple(HeapTuple htup,
+ 		 * LOCKED.  Normalize to INVALID just to be sure no one gets confused.
+ 		 * Also get rid of the HEAP_KEYS_UPDATED bit.
+ 		 */
++		elog(WARNING,"heap_prepare_freeze_tuple--> if(freeze_xmax)--> frz->t_infomask &= ~HEAP_XMAX_BITS;");
+ 		frz->t_infomask &= ~HEAP_XMAX_BITS;
+ 		frz->t_infomask |= HEAP_XMAX_INVALID;
+ 		frz->t_infomask2 &= ~HEAP_HOT_UPDATED;
+@@ -9388,6 +9400,8 @@ heap_xlog_prune_freeze(XLogReaderState *record)
+ 	BlockNumber blkno;
+ 	XLogRedoAction action;
+ 
++elog(WARNING,"heap_xlog_prune_freeze-->");
++
+ 	XLogRecGetBlockTag(record, 0, &rlocator, NULL, &blkno);
+ 	memcpy(&xlrec, maindataptr, SizeOfHeapPrune);
+ 	maindataptr += SizeOfHeapPrune;
+@@ -10621,6 +10640,7 @@ void
+ heap_redo(XLogReaderState *record)
+ {
+ 	uint8		info = XLogRecGetInfo(record) & ~XLR_INFO_MASK;
++	elog(WARNING, "heap_redo--->");
+ 
+ 	/*
+ 	 * These operations don't overwrite MVCC data so no conflict processing is
+@@ -10668,6 +10688,8 @@ heap2_redo(XLogReaderState *record)
+ {
+ 	uint8		info = XLogRecGetInfo(record) & ~XLR_INFO_MASK;
+ 
++	elog(WARNING, "heap2_redo--->");
++
+ 	switch (info & XLOG_HEAP_OPMASK)
+ 	{
+ 		case XLOG_HEAP2_PRUNE_ON_ACCESS:
+diff --git a/src/backend/access/heap/heapam_visibility.c b/src/backend/access/heap/heapam_visibility.c
+index 23ad2665fe5..e4e27d71ab7 100644
+--- a/src/backend/access/heap/heapam_visibility.c
++++ b/src/backend/access/heap/heapam_visibility.c
+@@ -170,6 +170,8 @@ static bool
+ HeapTupleSatisfiesSelf(HeapTuple htup, Snapshot snapshot, Buffer buffer)
+ {
+ 	HeapTupleHeader tuple = htup->t_data;
++	
++	elog(WARNING, "HeapTupleSatisfiesSelf");
+ 
+ 	Assert(ItemPointerIsValid(&htup->t_self));
+ 	Assert(htup->t_tableOid != InvalidOid);
+@@ -1195,7 +1197,9 @@ HeapTupleSatisfiesVacuum(HeapTuple htup, TransactionId OldestXmin,
+ HTSV_Result
+ HeapTupleSatisfiesVacuumHorizon(HeapTuple htup, Buffer buffer, TransactionId *dead_after)
+ {
+ 	HeapTupleHeader tuple = htup->t_data;
++	
++	elog(WARNING, "HeapTupleSatisfiesVacuumHorizon--->");
+ 
+ 	Assert(ItemPointerIsValid(&htup->t_self));
+ 	Assert(htup->t_tableOid != InvalidOid);
+diff --git a/src/backend/access/heap/pruneheap.c b/src/backend/access/heap/pruneheap.c
+index f09fb12e944..b1dac192191 100644
+--- a/src/backend/access/heap/pruneheap.c
++++ b/src/backend/access/heap/pruneheap.c
+@@ -380,7 +380,9 @@ heap_page_prune_and_freeze(Relation relation, Buffer buffer,
+ 	bool		do_prune;
+ 	bool		do_hint;
+ 	bool		hint_bit_fpi;
+ 	int64		fpi_before = pgWalUsage.wal_fpi;
++	
++	page_copy = palloc(BLCKSZ);
+ 
+ 	/* Copy parameters to prstate */
+ 	prstate.vistest = vistest;
+@@ -797,8 +820,11 @@ heap_page_prune_and_freeze(Relation relation, Buffer buffer,
+ 			MarkBufferDirtyHint(buffer, true);
+ 	}
+ 
++
+ 	if (do_prune || do_freeze)
+ 	{
++		elog(WARNING, "heap_PAGE_prune_and_freeze-->if (do_prune || do_freeze)");
++
+ 		/* Apply the planned item changes and repair page fragmentation. */
+ 		if (do_prune)
+ 		{

@@ -1,0 +1,25 @@
+{
+	"editions": {
+		"comm": {
+			"id": "1",
+			"prog_name": "community",
+			"short_name": "comm",
+			"name": "PostgreSQL 16.4 Original Community Edition",
+			"product_name_in_doc": "PostgreSQL Comm",
+			"patches": [
+			],
+			"description": "PostgreSQL 16.4 original community edition (aka Vanilla)."
+		},
+		"pg18xid64": {
+			"id": "1",
+			"prog_name": "pg18xid64",
+			"short_name": "pg18xid64v56",
+			"name": "PostgreSQL 18 Xid64 Edition",
+			"product_name_in_doc": "Tantor SE",
+			"patches": [
+				"func/pg18xid64v56"
+			],
+			"description": "PostgreSQL 18 edition upgraded by the xid64 patch"
+		}
+	}
+}

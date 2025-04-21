@@ -1,0 +1,233 @@
+diff --git a/src/include/access/htup_details.h b/src/include/access/htup_details.h
+index d9a836384a3..f94fb99dd55 100644
+--- a/src/include/access/htup_details.h
++++ b/src/include/access/htup_details.h
+@@ -1059,4 +1059,228 @@ heap_getattr(HeapTuple tup, int attnum, TupleDesc tupleDesc, bool *isnull)
+ }
+ #endif							/* FRONTEND */
+ 
++/*
++ *	BALOO: Loggers for pages and tuples
++ */
++/*void baloo_log_array(StringInfo str, const uint8* arr, uint16 len);*/
++
++static inline void baloo_log_array(StringInfo str, const uint8* arr, uint16 len)
++{
++	/*uint8 l, h;*/
++	char sep;
++	for (int i = 0; i < len; i++)
++	{
++		sep = (i + 1) % 32 ? ' ' : '\n';
++		appendStringInfo(str, "%02X%c", (uint32) arr[i], sep);
++	}
++	appendStringInfo(str, "\n");
++}
++
++/* void baloo_log_page(Page page, const char* page_name);
++
++void baloo_log_page_header(StringInfo str, Page page); */
++
++static inline void baloo_log_page_header(StringInfo str, Page page)
++{
++	PageHeader header;
++	HeapPageSpecial special;
++	OffsetNumber maxoff;
++
++	header = (PageHeader) page;
++
++	special = (HeapPageSpecial)((char *) page +
++				((PageHeader) page)->pd_special);
++	
++	maxoff = PageGetMaxOffsetNumber(page);
++
++    /* Print header details */
++	appendStringInfo(str,
++		"Header of the page ========\n"
++		"    checksum= %u, flags= %u, lower= %u, upper= %u,\n"
++		"    special= %u, pagesize_version= %u, pd_prune_xid= %u,\n"
++		"    pd_lsn= %X/%X-%06X\n"
++		"Special of the page ========\n"
++		"    xid_base= %lu, multi_base= %lu\n",
++		(uint32) header->pd_checksum,
++		(uint32) header->pd_flags,
++		(uint32) header->pd_lower,
++		(uint32) header->pd_upper, 
++		(uint32) header->pd_special, 
++		(uint32) header->pd_pagesize_version, 
++		header->pd_prune_xid,
++		header->pd_lsn.xlogid >> 16, 
++		header->pd_lsn.xlogid & 0x00FFFFFF, 
++		header->pd_lsn.xrecoff,
++		special->pd_xid_base,
++		special->pd_multi_base
++		);
++
++	appendStringInfo(str, "Header image:\n");
++	baloo_log_array(str, (uint8*) page, SizeOfPageHeaderData);
++	
++	appendStringInfo(str, "Line pointers array image:\n");
++	baloo_log_array(str, (uint8*) header->pd_linp, maxoff * sizeof(ItemIdData));
++}
++
++/* void baloo_log_tuple_header(StringInfo str, HeapTupleHeader tuphdr); */
++static inline void baloo_log_tuple_header(StringInfo str, HeapTupleHeader tuphdr)
++{
++		/*Printing HeapTupleHeader*/
++		appendStringInfo(str, "TupleHeader:\n"
++							  "    choice = { xmin=%u, xmax=%u, cid=%u },\n" 
++							  "    ctid = { blkid { bihi=%u, bilo=%u }, posid=%u },\n" 
++							  "    infomask2=%04X, infomask=%04X, t_hoff=%u,\n",
++			tuphdr->t_choice.t_heap.t_xmin,
++			tuphdr->t_choice.t_heap.t_xmax,
++			(uint32) tuphdr->t_choice.t_heap.t_field3.t_cid,
++			(uint32) tuphdr->t_ctid.ip_blkid.bi_hi,
++			(uint32) tuphdr->t_ctid.ip_blkid.bi_lo,
++			(uint32) tuphdr->t_ctid.ip_posid,
++			(uint32) tuphdr->t_infomask2,
++			(uint32) tuphdr->t_infomask,
++			(uint32) tuphdr->t_hoff);
++}
++
++static inline void baloo_log_page(Page page, const char* page_name)
++{
++	OffsetNumber maxoff;
++	ItemId		itemid;
++	uint16		lp_len;
++	uint16		lp_off;
++	HeapTupleHeader tuphdr;
++
++	StringInfo str;
++	str = makeStringInfo();
++	appendStringInfo(str,
++		"Image of the %s page ========\n",
++		page_name);
++
++	baloo_log_array(str, (uint8*) page, BLCKSZ);
++
++	baloo_log_page_header(str, page);
++
++	maxoff = PageGetMaxOffsetNumber(page);
++	
++	appendStringInfo(str,
++		"=== Started logging tuples for page %s====\n"
++		"    maxoff=%u\n",
++		page_name, maxoff
++	);
++
++	for (OffsetNumber offnum = FirstOffsetNumber; offnum <= maxoff;
++		 offnum = OffsetNumberNext(offnum))
++	{
++		itemid = PageGetItemId(page, offnum);
++		appendStringInfo(str,
++			"ItemId info:\n"
++			"    offnum=%u, IsUsed=%u, IsDead=%u, IsRedirected=%u\n", 
++			(uint32)offnum, (uint32)ItemIdIsUsed(itemid), (uint32)ItemIdIsDead(itemid), 
++			(uint32)ItemIdIsRedirected(itemid)
++			);
++
++		lp_len = ItemIdGetLength(itemid);
++		lp_off = ItemIdGetOffset(itemid);
++		appendStringInfo(str, "    len=%u, offset=%u\n", (uint32)lp_len, (uint32)lp_off);
++
++		/* Skip over unused/dead line pointers */
++		if (!ItemIdIsUsed(itemid))
++			continue;
++
++		if (ItemIdIsDead(itemid) && (!ItemIdHasStorage(itemid)))
++			continue;
++
++		if (!ItemIdHasStorage(itemid))
++			continue;
++
++		/*
++		 * If this line pointer has been redirected, check that it
++		 * redirects to a valid offset within the line pointer array
++		*/
++		if (ItemIdIsRedirected(itemid))
++		{
++			OffsetNumber rdoffnum = ItemIdGetRedirect(itemid);
++			ItemId		rditem;
++
++			if (rdoffnum < FirstOffsetNumber)
++			{
++				appendStringInfo(str, "    line pointer redirection to item at offset %u precedes minimum offset %u",
++					(unsigned) rdoffnum, (unsigned) FirstOffsetNumber);
++				continue;
++			}
++			if (rdoffnum > maxoff)
++			{
++				appendStringInfo(str, "    line pointer redirection to item at offset %u exceeds maximum offset %u",
++					(unsigned) rdoffnum, (unsigned) maxoff);
++				continue;
++			}
++			/*
++			* Since we've checked that this redirect points to a line
++			* pointer between FirstOffsetNumber and maxoff, it should now
++			* be safe to fetch the referenced line pointer. We expect it
++			* to be LP_NORMAL; if not, that's corruption.
++			*/
++			rditem = PageGetItemId(page, rdoffnum);
++			if (!ItemIdIsUsed(rditem))
++			{
++				appendStringInfo(str, "    redirected line pointer points to an unused item at offset %u",
++					(unsigned) rdoffnum);
++				continue;
++			}
++			else if (ItemIdIsDead(rditem))
++			{
++				appendStringInfo(str, "    redirected line pointer points to a dead item at offset %u",
++					(unsigned) rdoffnum);
++				continue;
++			}
++			else if (ItemIdIsRedirected(rditem))
++			{
++				appendStringInfo(str, "    redirected line pointer points to another redirected line pointer at offset %u",
++					(unsigned) rdoffnum);
++				continue;
++			}
++			
++			continue;
++		}
++
++		/*Printing HeapTupleHeader*/
++		tuphdr = (HeapTupleHeader) PageGetItem(page, itemid);
++		baloo_log_tuple_header(str, tuphdr);
++	}
++
++	appendStringInfoChar(str, '\n');
++	elog(WARNING, "%s", str->data);
++	destroyStringInfo(str);
++}
++
++
++
++static inline void baloo_log_page_X(RelFileLocator locator, Page page, const char* page_name)
++{
++#define BALOO_X_SPC	1663
++#define BALOO_X_DB	16392
++#define BALOO_X_REL 2611
++
++	if (locator.spcOid == BALOO_X_SPC 
++			&& locator.dbOid == BALOO_X_DB
++			&& locator.relNumber == BALOO_X_REL)
++		{
++			baloo_log_page(page, page_name);
++		}
++}
++
++/*
++ *	BALOO: Helpers for pages
++ */
++
++/*
++	A caller have to delete the image after it has been exploited
++*/
++static inline char* baloo_copy_page(Page page)
++{
++	char* image = NULL;
++	image = (char *) palloc(BLCKSZ);
++	memcpy(image, page, BLCKSZ);
++	return image;
++}
++
+ #endif							/* HTUP_DETAILS_H */

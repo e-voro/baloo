@@ -1,0 +1,203 @@
+From cc588f091a2c1970849a6e341ca1a8a79fc1a935 Mon Sep 17 00:00:00 2001
+From: Maxim Orlov <orlovmg@gmail.com>
+Date: Wed, 7 Aug 2024 16:35:22 +0300
+Subject: [PATCH v3 1/3] Use 64-bit format output for multixact offsets
+
+Author: Maxim Orlov <orlovmg@gmail.com>
+---
+ src/backend/access/rmgrdesc/mxactdesc.c   |  9 ++++----
+ src/backend/access/rmgrdesc/xlogdesc.c    |  4 ++--
+ src/backend/access/transam/multixact.c    | 26 +++++++++++++----------
+ src/backend/access/transam/xlogrecovery.c |  5 +++--
+ src/bin/pg_controldata/pg_controldata.c   |  4 ++--
+ src/bin/pg_resetwal/pg_resetwal.c         |  8 +++----
+ 6 files changed, 31 insertions(+), 25 deletions(-)
+
+diff --git a/src/backend/access/rmgrdesc/mxactdesc.c b/src/backend/access/rmgrdesc/mxactdesc.c
+index 3e8ad4d5ef..1b486de38c 100644
+--- a/src/backend/access/rmgrdesc/mxactdesc.c
++++ b/src/backend/access/rmgrdesc/mxactdesc.c
+@@ -65,8 +65,8 @@ multixact_desc(StringInfo buf, XLogReaderState *record)
+ 		xl_multixact_create *xlrec = (xl_multixact_create *) rec;
+ 		int			i;
+ 
+-		appendStringInfo(buf, "%u offset %u nmembers %d: ", xlrec->mid,
+-						 xlrec->moff, xlrec->nmembers);
++		appendStringInfo(buf, "%u offset %llu nmembers %d: ", xlrec->mid,
++						 (unsigned long long) xlrec->moff, xlrec->nmembers);
+ 		for (i = 0; i < xlrec->nmembers; i++)
+ 			out_member(buf, &xlrec->members[i]);
+ 	}
+@@ -74,9 +74,10 @@ multixact_desc(StringInfo buf, XLogReaderState *record)
+ 	{
+ 		xl_multixact_truncate *xlrec = (xl_multixact_truncate *) rec;
+ 
+-		appendStringInfo(buf, "offsets [%u, %u), members [%u, %u)",
++		appendStringInfo(buf, "offsets [%u, %u), members [%llu, %llu)",
+ 						 xlrec->startTruncOff, xlrec->endTruncOff,
+-						 xlrec->startTruncMemb, xlrec->endTruncMemb);
++						 (unsigned long long) xlrec->startTruncMemb,
++						 (unsigned long long) xlrec->endTruncMemb);
+ 	}
+ }
+ 
+diff --git a/src/backend/access/rmgrdesc/xlogdesc.c b/src/backend/access/rmgrdesc/xlogdesc.c
+index 363294d623..aaa19c81c8 100644
+--- a/src/backend/access/rmgrdesc/xlogdesc.c
++++ b/src/backend/access/rmgrdesc/xlogdesc.c
+@@ -66,7 +66,7 @@ xlog_desc(StringInfo buf, XLogReaderState *record)
+ 		CheckPoint *checkpoint = (CheckPoint *) rec;
+ 
+ 		appendStringInfo(buf, "redo %X/%X; "
+-						 "tli %u; prev tli %u; fpw %s; wal_level %s; xid %u:%u; oid %u; multi %u; offset %u; "
++						 "tli %u; prev tli %u; fpw %s; wal_level %s; xid %u:%u; oid %u; multi %u; offset %llu; "
+ 						 "oldest xid %u in DB %u; oldest multi %u in DB %u; "
+ 						 "oldest/newest commit timestamp xid: %u/%u; "
+ 						 "oldest running xid %u; %s",
+@@ -79,7 +79,7 @@ xlog_desc(StringInfo buf, XLogReaderState *record)
+ 						 XidFromFullTransactionId(checkpoint->nextXid),
+ 						 checkpoint->nextOid,
+ 						 checkpoint->nextMulti,
+-						 checkpoint->nextMultiOffset,
++						 (unsigned long long) checkpoint->nextMultiOffset,
+ 						 checkpoint->oldestXid,
+ 						 checkpoint->oldestXidDB,
+ 						 checkpoint->oldestMulti,
+diff --git a/src/backend/access/transam/multixact.c b/src/backend/access/transam/multixact.c
+index 8c37d7eba7..ab90912ed3 100644
+--- a/src/backend/access/transam/multixact.c
++++ b/src/backend/access/transam/multixact.c
+@@ -1264,7 +1264,8 @@ GetNewMultiXactId(int nmembers, MultiXactOffset *offset)
+ 
+ 	LWLockRelease(MultiXactGenLock);
+ 
+-	debug_elog4(DEBUG2, "GetNew: returning %u offset %u", result, *offset);
++	debug_elog4(DEBUG2, "GetNew: returning %u offset %llu", result,
++				(unsigned long long) *offset);
+ 	return result;
+ }
+ 
+@@ -2293,8 +2294,9 @@ MultiXactGetCheckptMulti(bool is_shutdown,
+ 	LWLockRelease(MultiXactGenLock);
+ 
+ 	debug_elog6(DEBUG2,
+-				"MultiXact: checkpoint is nextMulti %u, nextOffset %u, oldestMulti %u in DB %u",
+-				*nextMulti, *nextMultiOffset, *oldestMulti, *oldestMultiDB);
++				"MultiXact: checkpoint is nextMulti %u, nextOffset %llu, oldestMulti %u in DB %u",
++				*nextMulti, (unsigned long long) *nextMultiOffset, *oldestMulti,
++				*oldestMultiDB);
+ }
+ 
+ /*
+@@ -2328,8 +2330,8 @@ void
+ MultiXactSetNextMXact(MultiXactId nextMulti,
+ 					  MultiXactOffset nextMultiOffset)
+ {
+-	debug_elog4(DEBUG2, "MultiXact: setting next multi to %u offset %u",
+-				nextMulti, nextMultiOffset);
++	debug_elog4(DEBUG2, "MultiXact: setting next multi to %u offset %llu",
++				nextMulti, (unsigned long long) nextMultiOffset);
+ 	LWLockAcquire(MultiXactGenLock, LW_EXCLUSIVE);
+ 	MultiXactState->nextMXact = nextMulti;
+ 	MultiXactState->nextOffset = nextMultiOffset;
+@@ -2519,8 +2521,8 @@ MultiXactAdvanceNextMXact(MultiXactId minMulti,
+ 	}
+ 	if (MultiXactOffsetPrecedes(MultiXactState->nextOffset, minMultiOffset))
+ 	{
+-		debug_elog3(DEBUG2, "MultiXact: setting next offset to %u",
+-					minMultiOffset);
++		debug_elog3(DEBUG2, "MultiXact: setting next offset to %llu",
++					(unsigned long long) minMultiOffset);
+ 		MultiXactState->nextOffset = minMultiOffset;
+ 	}
+ 	LWLockRelease(MultiXactGenLock);
+@@ -3211,11 +3213,12 @@ TruncateMultiXact(MultiXactId newOldestMulti, Oid newOldestMultiDB)
+ 
+ 	elog(DEBUG1, "performing multixact truncation: "
+ 		 "offsets [%u, %u), offsets segments [%llx, %llx), "
+-		 "members [%u, %u), members segments [%llx, %llx)",
++		 "members [%llu, %llu), members segments [%llx, %llx)",
+ 		 oldestMulti, newOldestMulti,
+ 		 (unsigned long long) MultiXactIdToOffsetSegment(oldestMulti),
+ 		 (unsigned long long) MultiXactIdToOffsetSegment(newOldestMulti),
+-		 oldestOffset, newOldestOffset,
++		 (unsigned long long) oldestOffset,
++		 (unsigned long long) newOldestOffset,
+ 		 (unsigned long long) MXOffsetToMemberSegment(oldestOffset),
+ 		 (unsigned long long) MXOffsetToMemberSegment(newOldestOffset));
+ 
+@@ -3471,11 +3474,12 @@ multixact_redo(XLogReaderState *record)
+ 
+ 		elog(DEBUG1, "replaying multixact truncation: "
+ 			 "offsets [%u, %u), offsets segments [%llx, %llx), "
+-			 "members [%u, %u), members segments [%llx, %llx)",
++			 "members [%llu, %llu), members segments [%llx, %llx)",
+ 			 xlrec.startTruncOff, xlrec.endTruncOff,
+ 			 (unsigned long long) MultiXactIdToOffsetSegment(xlrec.startTruncOff),
+ 			 (unsigned long long) MultiXactIdToOffsetSegment(xlrec.endTruncOff),
+-			 xlrec.startTruncMemb, xlrec.endTruncMemb,
++			 (unsigned long long) xlrec.startTruncMemb,
++			 (unsigned long long) xlrec.endTruncMemb,
+ 			 (unsigned long long) MXOffsetToMemberSegment(xlrec.startTruncMemb),
+ 			 (unsigned long long) MXOffsetToMemberSegment(xlrec.endTruncMemb));
+ 
+diff --git a/src/backend/access/transam/xlogrecovery.c b/src/backend/access/transam/xlogrecovery.c
+index 178491f6f5..0c5980a436 100644
+--- a/src/backend/access/transam/xlogrecovery.c
++++ b/src/backend/access/transam/xlogrecovery.c
+@@ -877,8 +877,9 @@ InitWalRecovery(ControlFileData *ControlFile, bool *wasShutdown_ptr,
+ 							 U64FromFullTransactionId(checkPoint.nextXid),
+ 							 checkPoint.nextOid)));
+ 	ereport(DEBUG1,
+-			(errmsg_internal("next MultiXactId: %u; next MultiXactOffset: %u",
+-							 checkPoint.nextMulti, checkPoint.nextMultiOffset)));
++			(errmsg_internal("next MultiXactId: %u; next MultiXactOffset: %llu",
++							 checkPoint.nextMulti,
++							 (unsigned long long) checkPoint.nextMultiOffset)));
+ 	ereport(DEBUG1,
+ 			(errmsg_internal("oldest unfrozen transaction ID: %u, in database %u",
+ 							 checkPoint.oldestXid, checkPoint.oldestXidDB)));
+diff --git a/src/bin/pg_controldata/pg_controldata.c b/src/bin/pg_controldata/pg_controldata.c
+index 93a05d80ca..43b6727570 100644
+--- a/src/bin/pg_controldata/pg_controldata.c
++++ b/src/bin/pg_controldata/pg_controldata.c
+@@ -253,8 +253,8 @@ main(int argc, char *argv[])
+ 		   ControlFile->checkPointCopy.nextOid);
+ 	printf(_("Latest checkpoint's NextMultiXactId:  %u\n"),
+ 		   ControlFile->checkPointCopy.nextMulti);
+-	printf(_("Latest checkpoint's NextMultiOffset:  %u\n"),
+-		   ControlFile->checkPointCopy.nextMultiOffset);
++	printf(_("Latest checkpoint's NextMultiOffset:  %llu\n"),
++		   (unsigned long long) ControlFile->checkPointCopy.nextMultiOffset);
+ 	printf(_("Latest checkpoint's oldestXID:        %u\n"),
+ 		   ControlFile->checkPointCopy.oldestXid);
+ 	printf(_("Latest checkpoint's oldestXID's DB:   %u\n"),
+diff --git a/src/bin/pg_resetwal/pg_resetwal.c b/src/bin/pg_resetwal/pg_resetwal.c
+index e9dcb5a6d8..985cd06802 100644
+--- a/src/bin/pg_resetwal/pg_resetwal.c
++++ b/src/bin/pg_resetwal/pg_resetwal.c
+@@ -737,8 +737,8 @@ PrintControlValues(bool guessed)
+ 		   ControlFile.checkPointCopy.nextOid);
+ 	printf(_("Latest checkpoint's NextMultiXactId:  %u\n"),
+ 		   ControlFile.checkPointCopy.nextMulti);
+-	printf(_("Latest checkpoint's NextMultiOffset:  %u\n"),
+-		   ControlFile.checkPointCopy.nextMultiOffset);
++	printf(_("Latest checkpoint's NextMultiOffset:  %llu\n"),
++		   (unsigned long long) ControlFile.checkPointCopy.nextMultiOffset);
+ 	printf(_("Latest checkpoint's oldestXID:        %u\n"),
+ 		   ControlFile.checkPointCopy.oldestXid);
+ 	printf(_("Latest checkpoint's oldestXID's DB:   %u\n"),
+@@ -809,8 +809,8 @@ PrintNewControlValues(void)
+ 
+ 	if (set_mxoff != -1)
+ 	{
+-		printf(_("NextMultiOffset:                      %u\n"),
+-			   ControlFile.checkPointCopy.nextMultiOffset);
++		printf(_("NextMultiOffset:                      %llu\n"),
++			   (unsigned long long) ControlFile.checkPointCopy.nextMultiOffset);
+ 	}
+ 
+ 	if (set_oid != 0)
+-- 
+2.45.2
+
