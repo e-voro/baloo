@@ -1,0 +1,464 @@
+From e34688bba1e8453e585814b6d294c0ed4d56deff Mon Sep 17 00:00:00 2001
+From: Maxim Orlov <m.orlov@postgrespro.ru>
+Date: Fri, 25 Mar 2022 12:36:24 +0300
+Subject: [PATCH v61 2/8] Use 64-bit FullTransactionId instead of Epoch:xid
+
+NextXid in controldata is now compatible with old format Epoch:xid and the new
+one. This is next step to make XIDs 64-bit.
+
+Author: Alexander Korotkov <aekorotkov@gmail.com>
+Author: Teodor Sigaev <teodor@sigaev.ru>
+Author: Nikita Glukhov <n.gluhov@postgrespro.ru>
+Author: Maxim Orlov <orlovmg@gmail.com>
+Author: Pavel Borisov <pashkin.elfe@gmail.com>
+Author: Yura Sokolov <y.sokolov@postgrespro.ru> <funny.falcon@gmail.com>
+Author: Aleksander Alekseev <aleksander@timescale.com>
+Reviewed-by: Aleksander Alekseev <aleksander@timescale.com>
+Discussion: https://postgr.es/m/CACG%3DezZe1NQSCnfHOr78AtAZxJZeCvxrts0ygrxYwe%3DpyyjVWA%40mail.gmail.com
+Discussion: https://postgr.es/m/CAJ7c6TPDOYBYrnCAeyndkBktO0WG2xSdYduTF0nxq%2BvfkmTF5Q%40mail.gmail.com
+---
+ contrib/amcheck/verify_heapam.c               | 75 ++++++++-----------
+ contrib/pageinspect/btreefuncs.c              |  5 +-
+ src/backend/access/rmgrdesc/gistdesc.c        | 10 +--
+ src/backend/access/rmgrdesc/nbtdesc.c         | 10 +--
+ src/backend/access/rmgrdesc/xlogdesc.c        |  5 +-
+ src/backend/utils/misc/pg_controldata.c       |  5 +-
+ src/bin/pg_amcheck/t/004_verify_heapam.pl     | 10 +--
+ src/bin/pg_controldata/pg_controldata.c       |  5 +-
+ src/bin/pg_upgrade/controldata.c              | 32 ++++++--
+ .../modules/xid_wraparound/xid_wraparound.c   | 12 ++-
+ 10 files changed, 83 insertions(+), 86 deletions(-)
+
+diff --git a/contrib/amcheck/verify_heapam.c b/contrib/amcheck/verify_heapam.c
+index 87199221af..f33c19c83c 100644
+--- a/contrib/amcheck/verify_heapam.c
++++ b/contrib/amcheck/verify_heapam.c
+@@ -1136,24 +1136,21 @@ check_tuple_visibility(HeapCheckContext *ctx, bool *xmin_commit_status_ok,
+ 			break;
+ 		case XID_IN_FUTURE:
+ 			report_corruption(ctx,
+-							  psprintf("xmin %llu equals or exceeds next valid transaction ID %u:%llu",
++							  psprintf("xmin %llu equals or exceeds next valid transaction ID %llu",
+ 									   (unsigned long long) xmin,
+-									   EpochFromFullTransactionId(ctx->next_fxid),
+-									   (unsigned long long) XidFromFullTransactionId(ctx->next_fxid)));
++									   (unsigned long long) U64FromFullTransactionId(ctx->next_fxid)));
+ 			return false;
+ 		case XID_PRECEDES_CLUSTERMIN:
+ 			report_corruption(ctx,
+-							  psprintf("xmin %llu precedes oldest valid transaction ID %u:%llu",
++							  psprintf("xmin %llu precedes oldest valid transaction ID %llu",
+ 									   (unsigned long long) xmin,
+-									   EpochFromFullTransactionId(ctx->oldest_fxid),
+-									   (unsigned long long) XidFromFullTransactionId(ctx->oldest_fxid)));
++									   (unsigned long long) U64FromFullTransactionId(ctx->oldest_fxid)));
+ 			return false;
+ 		case XID_PRECEDES_RELMIN:
+ 			report_corruption(ctx,
+-							  psprintf("xmin %llu precedes relation freeze threshold %u:%llu",
++							  psprintf("xmin %llu precedes relation freeze threshold %llu",
+ 									   (unsigned long long) xmin,
+-									   EpochFromFullTransactionId(ctx->relfrozenfxid),
+-									   (unsigned long long) XidFromFullTransactionId(ctx->relfrozenfxid)));
++									   (unsigned long long) U64FromFullTransactionId(ctx->relfrozenfxid)));
+ 			return false;
+ 	}
+ 
+@@ -1177,24 +1174,21 @@ check_tuple_visibility(HeapCheckContext *ctx, bool *xmin_commit_status_ok,
+ 					return false;
+ 				case XID_IN_FUTURE:
+ 					report_corruption(ctx,
+-									  psprintf("old-style VACUUM FULL transaction ID %llu for moved off tuple equals or exceeds next valid transaction ID %u:%llu",
++									  psprintf("old-style VACUUM FULL transaction ID %llu for moved off tuple equals or exceeds next valid transaction ID %llu",
+ 											   (unsigned long long) xvac,
+-											   EpochFromFullTransactionId(ctx->next_fxid),
+-											   (unsigned long long) XidFromFullTransactionId(ctx->next_fxid)));
++											   (unsigned long long) U64FromFullTransactionId(ctx->next_fxid)));
+ 					return false;
+ 				case XID_PRECEDES_RELMIN:
+ 					report_corruption(ctx,
+-									  psprintf("old-style VACUUM FULL transaction ID %llu for moved off tuple precedes relation freeze threshold %u:%llu",
++									  psprintf("old-style VACUUM FULL transaction ID %llu for moved off tuple precedes relation freeze threshold %llu",
+ 											   (unsigned long long) xvac,
+-											   EpochFromFullTransactionId(ctx->relfrozenfxid),
+-											   (unsigned long long) XidFromFullTransactionId(ctx->relfrozenfxid)));
++											   (unsigned long long) U64FromFullTransactionId(ctx->relfrozenfxid)));
+ 					return false;
+ 				case XID_PRECEDES_CLUSTERMIN:
+ 					report_corruption(ctx,
+-									  psprintf("old-style VACUUM FULL transaction ID %llu for moved off tuple precedes oldest valid transaction ID %u:%llu",
++									  psprintf("old-style VACUUM FULL transaction ID %llu for moved off tuple precedes oldest valid transaction ID %llu",
+ 											   (unsigned long long) xvac,
+-											   EpochFromFullTransactionId(ctx->oldest_fxid),
+-											   (unsigned long long) XidFromFullTransactionId(ctx->oldest_fxid)));
++											   (unsigned long long) U64FromFullTransactionId(ctx->oldest_fxid)));
+ 					return false;
+ 				case XID_BOUNDS_OK:
+ 					break;
+@@ -1246,24 +1240,21 @@ check_tuple_visibility(HeapCheckContext *ctx, bool *xmin_commit_status_ok,
+ 					return false;
+ 				case XID_IN_FUTURE:
+ 					report_corruption(ctx,
+-									  psprintf("old-style VACUUM FULL transaction ID %llu for moved in tuple equals or exceeds next valid transaction ID %u:%llu",
++									  psprintf("old-style VACUUM FULL transaction ID %llu for moved in tuple equals or exceeds next valid transaction ID %llu",
+ 											   (unsigned long long) xvac,
+-											   EpochFromFullTransactionId(ctx->next_fxid),
+-											   (unsigned long long) XidFromFullTransactionId(ctx->next_fxid)));
++											   (unsigned long long) U64FromFullTransactionId(ctx->next_fxid)));
+ 					return false;
+ 				case XID_PRECEDES_RELMIN:
+ 					report_corruption(ctx,
+-									  psprintf("old-style VACUUM FULL transaction ID %llu for moved in tuple precedes relation freeze threshold %u:%llu",
++									  psprintf("old-style VACUUM FULL transaction ID %llu for moved in tuple precedes relation freeze threshold %llu",
+ 											   (unsigned long long) xvac,
+-											   EpochFromFullTransactionId(ctx->relfrozenfxid),
+-											   (unsigned long long) XidFromFullTransactionId(ctx->relfrozenfxid)));
++											   (unsigned long long) U64FromFullTransactionId(ctx->relfrozenfxid)));
+ 					return false;
+ 				case XID_PRECEDES_CLUSTERMIN:
+ 					report_corruption(ctx,
+-									  psprintf("old-style VACUUM FULL transaction ID %llu for moved in tuple precedes oldest valid transaction ID %u:%llu",
++									  psprintf("old-style VACUUM FULL transaction ID %llu for moved in tuple precedes oldest valid transaction ID %llu",
+ 											   (unsigned long long) xvac,
+-											   EpochFromFullTransactionId(ctx->oldest_fxid),
+-											   (unsigned long long) XidFromFullTransactionId(ctx->oldest_fxid)));
++											   (unsigned long long) U64FromFullTransactionId(ctx->oldest_fxid)));
+ 					return false;
+ 				case XID_BOUNDS_OK:
+ 					break;
+@@ -1409,24 +1400,21 @@ check_tuple_visibility(HeapCheckContext *ctx, bool *xmin_commit_status_ok,
+ 				return true;
+ 			case XID_IN_FUTURE:
+ 				report_corruption(ctx,
+-								  psprintf("update xid %llu equals or exceeds next valid transaction ID %u:%llu",
++								  psprintf("update xid %llu equals or exceeds next valid transaction ID %llu",
+ 										   (unsigned long long) xmax,
+-										   EpochFromFullTransactionId(ctx->next_fxid),
+-										   (unsigned long long) XidFromFullTransactionId(ctx->next_fxid)));
++										   (unsigned long long) U64FromFullTransactionId(ctx->next_fxid)));
+ 				return true;
+ 			case XID_PRECEDES_RELMIN:
+ 				report_corruption(ctx,
+-								  psprintf("update xid %llu precedes relation freeze threshold %u:%llu",
++								  psprintf("update xid %llu precedes relation freeze threshold %llu",
+ 										   (unsigned long long) xmax,
+-										   EpochFromFullTransactionId(ctx->relfrozenfxid),
+-										   (unsigned long long) XidFromFullTransactionId(ctx->relfrozenfxid)));
++										   (unsigned long long) U64FromFullTransactionId(ctx->relfrozenfxid)));
+ 				return true;
+ 			case XID_PRECEDES_CLUSTERMIN:
+ 				report_corruption(ctx,
+-								  psprintf("update xid %llu precedes oldest valid transaction ID %u:%llu",
++								  psprintf("update xid %llu precedes oldest valid transaction ID %llu",
+ 										   (unsigned long long) xmax,
+-										   EpochFromFullTransactionId(ctx->oldest_fxid),
+-										   (unsigned long long) XidFromFullTransactionId(ctx->oldest_fxid)));
++										   (unsigned long long) U64FromFullTransactionId(ctx->oldest_fxid)));
+ 				return true;
+ 			case XID_BOUNDS_OK:
+ 				break;
+@@ -1474,24 +1462,21 @@ check_tuple_visibility(HeapCheckContext *ctx, bool *xmin_commit_status_ok,
+ 			return true;
+ 		case XID_IN_FUTURE:
+ 			report_corruption(ctx,
+-							  psprintf("xmax %llu equals or exceeds next valid transaction ID %u:%llu",
++							  psprintf("xmax %llu equals or exceeds next valid transaction ID %llu",
+ 									   (unsigned long long) xmax,
+-									   EpochFromFullTransactionId(ctx->next_fxid),
+-									   (unsigned long long) XidFromFullTransactionId(ctx->next_fxid)));
++									   (unsigned long long) U64FromFullTransactionId(ctx->next_fxid)));
+ 			return false;		/* corrupt */
+ 		case XID_PRECEDES_RELMIN:
+ 			report_corruption(ctx,
+-							  psprintf("xmax %llu precedes relation freeze threshold %u:%llu",
++							  psprintf("xmax %llu precedes relation freeze threshold %llu",
+ 									   (unsigned long long) xmax,
+-									   EpochFromFullTransactionId(ctx->relfrozenfxid),
+-									   (unsigned long long) XidFromFullTransactionId(ctx->relfrozenfxid)));
++									   (unsigned long long) U64FromFullTransactionId(ctx->relfrozenfxid)));
+ 			return false;		/* corrupt */
+ 		case XID_PRECEDES_CLUSTERMIN:
+ 			report_corruption(ctx,
+-							  psprintf("xmax %llu precedes oldest valid transaction ID %u:%llu",
++							  psprintf("xmax %llu precedes oldest valid transaction ID %llu",
+ 									   (unsigned long long) xmax,
+-									   EpochFromFullTransactionId(ctx->oldest_fxid),
+-									   (unsigned long long) XidFromFullTransactionId(ctx->oldest_fxid)));
++									   (unsigned long long) U64FromFullTransactionId(ctx->oldest_fxid)));
+ 			return false;		/* corrupt */
+ 		case XID_BOUNDS_OK:
+ 			break;
+diff --git a/contrib/pageinspect/btreefuncs.c b/contrib/pageinspect/btreefuncs.c
+index db66fc0bf7..f0bdffbfd2 100644
+--- a/contrib/pageinspect/btreefuncs.c
++++ b/contrib/pageinspect/btreefuncs.c
+@@ -142,9 +142,8 @@ GetBTPageStatistics(BlockNumber blkno, Buffer buffer, BTPageStat *stat)
+ 		{
+ 			FullTransactionId safexid = BTPageGetDeleteXid(page);
+ 
+-			elog(DEBUG2, "deleted page from block %u has safexid %u:%llu",
+-				 blkno, EpochFromFullTransactionId(safexid),
+-				 (unsigned long long) XidFromFullTransactionId(safexid));
++			elog(DEBUG2, "deleted page from block %u has safexid %llu",
++				 blkno, (unsigned long long) U64FromFullTransactionId(safexid));
+ 		}
+ 		else
+ 			elog(DEBUG2, "deleted page from block %u has safexid %llu",
+diff --git a/src/backend/access/rmgrdesc/gistdesc.c b/src/backend/access/rmgrdesc/gistdesc.c
+index db64873256..f6ec2fa13f 100644
+--- a/src/backend/access/rmgrdesc/gistdesc.c
++++ b/src/backend/access/rmgrdesc/gistdesc.c
+@@ -25,11 +25,10 @@ out_gistxlogPageUpdate(StringInfo buf, gistxlogPageUpdate *xlrec)
+ static void
+ out_gistxlogPageReuse(StringInfo buf, gistxlogPageReuse *xlrec)
+ {
+-	appendStringInfo(buf, "rel %u/%u/%u; blk %u; snapshotConflictHorizon %u:%llu, isCatalogRel %c",
++	appendStringInfo(buf, "rel %u/%u/%u; blk %u; snapshotConflictHorizon %llu, isCatalogRel %c",
+ 					 xlrec->locator.spcOid, xlrec->locator.dbOid,
+ 					 xlrec->locator.relNumber, xlrec->block,
+-					 EpochFromFullTransactionId(xlrec->snapshotConflictHorizon),
+-					 (unsigned long long) XidFromFullTransactionId(xlrec->snapshotConflictHorizon),
++					 (unsigned long long) U64FromFullTransactionId(xlrec->snapshotConflictHorizon));
+ 					 xlrec->isCatalogRel ? 'T' : 'F');
+ }
+ 
+@@ -51,9 +50,8 @@ out_gistxlogPageSplit(StringInfo buf, gistxlogPageSplit *xlrec)
+ static void
+ out_gistxlogPageDelete(StringInfo buf, gistxlogPageDelete *xlrec)
+ {
+-	appendStringInfo(buf, "deleteXid %u:%llu; downlink %u",
+-					 EpochFromFullTransactionId(xlrec->deleteXid),
+-					 (unsigned long long) XidFromFullTransactionId(xlrec->deleteXid),
++	appendStringInfo(buf, "deleteXid %llu; downlink %u",
++					 (unsigned long long) U64FromFullTransactionId(xlrec->deleteXid),
+ 					 xlrec->downlinkOffset);
+ }
+ 
+diff --git a/src/backend/access/rmgrdesc/nbtdesc.c b/src/backend/access/rmgrdesc/nbtdesc.c
+index 8747dd64c6..21f6c460ab 100644
+--- a/src/backend/access/rmgrdesc/nbtdesc.c
++++ b/src/backend/access/rmgrdesc/nbtdesc.c
+@@ -94,10 +94,9 @@ btree_desc(StringInfo buf, XLogReaderState *record)
+ 			{
+ 				xl_btree_unlink_page *xlrec = (xl_btree_unlink_page *) rec;
+ 
+-				appendStringInfo(buf, "left: %u, right: %u, level: %u, safexid: %u:%llu, ",
++				appendStringInfo(buf, "left: %u, right: %u, level: %u, safexid: %llu, ",
+ 								 xlrec->leftsib, xlrec->rightsib, xlrec->level,
+-								 EpochFromFullTransactionId(xlrec->safexid),
+-								 (unsigned long long) XidFromFullTransactionId(xlrec->safexid));
++								 (unsigned long long) U64FromFullTransactionId(xlrec->safexid));
+ 				appendStringInfo(buf, "leafleft: %u, leafright: %u, leaftopparent: %u",
+ 								 xlrec->leafleftsib, xlrec->leafrightsib,
+ 								 xlrec->leaftopparent);
+@@ -114,11 +113,10 @@ btree_desc(StringInfo buf, XLogReaderState *record)
+ 			{
+ 				xl_btree_reuse_page *xlrec = (xl_btree_reuse_page *) rec;
+ 
+-				appendStringInfo(buf, "rel: %u/%u/%u, snapshotConflictHorizon: %u:%llu, isCatalogRel: %c",
++				appendStringInfo(buf, "rel: %u/%u/%u, snapshotConflictHorizon: %llu, isCatalogRel: %c",
+ 								 xlrec->locator.spcOid, xlrec->locator.dbOid,
+ 								 xlrec->locator.relNumber,
+-								 EpochFromFullTransactionId(xlrec->snapshotConflictHorizon),
+-								 (unsigned long long) XidFromFullTransactionId(xlrec->snapshotConflictHorizon),
++								 (unsigned long long) U64FromFullTransactionId(xlrec->snapshotConflictHorizon),
+ 								 xlrec->isCatalogRel ? 'T' : 'F');
+ 				break;
+ 			}
+diff --git a/src/backend/access/rmgrdesc/xlogdesc.c b/src/backend/access/rmgrdesc/xlogdesc.c
+index 4194d69c9d..ced13c8a5d 100644
+--- a/src/backend/access/rmgrdesc/xlogdesc.c
++++ b/src/backend/access/rmgrdesc/xlogdesc.c
+@@ -66,7 +66,7 @@ xlog_desc(StringInfo buf, XLogReaderState *record)
+ 		CheckPoint *checkpoint = (CheckPoint *) rec;
+ 
+ 		appendStringInfo(buf, "redo %X/%X; "
+-						 "tli %u; prev tli %u; fpw %s; wal_level %s; xid %u:%llu; oid %u; multi %llu; offset %llu; "
++						 "tli %u; prev tli %u; fpw %s; wal_level %s; xid %llu; oid %u; multi %llu; offset %llu; "
+ 						 "oldest xid %llu in DB %u; oldest multi %llu in DB %u; "
+ 						 "oldest/newest commit timestamp xid: %llu/%llu; "
+ 						 "oldest running xid %llu; %s",
+@@ -75,8 +75,7 @@ xlog_desc(StringInfo buf, XLogReaderState *record)
+ 						 checkpoint->PrevTimeLineID,
+ 						 checkpoint->fullPageWrites ? "true" : "false",
+ 						 get_wal_level_string(checkpoint->wal_level),
+-						 EpochFromFullTransactionId(checkpoint->nextXid),
+-						 (unsigned long long) XidFromFullTransactionId(checkpoint->nextXid),
++						 (unsigned long long) U64FromFullTransactionId(checkpoint->nextXid),
+ 						 checkpoint->nextOid,
+ 						 (unsigned long long) checkpoint->nextMulti,
+ 						 (unsigned long long) checkpoint->nextMultiOffset,
+diff --git a/src/backend/utils/misc/pg_controldata.c b/src/backend/utils/misc/pg_controldata.c
+index 4a14e61a84..b4bccf6a34 100644
+--- a/src/backend/utils/misc/pg_controldata.c
++++ b/src/backend/utils/misc/pg_controldata.c
+@@ -116,9 +116,8 @@ pg_control_checkpoint(PG_FUNCTION_ARGS)
+ 	values[5] = BoolGetDatum(ControlFile->checkPointCopy.fullPageWrites);
+ 	nulls[5] = false;
+ 
+-	values[6] = CStringGetTextDatum(psprintf("%u:%llu",
+-											 EpochFromFullTransactionId(ControlFile->checkPointCopy.nextXid),
+-											 (unsigned long long) XidFromFullTransactionId(ControlFile->checkPointCopy.nextXid)));
++	values[6] = CStringGetTextDatum(psprintf("%llu",
++											 (unsigned long long) U64FromFullTransactionId(ControlFile->checkPointCopy.nextXid)));
+ 	nulls[6] = false;
+ 
+ 	values[7] = ObjectIdGetDatum(ControlFile->checkPointCopy.nextOid);
+diff --git a/src/bin/pg_amcheck/t/004_verify_heapam.pl b/src/bin/pg_amcheck/t/004_verify_heapam.pl
+index 2a3af2666f..31fa6454ae 100644
+--- a/src/bin/pg_amcheck/t/004_verify_heapam.pl
++++ b/src/bin/pg_amcheck/t/004_verify_heapam.pl
+@@ -455,7 +455,7 @@ for (my $tupidx = 0; $tupidx < $ROWCOUNT; $tupidx++)
+ 
+ 		# Expected corruption report
+ 		push @expected,
+-		  qr/${header}xmin $xmin precedes relation freeze threshold 0:\d+/;
++		  qr/${header}xmin $xmin precedes relation freeze threshold \d+/;
+ 	}
+ 	elsif ($offnum == 2)
+ 	{
+@@ -466,7 +466,7 @@ for (my $tupidx = 0; $tupidx < $ROWCOUNT; $tupidx++)
+ 		$tup->{t_infomask} &= ~HEAP_XMIN_INVALID;
+ 
+ 		push @expected,
+-		  qr/${$header}xmin $xmin precedes oldest valid transaction ID 0:\d+/;
++		  qr/${$header}xmin $xmin precedes oldest valid transaction ID \d+/;
+ 	}
+ 	elsif ($offnum == 3)
+ 	{
+@@ -478,7 +478,7 @@ for (my $tupidx = 0; $tupidx < $ROWCOUNT; $tupidx++)
+ 		$tup->{t_infomask} &= ~HEAP_XMIN_INVALID;
+ 
+ 		push @expected,
+-		  qr/${$header}xmin ${xmin} precedes oldest valid transaction ID 0:\d+/;
++		  qr/${$header}xmin ${xmin} precedes oldest valid transaction ID \d+/;
+ 	}
+ 	elsif ($offnum == 4)
+ 	{
+@@ -488,7 +488,7 @@ for (my $tupidx = 0; $tupidx < $ROWCOUNT; $tupidx++)
+ 		$tup->{t_infomask} &= ~HEAP_XMAX_INVALID;
+ 
+ 		push @expected,
+-		  qr/${$header}xmax ${xmax} precedes oldest valid transaction ID 0:\d+/;
++		  qr/${$header}xmax ${xmax} precedes oldest valid transaction ID \d+/;
+ 	}
+ 	elsif ($offnum == 5)
+ 	{
+@@ -615,7 +615,7 @@ for (my $tupidx = 0; $tupidx < $ROWCOUNT; $tupidx++)
+ 		$tup->{t_infomask} &= ~HEAP_XMIN_INVALID;
+ 
+ 		push @expected,
+-		  qr/${$header}xmin ${xmin} equals or exceeds next valid transaction ID 0:\d+/;
++		  qr/${$header}xmin ${xmin} equals or exceeds next valid transaction ID \d+/;
+ 	}
+ 	elsif ($offnum == 17)
+ 	{
+diff --git a/src/bin/pg_controldata/pg_controldata.c b/src/bin/pg_controldata/pg_controldata.c
+index b328648be8..4925621095 100644
+--- a/src/bin/pg_controldata/pg_controldata.c
++++ b/src/bin/pg_controldata/pg_controldata.c
+@@ -257,9 +257,8 @@ main(int argc, char *argv[])
+ 		   ControlFile->checkPointCopy.PrevTimeLineID);
+ 	printf(_("Latest checkpoint's full_page_writes: %s\n"),
+ 		   ControlFile->checkPointCopy.fullPageWrites ? _("on") : _("off"));
+-	printf(_("Latest checkpoint's NextXID:          %u:%llu\n"),
+-		   EpochFromFullTransactionId(ControlFile->checkPointCopy.nextXid),
+-		   (unsigned long long) XidFromFullTransactionId(ControlFile->checkPointCopy.nextXid));
++	printf(_("Latest checkpoint's NextXID:          %llu\n"),
++		   (unsigned long long) U64FromFullTransactionId(ControlFile->checkPointCopy.nextXid));
+ 	printf(_("Latest checkpoint's NextOID:          %u\n"),
+ 		   ControlFile->checkPointCopy.nextOid);
+ 	printf(_("Latest checkpoint's NextMultiXactId:  %llu\n"),
+diff --git a/src/bin/pg_upgrade/controldata.c b/src/bin/pg_upgrade/controldata.c
+index 90cef0864d..b603758599 100644
+--- a/src/bin/pg_upgrade/controldata.c
++++ b/src/bin/pg_upgrade/controldata.c
+@@ -8,6 +8,7 @@
+  */
+ 
+ #include "postgres_fe.h"
++#include "access/transam.h"
+ 
+ #include <ctype.h>
+ #include <limits.h>				/* for CHAR_MIN */
+@@ -271,13 +272,22 @@ get_control_data(ClusterInfo *cluster)
+ 		}
+ 		else if ((p = strstr(bufin, "Latest checkpoint's NextXID:")) != NULL)
+ 		{
++			FullTransactionId		xid;
++
+ 			p = strchr(p, ':');
+ 
+ 			if (p == NULL || strlen(p) <= 1)
+ 				pg_fatal("%d: controldata retrieval problem", __LINE__);
+ 
+ 			p++;				/* remove ':' char */
+-			cluster->controldata.chkpnt_nxtepoch = str2uint(p);
++
++			/*
++			 * NextXID representation in controldata file changed from Epoch:Xid
++			 * to 64-bit FullTransactionId representation as a part of making
++			 * xids 64-bit in the future. Here we support both controldata
++			 * formats.
++			 */
++			xid.value = strtou64(p, NULL, 10);
+ 
+ 			/*
+ 			 * Delimiter changed from '/' to ':' in 9.6.  We don't test for
+@@ -292,11 +302,23 @@ get_control_data(ClusterInfo *cluster)
+ 			else
+ 				p = NULL;
+ 
+-			if (p == NULL || strlen(p) <= 1)
+-				pg_fatal("%d: controldata retrieval problem", __LINE__);
++			if (p == NULL)
++			{
++				/* FullTransactionId representation */
++				cluster->controldata.chkpnt_nxtxid = XidFromFullTransactionId(xid);
++				cluster->controldata.chkpnt_nxtepoch = EpochFromFullTransactionId(xid);
++			}
++			else
++			{
++				if (strlen(p) <= 1)
++					pg_fatal("%d: controldata retrieval problem", __LINE__);
++
++				/* Epoch:Xid representation */
++				p++;				/* remove '/' or ':' char */
++				cluster->controldata.chkpnt_nxtxid = str2uint(p);
++				cluster->controldata.chkpnt_nxtepoch = (TransactionId) XidFromFullTransactionId(xid);
++			}
+ 
+-			p++;				/* remove '/' or ':' char */
+-			cluster->controldata.chkpnt_nxtxid = str2uint(p);
+ 			got_xid = true;
+ 		}
+ 		else if ((p = strstr(bufin, "Latest checkpoint's NextOID:")) != NULL)
+diff --git a/src/test/modules/xid_wraparound/xid_wraparound.c b/src/test/modules/xid_wraparound/xid_wraparound.c
+index 14d42d4eab..ba288b6117 100644
+--- a/src/test/modules/xid_wraparound/xid_wraparound.c
++++ b/src/test/modules/xid_wraparound/xid_wraparound.c
+@@ -136,16 +136,14 @@ consume_xids_common(FullTransactionId untilxid, uint64 nxids)
+ 		if (consumed - last_reported_at >= REPORT_INTERVAL)
+ 		{
+ 			if (nxids > 0)
+-				elog(NOTICE, "consumed %" PRIu64 " / %" PRIu64 " XIDs, latest %u:%llu",
++				elog(NOTICE, "consumed %" PRIu64 " / %" PRIu64 " XIDs, latest %llu",
+ 					 consumed, nxids,
+ 					 EpochFromFullTransactionId(lastxid),
+-					 (unsigned long long) XidFromFullTransactionId(lastxid));
++					 (unsigned long long) U64FromFullTransactionId(lastxid));
+ 			else
+-				elog(NOTICE, "consumed up to %u:%llu / %u:%llu",
+-					 EpochFromFullTransactionId(lastxid),
+-					 (unsigned long long) XidFromFullTransactionId(lastxid),
+-					 EpochFromFullTransactionId(untilxid),
+-					 (unsigned long long) XidFromFullTransactionId(untilxid));
++				elog(NOTICE, "consumed up to %llu / %llu",
++					 (unsigned long long) U64FromFullTransactionId(lastxid),
++					 (unsigned long long) U64FromFullTransactionId(untilxid));
+ 			last_reported_at = consumed;
+ 		}
+ 	}
+-- 
+2.43.0
+

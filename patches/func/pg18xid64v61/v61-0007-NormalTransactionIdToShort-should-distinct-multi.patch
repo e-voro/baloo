@@ -1,0 +1,156 @@
+From 301696b6a99f3f6fb174989c8aedf94ec3acdb2e Mon Sep 17 00:00:00 2001
+From: Maxim Orlov <orlovmg@gmail.com>
+Date: Tue, 29 Apr 2025 18:42:37 +0300
+Subject: [PATCH v61 7/8] NormalTransactionIdToShort should distinct multi xid
+ in check
+
+During upgrade from "vanila" multixid could be as small as FirstMultiXactId
+which is smaller than FirstNormalTransactionId. We should not panic in this
+case.
+---
+ src/backend/access/heap/heapam.c   |  3 ++-
+ src/backend/storage/page/bufpage.c |  8 ++++++--
+ src/include/access/htup_details.h  | 11 +++++++++--
+ src/include/storage/bufpage.h      | 27 +++++++++++++++++++--------
+ 4 files changed, 36 insertions(+), 13 deletions(-)
+
+diff --git a/src/backend/access/heap/heapam.c b/src/backend/access/heap/heapam.c
+index c3a78d5701..6443e58601 100644
+--- a/src/backend/access/heap/heapam.c
++++ b/src/backend/access/heap/heapam.c
+@@ -9616,7 +9616,8 @@ heap_page_xid_min_max(Page page, bool multi,
+ 				update_xid = MultiXactIdGetUpdateXid(HeapTupleHeaderGetRawXmax(page, htup),
+ 													 htup->t_infomask);
+ 				xid = NormalTransactionIdToShort(HeapPageGetSpecial(page)->pd_xid_base,
+-												 update_xid);
++												 update_xid,
++												 false);
+ 
+ 				xid_min_max(min, max, xid, &found);
+ 			}
+diff --git a/src/backend/storage/page/bufpage.c b/src/backend/storage/page/bufpage.c
+index 109bd47a64..b921b9004c 100644
+--- a/src/backend/storage/page/bufpage.c
++++ b/src/backend/storage/page/bufpage.c
+@@ -578,9 +578,13 @@ heap_page_add_special_area(ItemIdCompact itemidbase, int nitems, Page page,
+ 		new_htup->t_choice.t_heap.t_xmin = FrozenTransactionId;
+ 		xmax = HeapTupleHeaderGetDoubleXmax(old_htup);
+ 		if (!(new_htup->t_infomask & HEAP_XMAX_IS_MULTI))
+-			new_htup->t_choice.t_heap.t_xmax = NormalTransactionIdToShort(xid_base, xmax);
++			new_htup->t_choice.t_heap.t_xmax = NormalTransactionIdToShort(xid_base,
++																		  xmax,
++																		  false);
+ 		else
+-			new_htup->t_choice.t_heap.t_xmax = NormalTransactionIdToShort(multi_base, xmax);
++			new_htup->t_choice.t_heap.t_xmax = NormalTransactionIdToShort(multi_base,
++																		  xmax,
++																		  true);
+ 	}
+ 
+ 	new_phdr->pd_upper = upper;
+diff --git a/src/include/access/htup_details.h b/src/include/access/htup_details.h
+index fa734d342a..df92d74178 100644
+--- a/src/include/access/htup_details.h
++++ b/src/include/access/htup_details.h
+@@ -380,7 +380,7 @@ HeapTupleHeaderStoreXmin(Page page, HeapTupleData *tup, bool is_toast)
+ 
+ 	base = is_toast ? ToastPageGetSpecial(page)->pd_xid_base :
+ 					  HeapPageGetSpecial((page))->pd_xid_base;
+-	xmin = NormalTransactionIdToShort(base, tup->t_xmin);
++	xmin = NormalTransactionIdToShort(base, tup->t_xmin, false);
+ 	tup->t_data->t_choice.t_heap.t_xmin = xmin;
+ }
+ 
+@@ -491,12 +491,19 @@ HeapTupleHeaderStoreXmax(Page page, const HeapTupleData *tup, bool is_toast)
+ 	}
+ 
+ 	if (is_toast)
++	{
+ 		base = ToastPageGetSpecial(page)->pd_xid_base;
++		xmax = NormalTransactionIdToShort(base, tup->t_xmax, false);
++	}
+ 	else
++	{
++		bool is_multi = (tup->t_data->t_infomask & HEAP_XMAX_IS_MULTI) != 0;
++
+ 		base = (tup->t_data->t_infomask & HEAP_XMAX_IS_MULTI) != 0 ?
+ 					HeapPageGetSpecial(page)->pd_multi_base :
+ 					HeapPageGetSpecial(page)->pd_xid_base;
+-	xmax = NormalTransactionIdToShort(base, tup->t_xmax);
++		xmax = NormalTransactionIdToShort(base, tup->t_xmax, is_multi);
++	}
+ 	tup->t_data->t_choice.t_heap.t_xmax = xmax;
+ }
+ 
+diff --git a/src/include/storage/bufpage.h b/src/include/storage/bufpage.h
+index 92fa017844..3ae959d9ac 100644
+--- a/src/include/storage/bufpage.h
++++ b/src/include/storage/bufpage.h
+@@ -14,6 +14,7 @@
+ #ifndef BUFPAGE_H
+ #define BUFPAGE_H
+ 
++#include "access/multixact.h"
+ #include "access/transam.h"
+ #include "access/xlogdefs.h"
+ #include "storage/block.h"
+@@ -568,15 +569,24 @@ ShortTransactionIdToNormal(TransactionId base, ShortTransactionId xid)
+ }
+ 
+ static inline ShortTransactionId
+-NormalTransactionIdToShort(TransactionId base, TransactionId xid)
++NormalTransactionIdToShort(TransactionId base, TransactionId xid, bool multi)
+ {
+ 	if (!TransactionIdIsNormal(xid))
+ 		return (ShortTransactionId) xid;
+ 
+-#ifndef FRONTEND
+-	/* xid should fit ShortTransactionId */
+-	Assert(xid >= base + FirstNormalTransactionId &&
+-		   xid <= base + MaxShortTransactionId);
++#ifdef FRONTEND
++	Assert(xid >= base + (!multi ? FirstNormalTransactionId :
++								   FirstMultiXactId));
++	Assert(xid <= base + MaxShortTransactionId);
++#else
++	if (xid < base + (!multi ? FirstNormalTransactionId : FirstMultiXactId) ||
++		xid > base + MaxShortTransactionId)
++		ereport(PANIC,
++				(errcode(ERRCODE_INTERNAL_ERROR),
++						errbacktrace(),
++						errmsg("xid %llu does not fit into valid range for base %llu",
++							   (unsigned long long) xid,
++							   (unsigned long long) base)));
+ #endif
+ 
+ 	return (ShortTransactionId) (xid - base);
+@@ -589,22 +599,23 @@ static inline void
+ HeapPageSetPruneXid(Page page, TransactionId xid, bool is_toast)
+ {
+ 	TransactionId	base;
++	PageHeader		pagehdr = (PageHeader) page;
+ 
+ 	if (HeapPageIsDoubleXmax(page))
+ 		return;
+ 
+ 	if (!TransactionIdIsNormal(xid))
+ 	{
+-		((PageHeader) (page))->pd_prune_xid = xid;
++		pagehdr->pd_prune_xid = xid;
+ 		return;
+ 	}
+ 
+ 	base = is_toast ? ToastPageGetSpecial(page)->pd_xid_base :
+ 					  HeapPageGetSpecial(page)->pd_xid_base;
+ 
+-	((PageHeader) (page))->pd_prune_xid = NormalTransactionIdToShort(base, xid);
++	pagehdr->pd_prune_xid = NormalTransactionIdToShort(base, xid, false);
+ 
+-	Assert(((PageHeader) (page))->pd_prune_xid <= MaxShortTransactionId);
++	Assert(pagehdr->pd_prune_xid <= MaxShortTransactionId);
+ }
+ 
+ /*
+-- 
+2.43.0
+
