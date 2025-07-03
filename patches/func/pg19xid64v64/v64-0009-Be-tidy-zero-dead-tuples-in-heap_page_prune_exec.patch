@@ -1,0 +1,69 @@
+From 7ae20ecaa740e0ae4fe1b71e7a37f4ebecfdbc13 Mon Sep 17 00:00:00 2001
+From: Maxim Orlov <orlovmg@gmail.com>
+Date: Wed, 2 Jul 2025 17:44:32 +0300
+Subject: [PATCH v64 9/9] Be tidy, zero dead tuples in heap_page_prune_execute
+
+Although I can't imagine what it could break, we can be tidy and zero dead
+tuples in heap_page_prune_execute.
+---
+ src/backend/access/heap/pruneheap.c | 23 +++++++++++++++++++++++
+ 1 file changed, 23 insertions(+)
+
+diff --git a/src/backend/access/heap/pruneheap.c b/src/backend/access/heap/pruneheap.c
+index b4b528b566..fc8e14a9f2 100644
+--- a/src/backend/access/heap/pruneheap.c
++++ b/src/backend/access/heap/pruneheap.c
+@@ -1578,6 +1578,17 @@ heap_prune_record_unchanged_lp_redirect(PruneState *prstate, OffsetNumber offnum
+ 	prstate->processed[offnum] = true;
+ }
+ 
++static inline void
++clear_removed_tuple(Page page, ItemId lp)
++{
++	if (ItemIdHasStorage(lp))
++	{
++		Assert(ItemIdIsNormal(lp));		/* valid only for heap pages */
++
++		memset(PageGetItem(page, lp), 0, MAXALIGN(ItemIdGetLength(lp)));
++	}
++}
++
+ /*
+  * Perform the actual page changes needed by heap_page_prune_and_freeze().
+  *
+@@ -1660,6 +1671,10 @@ heap_page_prune_execute(Buffer buffer, bool lp_truncate_only,
+ 		Assert(HeapTupleHeaderIsHeapOnly(htup));
+ #endif
+ 
++		/* just to be tidy  */
++		if (!repairFragmentation)
++			clear_removed_tuple(page, fromlp);
++
+ 		ItemIdSetRedirect(fromlp, tooff);
+ 	}
+ 
+@@ -1692,6 +1707,10 @@ heap_page_prune_execute(Buffer buffer, bool lp_truncate_only,
+ 		}
+ #endif
+ 
++		/* just to be tidy  */
++		if (!repairFragmentation)
++			clear_removed_tuple(page, lp);
++
+ 		ItemIdSetDead(lp);
+ 	}
+ 
+@@ -1731,6 +1750,10 @@ heap_page_prune_execute(Buffer buffer, bool lp_truncate_only,
+ 
+ #endif
+ 
++		/* just to be tidy  */
++		if (!repairFragmentation)
++			clear_removed_tuple(page, lp);
++
+ 		ItemIdSetUnused(lp);
+ 	}
+ 
+-- 
+2.43.0
+
