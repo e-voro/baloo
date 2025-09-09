@@ -6001,7 +6001,7 @@ index 83b203100f..4517967c43 100644
  	 * is already dangerously old.)
  	 */
 -	lazy_check_wraparound_failsafe(vacrel);
- 	dead_items_alloc(vacrel, params.nworkers);
+ 	dead_items_alloc(vacrel, params->nworkers);
  
  	/*
 @@ -957,7 +955,7 @@ heap_vacuum_rel(Relation rel, const VacuumParams params,
@@ -8497,7 +8497,7 @@ index 712b56721d..dfedb08c81 100644
  bool		track_cost_delay_timing;
  bool		vacuum_truncate;
 @@ -1103,7 +1103,7 @@ bool
- vacuum_get_cutoffs(Relation rel, const VacuumParams params,
+ vacuum_get_cutoffs(Relation rel, const VacuumParams *params,
  				   struct VacuumCutoffs *cutoffs)
  {
 -	int			freeze_min_age,
@@ -14749,7 +14749,7 @@ index a2bd5a897f..4c6f0b5504 100644
 +									  bool repairFragmentation);
  
  /* in heap/vacuumlazy.c */
- extern void heap_vacuum_rel(Relation rel,
+ struct VacuumParams;
 @@ -411,7 +418,7 @@ extern HTSV_Result HeapTupleSatisfiesVacuumHorizon(HeapTuple htup, Buffer buffer
  												   TransactionId *dead_after);
  extern void HeapTupleSetHintBits(HeapTupleHeader tuple, Buffer buffer,
