@@ -12,12 +12,9 @@
 		},
 		"pg18xid64": {
 			"id": "1",
-			"prog_name": "pg18xid64",
-			"short_name": "pg18xid64v56",
-			"name": "PostgreSQL 18 Xid64 Edition",
-			"product_name_in_doc": "Tantor SE",
+			"prog_name": "pg18xid64v63",
 			"patches": [
-				"func/pg18xid64v56"
+				"func/pg18xid64v63"
 			],
 			"description": "PostgreSQL 18 edition upgraded by the xid64 patch"
 		}
