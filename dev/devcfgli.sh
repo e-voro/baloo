@@ -638,9 +638,17 @@ EOF
               "ignoreFailures": true
             }
           ]
-        }
+        },
+		{
+		  "name": "Debug core dump",
+		  "type": "cppdbg",
+		  "request": "launch",
+		  "program": "\${workspaceFolder}/tmp_install/\${workspaceFolder}/baloo/inst/bin/postgres",
+		  "coreDumpPath": "\${workspaceFolder}/core.dump",
+		  "cwd": "\${workspaceFolder}",
+		  "MIMode": "gdb"
+		}
     ]
 }
-
 EOF
 }
