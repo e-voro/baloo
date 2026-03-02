@@ -7,24 +7,24 @@
 # Examples of usage:
 #
 # # Being in the top directory of the project, include helpers into your current terminal session:
-#   source baloo/dev/devcfgcli.sh
+#   source baloo/dev/devcfgli.sh
 #
 # # Generate a script that comprises a sequence of applying patches:
-#   bl_create_patching_file <edition_name>
+#   dbg_create_patching_file <edition_name>
 #   # Example: create_patching_file se
 #
 # # If a patch from the sequence has been successfully applied, you will see commits added
 # # to the current branch, and the local git state will be clean (except for files in the baloo directory).
 #
 # # You can also clear local changes by using the function:
-#   bl_clear_project_dir
+#   dbg_clear_project_dir
 #
 # # Split a patch into mini-patches, each for a single file, and create a script to apply them:
-#   bl_split_patch <patch_file>
+#   dbg_split_patch <patch_file>
 #   # Example: bl_split_patch baloo/patches/fix/common/my_patch.patch
 #
 # # Clean up all mini-patches and related scripts:
-#   bl_clean_patch_cache
+#   dbg_clean_patch_cache
 # ==============================================================================
 
 # Calculate the project directory relative to the script location
@@ -279,24 +279,11 @@ EOL
 }
 
 dbg_configure() {
-    local CFLAGS="-O0 -g3 -pipe -Wno-missing-braces"
-    # local CFLAGS="-O0 -g3 -pipe -Werror -Wno-missing-braces"
-    echo "========================================================="
-    echo "BALOO: STARTED CONFIGURING =============================>"
-    echo "========================================================="
-    set -x
-        ./configure --prefix="${DBG_INST_DIR}" \
-            CFLAGS="$CFLAGS" \
-            --with-icu \
-            --enable-tap-tests \
-            --enable-debug \
-            --enable-cassert \
-            --enable-depend \
-            --enable-injection-points
-    set +x
-    echo "========================================================="
-    echo "BALOO: FINISHED CONFIGURING"
-    echo "========================================================="
+	${DBG_BALOO_DIR}/dev/cfg.sh $@
+}
+
+cfg() {
+	dbg_configure $@
 }
 
 dbg_build_core() {
