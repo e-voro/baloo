@@ -28,15 +28,15 @@
 # ==============================================================================
 
 # Calculate the project directory relative to the script location
-DBG_PROJ_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.."; pwd)"
-DBG_BALOO_DIR="${DBG_PROJ_DIR}/baloo"
-DBG_PATCH_DIR="${DBG_BALOO_DIR}/patches"
-DBG_PATCH_CACHE_DIR=${DBG_BALOO_DIR}/dev/cache/patches
-DBG_INST_DIR=${DBG_PROJ_DIR}/baloo/inst
-DBG_INST_PORT=5888
-DBG_COPT="-Werror"
-DBG_HOST="localhost"
-DBG_DEVCFGCLI_SCRIPT="$(cd $(dirname ${BASH_SOURCE}); pwd)/$(basename ${BASH_SOURCE})"
+export DBG_PROJ_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.."; pwd)"
+export DBG_BALOO_DIR="${DBG_PROJ_DIR}/baloo"
+export DBG_PATCH_DIR="${DBG_BALOO_DIR}/patches"
+export DBG_PATCH_CACHE_DIR=${DBG_BALOO_DIR}/dev/cache/patches
+export DBG_INST_DIR=${DBG_PROJ_DIR}/baloo/inst
+export DBG_INST_PORT=5888
+export DBG_COPT="-Werror"
+export DBG_HOST="localhost"
+export DBG_DEVCFGCLI_SCRIPT="$(cd $(dirname ${BASH_SOURCE}); pwd)/$(basename ${BASH_SOURCE})"
 
 # Function to apply patches, stage changes, and commit
 dbg_apply_patch() {
