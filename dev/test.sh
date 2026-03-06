@@ -6,7 +6,7 @@
 # Calculate the project directory relative to the script location
 DBG_PROJ_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.."; pwd)"
 
-make check
+# make check
 #make check-world
 make check-world PG_TEST_EXTRA="wal_consistency_checking"
 #make -C "$DBG_PROJ_DIR" check-world PG_TEST_EXTRA="wal_consistency_checking xid_wraparound"
