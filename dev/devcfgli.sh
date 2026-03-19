@@ -26,7 +26,6 @@
 # # Clean up all mini-patches and related scripts:
 #   dbg_clean_patch_cache
 # ==============================================================================
-
 # Calculate the project directory relative to the script location
 export DBG_PROJ_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.."; pwd)"
 export DBG_BALOO_DIR="${DBG_PROJ_DIR}/baloo"
@@ -418,6 +417,21 @@ dbg_install_contribs() {
     echo "========================================================="
 }
 
+dbg_meson_setup() {
+	${DBG_BALOO_DIR}/dev/meson_setup.sh $@
+}
+
+msnstp(){
+	dbg_meson_setup $@
+}
+
+dbg_ninja_buid() {
+	${DBG_BALOO_DIR}/dev/ninja_build.sh $@
+}
+
+nnjbld(){
+	dbg_ninja_buid $@
+}
 
 dbg_generate_support_of_tantor_installation(){
     local TT_VER="16"
