@@ -20,8 +20,8 @@ meson setup \
 	-Dcassert=true \
 	-Ddefault_library=shared \
 	-Dtap_tests=enabled \
-	-DPG_TEST_EXTRA='wal_consistency_checking' \
 	build
+#	-DPG_TEST_EXTRA='wal_consistency_checking' \
 
 cd -
 
@@ -42,12 +42,17 @@ echo_green "========================================================="
 #   -Ddefault_library=shared \
 #   -Dtap_tests=enabled
 #
-# Use: meson configure build -Dassert=true → when toggling options
+# Use:
+#    meson configure build -Dassert=true
+# - when toggling options
 #
-# Use: meson setup --reconfigure build → when meson.build or dependencies changed
+# Use:
+#    meson setup --reconfigure build
+# - when meson.build or dependencies changed
 #
-# Use: meson configure build | grep buildtype for checking a setting and avoid
-#   reconfiguring
+# Use:
+#   meson configure build | grep buildtype
+# - for checking a setting and avoid reconfiguring
 #
 # -----------------------------------------------------------------------------
 # Tests
@@ -57,19 +62,19 @@ echo_green "========================================================="
 # meson test -C build
 #
 # Run regress tests only:
+# (all of them)
+#    meson test -C build --suite setup --suite regress
 #
-# (all of them) meson test -C build --suite setup --suite regress
+# Verbose
+#    meson test -C build --suite setup --suite regress -v
 #
-# verbose meson test -C build --suite setup --suite regress -v
-#
-# certain test or tests. It can result in fails. You might want use parallel schedule
+# Certain test or tests from regress tests of the PG core.
 #   TESTS="boolean select sqljson" meson test -C build --suite regress -v
-#
+# It can result in fails because of disrupting test sequence. You might want use
+# (edit) regress/parallel_schedule.
 #
 # Run tests against a running instance:
-#
 #   meson test --setup running
-#
 # Use this if you already have a PostgreSQL server active and want to test against it.
 
 
