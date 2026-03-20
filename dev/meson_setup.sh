@@ -53,7 +53,8 @@ echo_green "========================================================="
 # Tests
 # -----------------------------------------------------------------------------
 #
-# meson test -C build --list meson test -C build
+# meson test -C build --list
+# meson test -C build
 #
 # Run regress tests only:
 #
