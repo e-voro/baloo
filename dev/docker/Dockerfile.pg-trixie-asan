@@ -1,0 +1,59 @@
+# Use the Debian Trixie base (Debian 13)
+FROM debian:trixie
+
+# 1. Install dependencies
+# We combine these to keep the image size down.
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    git \
+    ccache \
+    bison \
+    flex \
+    gettext \
+    pkg-config \
+    # REQUIRED FOR TAP TESTS
+    libipc-run-perl \
+    # Libraries for features in your log
+    libicu-dev \
+    libreadline-dev \
+    zlib1g-dev \
+    libssl-dev \
+    libkrb5-dev \
+    libldap2-dev \
+    libcurl4-openssl-dev \
+    libxml2-dev \
+    libxslt1-dev \
+    liblz4-dev \
+    libzstd-dev \
+    # Python/Perl/Tcl for PL languages
+    python3-dev \
+    libperl-dev \
+    tcl-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# 2. Set environment variables exactly from your CFBot log
+ENV CC="ccache gcc" \
+    CXX="ccache g++" \
+    CFLAGS="-Og -ggdb -fno-sanitize-recover=all -fsanitize=address" \
+    CXXFLAGS="-Og -ggdb -fno-sanitize-recover=all -fsanitize=address" \
+    LDFLAGS="-fsanitize=address" \
+    ASAN_OPTIONS="print_stacktrace=1:disable_coredump=0:abort_on_error=1:detect_leaks=0:detect_stack_use_after_return=0" \
+    CCACHE_DIR="/tmp/ccache_dir" \
+    CCACHE_MAXSIZE="250M" \
+    LANG="en_US.UTF-8" \
+    CIRRUS_WORKING_DIR="/home/postgres/postgres" \
+    CCACHE_DIR="/home/postgres/cache"
+
+# 3. Create the postgres user and set up the workspace
+RUN useradd -m postgres && \
+    mkdir -p ${CIRRUS_WORKING_DIR} ${CCACHE_DIR} && \
+    chown -R postgres:postgres ${CIRRUS_WORKING_DIR} ${CCACHE_DIR}
+
+# 4. Configure system limits
+RUN echo 'postgres soft core unlimited' >> /etc/security/limits.conf && \
+    chown root:postgres / && \
+    chmod g+rwx /
+
+# 5. Set the working directory and switch to the postgres user
+WORKDIR ${CIRRUS_WORKING_DIR}
+USER postgres

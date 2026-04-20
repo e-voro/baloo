@@ -285,6 +285,14 @@ cfg() {
 	dbg_configure $@
 }
 
+dbg_debian_asan() {
+	${DBG_BALOO_DIR}/dev/deb_asan.sh $@
+}
+
+deb_asan() {
+	dbg_debian_asan $@
+}
+
 dbg_build_core() {
     echo "========================================================="
     echo "BALOO: STARTED BUILDING CORE =========>"
