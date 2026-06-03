@@ -368,10 +368,10 @@ inst_init() {
     echo "---------------------------------------------------------"
 	echo " io_method = worker # worker, io_uring, sync (change requires restart) " >> \$PGDATA/postgresql.conf
 
-    #echo "---------------------------------------------------------"
-    #echo "Configuring SHARED PRELOAD LIBRARIES"
-    #echo "---------------------------------------------------------"
-    #echo "shared_preload_libraries='online_analyze,plantuner,dbcopies_decoding,test_decoding,test_aio'" >> \$PGDATA/postgresql.conf
+    echo "---------------------------------------------------------"
+    echo "Configuring SHARED PRELOAD LIBRARIES"
+    echo "---------------------------------------------------------"
+    echo "shared_preload_libraries='online_analyze,plantuner,dbcopies_decoding,test_decoding,test_aio'" >> \$PGDATA/postgresql.conf
 
     echo "========================================================="
     echo "BALOO: CLUSTER INITIALISATION FINISHED"
