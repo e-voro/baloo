@@ -366,7 +366,7 @@ inst_init() {
     echo "---------------------------------------------------------"
     echo "Configuring workers"
     echo "---------------------------------------------------------"
-	echo " io_method = worker # worker, io_uring, sync (change requires restart) >> \$PGDATA/postgresql.conf "
+	echo " io_method = worker # worker, io_uring, sync (change requires restart) " >> \$PGDATA/postgresql.conf
 
     #echo "---------------------------------------------------------"
     #echo "Configuring SHARED PRELOAD LIBRARIES"
