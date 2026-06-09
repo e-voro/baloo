@@ -320,6 +320,11 @@ dbg_install() {
     set -x
     cd "${DBG_PROJ_DIR}"
     make install
+
+    echo "---------------------------------------------------------"
+    echo "BALOO: installing the test_aio module"
+    echo "---------------------------------------------------------"
+	make -C src/test/modules/test_aio/ install
     cd -
     set +x
 
