@@ -1,14 +1,15 @@
-From 91460c2a6770098d34063ee2c00a0ecbfcae990c Mon Sep 17 00:00:00 2001
+From dcab983adef07aac905ca4ad1f8546f7ad3b89f3 Mon Sep 17 00:00:00 2001
 From: Maxim Orlov <m.orlov@postgrespro.ru>
 Date: Fri, 11 Mar 2022 11:35:16 +0300
-Subject: [PATCH v55 5/5] README.XID64
+Subject: [PATCH v67 06/12] README.XID64
 
-Author: Alexander Korotkov <aekorotkov@gmail.com>
-Author: Teodor Sigaev <teodor@sigaev.ru>
-Author: Nikita Glukhov <n.gluhov@postgrespro.ru>
-Author: Maxim Orlov <orlovmg@gmail.com>
-Author: Pavel Borisov <pashkin.elfe@gmail.com>
-Author: Yura Sokolov <y.sokolov@postgrespro.ru> <funny.falcon@gmail.com>
+Authors:
+- Alexander Korotkov <aekorotkov@gmail.com>
+- Teodor Sigaev <teodor@sigaev.ru>
+- Nikita Glukhov <n.gluhov@postgrespro.ru>
+- Maxim Orlov <orlovmg@gmail.com>
+- Pavel Borisov <pashkin.elfe@gmail.com>
+- Yura Sokolov <y.sokolov@postgrespro.ru> <funny.falcon@gmail.com>
 Discussion: https://postgr.es/m/CACG%3DezZe1NQSCnfHOr78AtAZxJZeCvxrts0ygrxYwe%3DpyyjVWA%40mail.gmail.com
 Discussion: https://postgr.es/m/CAJ7c6TPDOYBYrnCAeyndkBktO0WG2xSdYduTF0nxq%2BvfkmTF5Q%40mail.gmail.com
 ---
@@ -157,5 +158,5 @@ index 0000000000..9b4e6e03a2
 +descriptor. When in read-write state this will trigger full page write xlog
 +record.
 -- 
-2.45.2
+2.51.0
 

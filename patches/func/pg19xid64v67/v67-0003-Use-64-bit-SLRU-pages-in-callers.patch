@@ -1,7 +1,7 @@
-From dcc6a54d5b43d0fdd3ccffb1f27d3c600f9d7a75 Mon Sep 17 00:00:00 2001
+From ed143a05f0f5ebdc79a58fd63c026a3cad92839d Mon Sep 17 00:00:00 2001
 From: Maxim Orlov <m.orlov@postgrespro.ru>
 Date: Thu, 7 Dec 2023 18:52:45 +0300
-Subject: [PATCH v55 3/5] Use 64-bit SLRU pages in callers.
+Subject: [PATCH v67 03/12] Use 64-bit SLRU pages in callers.
 
 TODO:
  - add upgrade for slru segments
@@ -15,10 +15,10 @@ TODO:
  6 files changed, 7 insertions(+), 7 deletions(-)
 
 diff --git a/src/backend/access/transam/clog.c b/src/backend/access/transam/clog.c
-index 44c253246b..41ae3da851 100644
+index ea43b432da..a92198528d 100644
 --- a/src/backend/access/transam/clog.c
 +++ b/src/backend/access/transam/clog.c
-@@ -810,7 +810,7 @@ CLOGShmemInit(void)
+@@ -809,7 +809,7 @@ CLOGShmemInit(void)
  	XactCtl->PagePrecedes = CLOGPagePrecedes;
  	SimpleLruInit(XactCtl, "transaction", CLOGShmemBuffers(), CLOG_LSNS_PER_PAGE,
  				  "pg_xact", LWTRANCHE_XACT_BUFFER,
@@ -28,10 +28,10 @@ index 44c253246b..41ae3da851 100644
  }
  
 diff --git a/src/backend/access/transam/commit_ts.c b/src/backend/access/transam/commit_ts.c
-index 00c1f29302..a46602f91f 100644
+index a9b7eead74..39aae14a19 100644
 --- a/src/backend/access/transam/commit_ts.c
 +++ b/src/backend/access/transam/commit_ts.c
-@@ -558,7 +558,7 @@ CommitTsShmemInit(void)
+@@ -556,7 +556,7 @@ CommitTsShmemInit(void)
  				  "pg_commit_ts", LWTRANCHE_COMMITTS_BUFFER,
  				  LWTRANCHE_COMMITTS_SLRU,
  				  SYNC_HANDLER_COMMIT_TS,
@@ -41,10 +41,18 @@ index 00c1f29302..a46602f91f 100644
  
  	commitTsShared = ShmemInitStruct("CommitTs shared",
 diff --git a/src/backend/access/transam/multixact.c b/src/backend/access/transam/multixact.c
-index 97e6403e8a..7b76ef1cca 100644
+index ececa0c661..21e3186d34 100644
 --- a/src/backend/access/transam/multixact.c
 +++ b/src/backend/access/transam/multixact.c
-@@ -1906,7 +1906,7 @@ MultiXactShmemInit(void)
+@@ -1976,14 +1976,14 @@ MultiXactShmemInit(void)
+ 				  "pg_multixact/offsets", LWTRANCHE_MULTIXACTOFFSET_BUFFER,
+ 				  LWTRANCHE_MULTIXACTOFFSET_SLRU,
+ 				  SYNC_HANDLER_MULTIXACT_OFFSET,
+-				  false);
++				  true);
+ 	SlruPagePrecedesUnitTests(MultiXactOffsetCtl, MULTIXACT_OFFSETS_PER_PAGE);
+ 	SimpleLruInit(MultiXactMemberCtl,
+ 				  "multixact_member", multixact_member_buffers, 0,
  				  "pg_multixact/members", LWTRANCHE_MULTIXACTMEMBER_BUFFER,
  				  LWTRANCHE_MULTIXACTMEMBER_SLRU,
  				  SYNC_HANDLER_MULTIXACT_MEMBER,
@@ -54,10 +62,10 @@ index 97e6403e8a..7b76ef1cca 100644
  
  	/* Initialize our shared state struct */
 diff --git a/src/backend/access/transam/subtrans.c b/src/backend/access/transam/subtrans.c
-index 3f0fdeb10e..9d762b75c2 100644
+index 3796b5ead5..3ca794e02d 100644
 --- a/src/backend/access/transam/subtrans.c
 +++ b/src/backend/access/transam/subtrans.c
-@@ -244,7 +244,7 @@ SUBTRANSShmemInit(void)
+@@ -243,7 +243,7 @@ SUBTRANSShmemInit(void)
  	SubTransCtl->PagePrecedes = SubTransPagePrecedes;
  	SimpleLruInit(SubTransCtl, "subtransaction", SUBTRANSShmemBuffers(), 0,
  				  "pg_subtrans", LWTRANCHE_SUBTRANS_BUFFER,
@@ -67,7 +75,7 @@ index 3f0fdeb10e..9d762b75c2 100644
  }
  
 diff --git a/src/backend/storage/lmgr/predicate.c b/src/backend/storage/lmgr/predicate.c
-index 3539eb489a..98f330b9ac 100644
+index 03a00a8c9a..c97ff2d341 100644
 --- a/src/backend/storage/lmgr/predicate.c
 +++ b/src/backend/storage/lmgr/predicate.c
 @@ -814,7 +814,7 @@ SerialInit(void)
@@ -80,10 +88,10 @@ index 3539eb489a..98f330b9ac 100644
  	SerialPagePrecedesLogicallyUnitTests();
  #endif
 diff --git a/src/bin/pg_verifybackup/t/003_corruption.pl b/src/bin/pg_verifybackup/t/003_corruption.pl
-index ae91e04338..b4ea3a8bd9 100644
+index 1dd60f709c..deb8c11ca9 100644
 --- a/src/bin/pg_verifybackup/t/003_corruption.pl
 +++ b/src/bin/pg_verifybackup/t/003_corruption.pl
-@@ -182,7 +182,7 @@ sub mutilate_extra_tablespace_file
+@@ -246,7 +246,7 @@ sub mutilate_extra_tablespace_file
  sub mutilate_missing_file
  {
  	my ($backup_path) = @_;
@@ -93,5 +101,5 @@ index ae91e04338..b4ea3a8bd9 100644
  	return;
  }
 -- 
-2.45.2
+2.51.0
 
