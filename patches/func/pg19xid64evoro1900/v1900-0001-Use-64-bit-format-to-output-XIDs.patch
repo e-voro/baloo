@@ -63,7 +63,7 @@ Discussion: https://postgr.es/m/CAJ7c6TPDOYBYrnCAeyndkBktO0WG2xSdYduTF0nxq%2Bvfk
  src/backend/storage/ipc/standby.c                  |  26 ++--
  src/backend/storage/lmgr/predicate.c               |   9 +-
  src/backend/utils/adt/lockfuncs.c                  |   3 +-
- src/backend/utils/adt/multixactfuncs.c             |   4 +-
+ src/backend/utils/adt/multixactfuncs.c             |   6 +-
  src/backend/utils/error/csvlog.c                   |   5 +-
  src/backend/utils/error/elog.c                     |  15 ++-
  src/backend/utils/error/jsonlog.c                  |   9 +-
@@ -75,7 +75,7 @@ Discussion: https://postgr.es/m/CAJ7c6TPDOYBYrnCAeyndkBktO0WG2xSdYduTF0nxq%2Bvfk
  src/bin/pg_upgrade/pg_upgrade.c                    |  44 +++---
  src/bin/pg_waldump/pg_waldump.c                    |  26 ++--
  src/test/modules/xid_wraparound/xid_wraparound.c   |  10 +-
- 56 files changed, 719 insertions(+), 596 deletions(-)
+ 56 files changed, 721 insertions(+), 596 deletions(-)
 
 diff --git a/contrib/amcheck/verify_heapam.c b/contrib/amcheck/verify_heapam.c
 index 4963e9245c..fa8b8dcd9e 100644
@@ -2867,24 +2867,25 @@ index df938812dd..cdf29057f2 100644
  	return CStringGetTextDatum(vxidstr);
  }
 diff --git a/src/backend/utils/adt/multixactfuncs.c b/src/backend/utils/adt/multixactfuncs.c
-index e74ea93834..515d58a350 100644
 --- a/src/backend/utils/adt/multixactfuncs.c
 +++ b/src/backend/utils/adt/multixactfuncs.c
-@@ -40,7 +40,7 @@ pg_get_multixact_members(PG_FUNCTION_ARGS)
+@@ -45,7 +45,8 @@
  	if (mxid < FirstMultiXactId)
  		ereport(ERROR,
  				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 -				 errmsg("invalid MultiXactId: %u", mxid)));
-+				 errmsg("invalid MultiXactId: %" PRIu64, mxid)));
++				 errmsg("invalid MultiXactId: %llu",
++						(unsigned long long) mxid)));
  
  	if (SRF_IS_FIRSTCALL())
  	{
-@@ -73,7 +73,7 @@ pg_get_multixact_members(PG_FUNCTION_ARGS)
+@@ -78,7 +79,8 @@
  		HeapTuple	tuple;
  		char	   *values[2];
  
 -		values[0] = psprintf("%u", multi->members[multi->iter].xid);
-+		values[0] = psprintf("%" PRIu64, multi->members[multi->iter].xid);
++		values[0] = psprintf("%llu",
++							 (unsigned long long) multi->members[multi->iter].xid);
  		values[1] = mxstatus_to_string(multi->members[multi->iter].status);
  
  		tuple = BuildTupleFromCStrings(funccxt->attinmeta, values);
