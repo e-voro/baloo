@@ -22,239 +22,222 @@ Authors:
 Discussion: https://postgr.es/m/CACG%3DezZe1NQSCnfHOr78AtAZxJZeCvxrts0ygrxYwe%3DpyyjVWA%40mail.gmail.com
 Discussion: https://postgr.es/m/CAJ7c6TPDOYBYrnCAeyndkBktO0WG2xSdYduTF0nxq%2BvfkmTF5Q%40mail.gmail.com
 ---
- contrib/amcheck/verify_heapam.c               | 119 +--
- contrib/amcheck/verify_nbtree.c               |   2 +-
- contrib/hstore/hstore_io.c                    |   2 +
- contrib/pageinspect/Makefile                  |   2 +-
- contrib/pageinspect/btreefuncs.c              |  18 +-
- contrib/pageinspect/expected/btree.out        |   4 +-
- contrib/pageinspect/expected/hash_1.out       | 166 +++
- .../pageinspect/expected/oldextversions.out   |   2 +-
- contrib/pageinspect/expected/page.out         |  34 +-
- contrib/pageinspect/heapfuncs.c               |  10 +-
- contrib/pageinspect/meson.build               |   1 +
- .../pageinspect/pageinspect--1.13--1.14.sql   |  23 +
- contrib/pageinspect/pageinspect.control       |   2 +-
- contrib/pageinspect/rawpage.c                 |  34 +-
- contrib/pageinspect/sql/btree.sql             |   3 +-
- contrib/pg_overexplain/pg_overexplain.c       |   2 +-
- .../pg_surgery/expected/heap_surgery_1.out    | 185 ++++
- contrib/pg_surgery/heap_surgery.c             |  11 +-
- contrib/pg_visibility/pg_visibility.c         |   5 +-
- contrib/pgrowlocks/pgrowlocks.c               |   2 +-
- contrib/pgstattuple/pgstatapprox.c            |   4 +
- contrib/pgstattuple/pgstatindex.c             |   2 +-
- .../postgres_fdw/expected/postgres_fdw.out    |  55 +-
- contrib/postgres_fdw/postgres_fdw.c           |   9 +-
- contrib/postgres_fdw/sql/postgres_fdw.sql     |  15 +-
- src/backend/access/common/heaptuple.c         |  10 +-
- src/backend/access/common/reloptions.c        |  12 +-
- src/backend/access/common/tupdesc.c           |   3 +
- src/backend/access/heap/heapam.c              | 995 +++++++++++++++---
- src/backend/access/heap/heapam_handler.c      |  53 +-
- src/backend/access/heap/heapam_visibility.c   | 191 ++--
- src/backend/access/heap/heapam_xlog.c         | 172 ++-
- src/backend/access/heap/heaptoast.c           |   3 +
- src/backend/access/heap/hio.c                 |  39 +-
- src/backend/access/heap/pruneheap.c           | 115 +-
- src/backend/access/heap/rewriteheap.c         | 100 +-
- src/backend/access/heap/vacuumlazy.c          | 146 +--
- src/backend/access/nbtree/nbtpage.c           |   2 +
- src/backend/access/nbtree/nbtsplitloc.c       |  16 +-
- src/backend/access/rmgrdesc/gistdesc.c        |   4 +-
- src/backend/access/rmgrdesc/heapdesc.c        |  32 +
- src/backend/access/rmgrdesc/nbtdesc.c         |   4 +-
- src/backend/access/rmgrdesc/xactdesc.c        |   6 +-
- src/backend/access/rmgrdesc/xlogdesc.c        |   2 +-
- src/backend/access/transam/clog.c             |  19 +-
- src/backend/access/transam/commit_ts.c        |  19 -
- src/backend/access/transam/multixact.c        | 688 ++----------
- src/backend/access/transam/slru.c             |  11 +-
- src/backend/access/transam/subtrans.c         |   4 +-
- src/backend/access/transam/transam.c          |   1 -
- src/backend/access/transam/twophase.c         |  83 +-
- src/backend/access/transam/varsup.c           | 177 +---
- src/backend/access/transam/xact.c             |  35 +-
- src/backend/access/transam/xlog.c             |   3 +-
- src/backend/access/transam/xloginsert.c       |   7 +
- src/backend/access/transam/xlogreader.c       |   3 +-
- src/backend/bootstrap/bootstrap.c             |   2 +-
- src/backend/catalog/heap.c                    |   4 +-
- src/backend/catalog/pg_inherits.c             |   2 +-
- src/backend/commands/async.c                  |   2 +-
- src/backend/commands/dbcommands.c             |   5 +
- src/backend/commands/indexcmds.c              |   6 +-
- src/backend/commands/sequence.c               |  30 +-
- src/backend/commands/vacuum.c                 |  22 +-
- src/backend/commands/wait.c                   |   2 +-
- src/backend/executor/execExprInterp.c         |   1 +
- src/backend/executor/execReplication.c        |   2 +-
- src/backend/executor/execTuples.c             |   4 +-
- src/backend/executor/execUtils.c              |   1 +
- src/backend/executor/nodeModifyTable.c        |   1 +
- src/backend/executor/spi.c                    |   1 +
- src/backend/nodes/gen_node_support.pl         |   6 +-
- src/backend/optimizer/util/plancat.c          |   2 +-
- src/backend/postmaster/autovacuum.c           |  75 +-
- src/backend/replication/logical/conflict.c    |   6 +-
- src/backend/replication/logical/decode.c      |  30 +-
- src/backend/replication/logical/launcher.c    |   2 +-
- src/backend/replication/logical/proto.c       |  50 +-
- .../replication/logical/reorderbuffer.c       |  17 +-
- src/backend/replication/logical/slotsync.c    |   6 +-
- src/backend/replication/logical/snapbuild.c   |   4 +-
- src/backend/replication/logical/worker.c      |  10 +-
- src/backend/replication/walreceiver.c         |  28 +-
- src/backend/replication/walsender.c           |  76 +-
- src/backend/statistics/extended_stats.c       |   1 +
- src/backend/storage/aio/aio_callback.c        |  19 +
- src/backend/storage/buffer/Makefile           |   3 +-
- src/backend/storage/buffer/bufmgr.c           | 157 ++-
- src/backend/storage/buffer/heap_convert.c     | 549 ++++++++++
- src/backend/storage/buffer/meson.build        |   1 +
- src/backend/storage/ipc/procarray.c           | 181 ++--
- src/backend/storage/ipc/standby.c             |   4 +-
- src/backend/storage/lmgr/lmgr.c               |  14 +-
- src/backend/storage/lmgr/lock.c               |   4 +-
- src/backend/storage/lmgr/predicate.c          |  36 +-
- src/backend/storage/lmgr/proc.c               |  12 +-
- src/backend/storage/page/bufpage.c            | 253 ++++-
- src/backend/utils/adt/arrayfuncs.c            |   6 +-
- src/backend/utils/adt/enum.c                  |   2 +-
- src/backend/utils/adt/jsonfuncs.c             |   2 +
- src/backend/utils/adt/lockfuncs.c             |   9 +-
- src/backend/utils/adt/pgstatfuncs.c           |   1 +
- src/backend/utils/adt/rowtypes.c              |  12 +
- src/backend/utils/adt/xid.c                   |  43 +-
- src/backend/utils/adt/xid8funcs.c             |  68 +-
- src/backend/utils/cache/catcache.c            |   1 +
- src/backend/utils/cache/funccache.c           |   4 +-
- src/backend/utils/cache/relcache.c            |   3 +-
- src/backend/utils/fmgr/fmgr.c                 |   4 +-
- src/backend/utils/misc/guc_parameters.dat     |   2 +-
- src/backend/utils/misc/help_config.c          |   7 +-
- src/backend/utils/misc/pg_controldata.c       |   2 +-
- src/backend/utils/misc/postgresql.conf.sample |   4 +-
- src/backend/utils/sort/tuplesortvariants.c    |  14 +-
- src/backend/utils/time/combocid.c             |  32 +-
- src/backend/utils/time/snapmgr.c              |  22 +-
- src/bin/pg_amcheck/t/004_verify_heapam.pl     | 185 +++-
- src/bin/pg_controldata/pg_controldata.c       |   2 +-
- src/bin/pg_dump/pg_dump.c                     |  27 +-
- src/bin/pg_dump/pg_dump.h                     |   8 +-
- src/bin/pg_resetwal/pg_resetwal.c             |  58 +-
- src/bin/pg_resetwal/t/001_basic.pl            |  16 +-
- src/bin/pg_upgrade/Makefile                   |   1 +
- src/bin/pg_upgrade/check.c                    |  70 +-
- src/bin/pg_upgrade/controldata.c              |  17 +-
- src/bin/pg_upgrade/file.c                     |  99 +-
- src/bin/pg_upgrade/meson.build                |   1 +
- src/bin/pg_upgrade/pg_upgrade.c               | 143 ++-
- src/bin/pg_upgrade/pg_upgrade.h               |  35 +-
- src/bin/pg_upgrade/relfilenumber.c            |  33 +-
- src/bin/pg_upgrade/segresize.c                | 582 ++++++++++
- src/bin/pg_upgrade/t/002_pg_upgrade.pl        |  17 +
- src/bin/pg_upgrade/version.c                  | 181 ++++
- src/bin/pg_verifybackup/t/003_corruption.pl   |   6 +-
- src/bin/pg_waldump/t/001_basic.pl             |   3 +-
- src/include/access/ginblock.h                 |  11 +-
- src/include/access/gist.h                     |   2 +-
- src/include/access/heapam.h                   |  53 +-
- src/include/access/heapam_xlog.h              |  23 +-
- src/include/access/heaptoast.h                |  11 +-
- src/include/access/htup.h                     |  20 +-
- src/include/access/htup_details.h             | 273 ++++-
- src/include/access/multixact.h                |  11 +-
- src/include/access/nbtree.h                   |  10 +
- src/include/access/reloptions.h               |   2 +-
- src/include/access/rewriteheap.h              |   4 +-
- src/include/access/rmgrlist.h                 |   1 +
- src/include/access/tableam.h                  |   2 +-
- src/include/access/transam.h                  | 128 +--
- src/include/access/tupmacs.h                  |   3 +-
- src/include/access/xact.h                     |  13 +-
- src/include/access/xloginsert.h               |   1 +
- src/include/access/xlogrecord.h               |   4 +-
- src/include/c.h                               |  20 +-
- src/include/catalog/catversion.h              |   2 +-
- src/include/catalog/pg_operator.dat           |   8 +-
- src/include/catalog/pg_proc.dat               |  12 +-
- src/include/catalog/pg_type.dat               |   4 +-
- src/include/catalog/pg_type.h                 |   5 +
- src/include/commands/vacuum.h                 |  22 +-
- src/include/fmgr.h                            |   2 +
- src/include/nodes/pg_list.h                   |   4 +
- src/include/port/pg_lfind.h                   |  62 ++
- src/include/postgres.h                        |   9 +-
- src/include/postmaster/autovacuum.h           |   4 +-
- src/include/storage/aio.h                     |   3 +-
- src/include/storage/aio_internal.h            |   2 +
- src/include/storage/buf_internals.h           |  15 +-
- src/include/storage/bufmgr.h                  |   6 +
- src/include/storage/bufpage.h                 | 251 ++++-
- src/include/storage/itemid.h                  |   2 +
- src/include/storage/lock.h                    |  14 +-
- src/include/storage/proc.h                    |   6 +-
- src/include/utils/combocid.h                  |   2 +-
- src/include/utils/rel.h                       |  12 +-
- src/include/utils/xid8.h                      |   4 +-
- src/pl/plperl/plperl.c                        |   4 +-
- src/pl/plpgsql/src/pl_exec.c                  |   2 +
- src/pl/plpython/plpy_procedure.c              |   4 +-
- src/pl/tcl/pltcl.c                            |   4 +-
- src/test/Makefile                             |   3 +-
- src/test/meson.build                          |   1 +
- .../injection_points/regress_injection.c      |   3 +-
- src/test/modules/test_lfind/test_lfind.c      |  30 +-
- .../modules/xid_wraparound/xid_wraparound.c   |   1 -
- .../perl/PostgreSQL/Test/AdjustUpgrade.pm     |   4 +
- src/test/perl/PostgreSQL/Test/Cluster.pm      |  25 +-
- src/test/recovery/t/003_recovery_targets.pl   |   2 +-
- .../t/035_standby_logical_decoding.pl         |   2 +-
- src/test/recovery/t/039_end_of_wal.pl         |  19 +-
- src/test/regress/expected/indirect_toast.out  |   8 +
- src/test/regress/expected/insert.out          |  16 +-
- src/test/regress/expected/opr_sanity.out      |   6 +-
- src/test/regress/expected/select_views.out    |  86 +-
- src/test/regress/expected/txid.out            |   8 +-
- src/test/regress/expected/type_sanity.out     |   5 +-
- src/test/regress/expected/xid.out             |  22 +-
- src/test/regress/expected/xid64.out           |  92 ++
- src/test/regress/parallel_schedule            |   2 +-
- src/test/regress/regress.c                    | 293 ++++++
- src/test/regress/sql/indirect_toast.sql       |  11 +
- src/test/regress/sql/insert.sql               |  17 +-
- src/test/regress/sql/select_views.sql         |   2 +-
- src/test/regress/sql/type_sanity.sql          |   5 +-
- src/test/regress/sql/xid.sql                  |   2 +-
- src/test/regress/sql/xid64.sql                |  84 ++
- src/test/xid-64/Makefile                      |  22 +
- src/test/xid-64/README                        |  16 +
- src/test/xid-64/meson.build                   |  16 +
- src/test/xid-64/t/002_test_gucs.pl            |  79 ++
- src/test/xid-64/t/003_test_integrity.pl       |  73 ++
- src/test/xid-64/t/004_test_relminmxid.pl      |  90 ++
- src/test/xid-64/t/005_stream_subxact.pl       | 154 +++
- src/test/xid-64/t/006_zeropage.pl             |  33 +
- src/test/xid-64/t/007_first_multi.pl          |  83 ++
- src/tools/pgindent/typedefs.list              |   4 +-
- 216 files changed, 6903 insertions(+), 2493 deletions(-)
- create mode 100644 contrib/pageinspect/expected/hash_1.out
- create mode 100644 contrib/pageinspect/pageinspect--1.13--1.14.sql
- create mode 100644 contrib/pg_surgery/expected/heap_surgery_1.out
- create mode 100644 src/backend/storage/buffer/heap_convert.c
- create mode 100644 src/bin/pg_upgrade/segresize.c
- create mode 100644 src/test/regress/expected/xid64.out
- create mode 100644 src/test/regress/sql/xid64.sql
- create mode 100644 src/test/xid-64/Makefile
- create mode 100644 src/test/xid-64/README
- create mode 100644 src/test/xid-64/meson.build
- create mode 100644 src/test/xid-64/t/002_test_gucs.pl
- create mode 100644 src/test/xid-64/t/003_test_integrity.pl
- create mode 100644 src/test/xid-64/t/004_test_relminmxid.pl
- create mode 100644 src/test/xid-64/t/005_stream_subxact.pl
- create mode 100644 src/test/xid-64/t/006_zeropage.pl
- create mode 100644 src/test/xid-64/t/007_first_multi.pl
+ contrib/amcheck/verify_heapam.c                    |  119 +-
+ contrib/amcheck/verify_nbtree.c                    |    2 
+ contrib/hstore/hstore_io.c                         |    2 
+ contrib/pageinspect/Makefile                       |    2 
+ contrib/pageinspect/btreefuncs.c                   |   18 
+ contrib/pageinspect/expected/btree.out             |    4 
+ contrib/pageinspect/expected/hash_1.out            |  166 +++
+ contrib/pageinspect/expected/oldextversions.out    |    2 
+ contrib/pageinspect/expected/page.out              |   34 -
+ contrib/pageinspect/heapfuncs.c                    |   10 
+ contrib/pageinspect/meson.build                    |    1 
+ contrib/pageinspect/pageinspect--1.13--1.14.sql    |   23 
+ contrib/pageinspect/pageinspect.control            |    2 
+ contrib/pageinspect/rawpage.c                      |   34 +
+ contrib/pageinspect/sql/btree.sql                  |    3 
+ contrib/pg_overexplain/pg_overexplain.c            |    2 
+ contrib/pg_surgery/expected/heap_surgery_1.out     |  185 ++++
+ contrib/pg_surgery/heap_surgery.c                  |   11 
+ contrib/pg_visibility/pg_visibility.c              |    5 
+ contrib/pgrowlocks/pgrowlocks.c                    |    2 
+ contrib/pgstattuple/pgstatapprox.c                 |    4 
+ contrib/pgstattuple/pgstatindex.c                  |    2 
+ contrib/postgres_fdw/expected/postgres_fdw.out     |   55 +
+ contrib/postgres_fdw/postgres_fdw.c                |    9 
+ contrib/postgres_fdw/sql/postgres_fdw.sql          |   15 
+ src/backend/access/common/heaptuple.c              |   10 
+ src/backend/access/common/reloptions.c             |  118 +-
+ src/backend/access/common/tupdesc.c                |    3 
+ src/backend/access/heap/heapam.c                   |  995 +++++++++++++++++---
+ src/backend/access/heap/heapam_handler.c           |   53 +
+ src/backend/access/heap/heapam_visibility.c        |  191 ++--
+ src/backend/access/heap/heapam_xlog.c              |  172 +++
+ src/backend/access/heap/heaptoast.c                |    3 
+ src/backend/access/heap/hio.c                      |   39 +
+ src/backend/access/heap/pruneheap.c                |  115 ++
+ src/backend/access/heap/rewriteheap.c              |  100 ++
+ src/backend/access/heap/vacuumlazy.c               |  146 +--
+ src/backend/access/nbtree/nbtpage.c                |    2 
+ src/backend/access/nbtree/nbtsplitloc.c            |   16 
+ src/backend/access/rmgrdesc/gistdesc.c             |    4 
+ src/backend/access/rmgrdesc/heapdesc.c             |   32 +
+ src/backend/access/rmgrdesc/nbtdesc.c              |    4 
+ src/backend/access/rmgrdesc/xactdesc.c             |    6 
+ src/backend/access/rmgrdesc/xlogdesc.c             |    2 
+ src/backend/access/transam/clog.c                  |   19 
+ src/backend/access/transam/commit_ts.c             |   19 
+ src/backend/access/transam/multixact.c             |  688 +-------------
+ src/backend/access/transam/slru.c                  |   11 
+ src/backend/access/transam/subtrans.c              |    4 
+ src/backend/access/transam/transam.c               |    1 
+ src/backend/access/transam/twophase.c              |   83 +-
+ src/backend/access/transam/varsup.c                |  177 ----
+ src/backend/access/transam/xact.c                  |   35 -
+ src/backend/access/transam/xlog.c                  |    3 
+ src/backend/access/transam/xloginsert.c            |    7 
+ src/backend/access/transam/xlogreader.c            |    3 
+ src/backend/bootstrap/bootstrap.c                  |    2 
+ src/backend/catalog/heap.c                         |    4 
+ src/backend/catalog/pg_inherits.c                  |    2 
+ src/backend/commands/async.c                       |    2 
+ src/backend/commands/dbcommands.c                  |    5 
+ src/backend/commands/indexcmds.c                   |    6 
+ src/backend/commands/sequence.c                    |   30 +
+ src/backend/commands/vacuum.c                      |   22 
+ src/backend/commands/wait.c                        |    2 
+ src/backend/executor/execExprInterp.c              |    1 
+ src/backend/executor/execReplication.c             |    2 
+ src/backend/executor/execTuples.c                  |    4 
+ src/backend/executor/execUtils.c                   |    1 
+ src/backend/executor/nodeModifyTable.c             |    1 
+ src/backend/executor/spi.c                         |    1 
+ src/backend/nodes/gen_node_support.pl              |    6 
+ src/backend/optimizer/util/plancat.c               |    2 
+ src/backend/postmaster/autovacuum.c                |   75 +-
+ src/backend/replication/logical/conflict.c         |    6 
+ src/backend/replication/logical/decode.c           |   30 +
+ src/backend/replication/logical/launcher.c         |    2 
+ src/backend/replication/logical/proto.c            |   50 +
+ src/backend/replication/logical/reorderbuffer.c    |   17 
+ src/backend/replication/logical/slotsync.c         |    6 
+ src/backend/replication/logical/snapbuild.c        |    4 
+ src/backend/replication/logical/worker.c           |   10 
+ src/backend/replication/walreceiver.c              |   28 -
+ src/backend/replication/walsender.c                |   76 --
+ src/backend/statistics/extended_stats.c            |    1 
+ src/backend/storage/aio/aio_callback.c             |   19 
+ src/backend/storage/buffer/Makefile                |    3 
+ src/backend/storage/buffer/bufmgr.c                |  157 +++
+ src/backend/storage/buffer/heap_convert.c          |  549 +++++++++++
+ src/backend/storage/buffer/meson.build             |    1 
+ src/backend/storage/ipc/procarray.c                |  181 +---
+ src/backend/storage/ipc/standby.c                  |    4 
+ src/backend/storage/lmgr/lmgr.c                    |   14 
+ src/backend/storage/lmgr/lock.c                    |    4 
+ src/backend/storage/lmgr/predicate.c               |   36 -
+ src/backend/storage/lmgr/proc.c                    |   12 
+ src/backend/storage/page/bufpage.c                 |  253 +++++
+ src/backend/utils/adt/arrayfuncs.c                 |    6 
+ src/backend/utils/adt/enum.c                       |    2 
+ src/backend/utils/adt/jsonfuncs.c                  |    2 
+ src/backend/utils/adt/lockfuncs.c                  |    9 
+ src/backend/utils/adt/pgstatfuncs.c                |    1 
+ src/backend/utils/adt/rowtypes.c                   |   12 
+ src/backend/utils/adt/xid.c                        |   43 +
+ src/backend/utils/adt/xid8funcs.c                  |   68 +
+ src/backend/utils/cache/catcache.c                 |    1 
+ src/backend/utils/cache/funccache.c                |    4 
+ src/backend/utils/cache/relcache.c                 |    3 
+ src/backend/utils/fmgr/fmgr.c                      |    4 
+ src/backend/utils/misc/guc_parameters.dat          |   36 -
+ src/backend/utils/misc/pg_controldata.c            |    2 
+ src/backend/utils/misc/postgresql.conf.sample      |    4 
+ src/backend/utils/sort/tuplesortvariants.c         |   14 
+ src/backend/utils/time/combocid.c                  |   32 -
+ src/backend/utils/time/snapmgr.c                   |   22 
+ src/bin/pg_amcheck/t/004_verify_heapam.pl          |  185 +++-
+ src/bin/pg_controldata/pg_controldata.c            |    2 
+ src/bin/pg_dump/pg_dump.c                          |   27 -
+ src/bin/pg_dump/pg_dump.h                          |    8 
+ src/bin/pg_resetwal/pg_resetwal.c                  |   58 -
+ src/bin/pg_resetwal/t/001_basic.pl                 |   16 
+ src/bin/pg_upgrade/Makefile                        |    1 
+ src/bin/pg_upgrade/check.c                         |   70 +
+ src/bin/pg_upgrade/controldata.c                   |   17 
+ src/bin/pg_upgrade/file.c                          |   99 ++
+ src/bin/pg_upgrade/meson.build                     |    1 
+ src/bin/pg_upgrade/pg_upgrade.c                    |  143 ++-
+ src/bin/pg_upgrade/pg_upgrade.h                    |   35 +
+ src/bin/pg_upgrade/relfilenumber.c                 |   33 +
+ src/bin/pg_upgrade/segresize.c                     |  582 ++++++++++++
+ src/bin/pg_upgrade/t/002_pg_upgrade.pl             |   17 
+ src/bin/pg_upgrade/version.c                       |  181 ++++
+ src/bin/pg_verifybackup/t/003_corruption.pl        |    6 
+ src/bin/pg_waldump/t/001_basic.pl                  |    3 
+ src/include/access/ginblock.h                      |   11 
+ src/include/access/gist.h                          |    2 
+ src/include/access/heapam.h                        |   53 +
+ src/include/access/heapam_xlog.h                   |   23 
+ src/include/access/heaptoast.h                     |   11 
+ src/include/access/htup.h                          |   20 
+ src/include/access/htup_details.h                  |  273 +++++
+ src/include/access/multixact.h                     |   11 
+ src/include/access/nbtree.h                        |   10 
+ src/include/access/reloptions.h                    |    2 
+ src/include/access/rewriteheap.h                   |    4 
+ src/include/access/rmgrlist.h                      |    1 
+ src/include/access/tableam.h                       |    2 
+ src/include/access/transam.h                       |  128 +--
+ src/include/access/tupmacs.h                       |    3 
+ src/include/access/xact.h                          |   13 
+ src/include/access/xloginsert.h                    |    1 
+ src/include/access/xlogrecord.h                    |    4 
+ src/include/c.h                                    |   20 
+ src/include/catalog/catversion.h                   |    2 
+ src/include/catalog/pg_operator.dat                |    8 
+ src/include/catalog/pg_proc.dat                    |   12 
+ src/include/catalog/pg_type.dat                    |    4 
+ src/include/catalog/pg_type.h                      |    5 
+ src/include/commands/vacuum.h                      |   22 
+ src/include/fmgr.h                                 |    2 
+ src/include/nodes/pg_list.h                        |    4 
+ src/include/port/pg_lfind.h                        |   62 +
+ src/include/postgres.h                             |    9 
+ src/include/postmaster/autovacuum.h                |    4 
+ src/include/storage/aio.h                          |    3 
+ src/include/storage/aio_internal.h                 |    2 
+ src/include/storage/buf_internals.h                |   15 
+ src/include/storage/bufmgr.h                       |    6 
+ src/include/storage/bufpage.h                      |  251 +++++
+ src/include/storage/itemid.h                       |    2 
+ src/include/storage/lock.h                         |   14 
+ src/include/storage/proc.h                         |    6 
+ src/include/utils/combocid.h                       |    2 
+ src/include/utils/rel.h                            |   12 
+ src/include/utils/xid8.h                           |    4 
+ src/pl/plperl/plperl.c                             |    4 
+ src/pl/plpgsql/src/pl_exec.c                       |    2 
+ src/pl/plpython/plpy_procedure.c                   |    4 
+ src/pl/tcl/pltcl.c                                 |    4 
+ src/test/Makefile                                  |    3 
+ src/test/meson.build                               |    1 
+ .../modules/injection_points/regress_injection.c   |    3 
+ src/test/modules/test_lfind/test_lfind.c           |   30 -
+ src/test/modules/xid_wraparound/xid_wraparound.c   |    1 
+ src/test/perl/PostgreSQL/Test/AdjustUpgrade.pm     |    4 
+ src/test/perl/PostgreSQL/Test/Cluster.pm           |   25 -
+ src/test/recovery/t/003_recovery_targets.pl        |    2 
+ .../recovery/t/035_standby_logical_decoding.pl     |    2 
+ src/test/recovery/t/039_end_of_wal.pl              |   19 
+ src/test/regress/expected/indirect_toast.out       |    8 
+ src/test/regress/expected/insert.out               |   16 
+ src/test/regress/expected/opr_sanity.out           |    6 
+ src/test/regress/expected/select_views.out         |   86 +-
+ src/test/regress/expected/txid.out                 |    8 
+ src/test/regress/expected/type_sanity.out          |    5 
+ src/test/regress/expected/xid.out                  |   22 
+ src/test/regress/expected/xid64.out                |   92 ++
+ src/test/regress/parallel_schedule                 |    2 
+ src/test/regress/regress.c                         |  293 ++++++
+ src/test/regress/sql/indirect_toast.sql            |   11 
+ src/test/regress/sql/insert.sql                    |   17 
+ src/test/regress/sql/select_views.sql              |    2 
+ src/test/regress/sql/type_sanity.sql               |    5 
+ src/test/regress/sql/xid.sql                       |    2 
+ src/test/regress/sql/xid64.sql                     |   84 ++
+ src/test/xid-64/Makefile                           |   22 
+ src/test/xid-64/README                             |   16 
+ src/test/xid-64/meson.build                        |   16 
+ src/test/xid-64/t/002_test_gucs.pl                 |   79 ++
+ src/test/xid-64/t/003_test_integrity.pl            |   73 +
+ src/test/xid-64/t/004_test_relminmxid.pl           |   90 ++
+ src/test/xid-64/t/005_stream_subxact.pl            |  154 +++
+ src/test/xid-64/t/006_zeropage.pl                  |   33 +
+ src/test/xid-64/t/007_first_multi.pl               |   83 ++
+ src/tools/pgindent/typedefs.list                   |    4 
+ 215 files changed, 6968 insertions(+), 2561 deletions(-)
 
 diff --git a/contrib/amcheck/verify_heapam.c b/contrib/amcheck/verify_heapam.c
 index e5ea68b801..14ce47cf80 100644
@@ -1641,10 +1624,129 @@ index 74a52d8706..81d640225b 100644
  	memcpy((char *) result->t_data + MINIMAL_TUPLE_OFFSET, mtup, mtup->t_len);
  	memset(result->t_data, 0, offsetof(HeapTupleHeaderData, t_infomask2));
 diff --git a/src/backend/access/common/reloptions.c b/src/backend/access/common/reloptions.c
-index 00e595ba9f..25ba2f580b 100644
 --- a/src/backend/access/common/reloptions.c
 +++ b/src/backend/access/common/reloptions.c
-@@ -1962,17 +1962,17 @@ default_reloptions(Datum reloptions, bool validate, relopt_kind kind)
+@@ -292,58 +292,6 @@
+ 	},
+ 	{
+ 		{
+-			"autovacuum_freeze_min_age",
+-			"Minimum age at which VACUUM should freeze a table row, for autovacuum",
+-			RELOPT_KIND_HEAP | RELOPT_KIND_TOAST,
+-			ShareUpdateExclusiveLock
+-		},
+-		-1, 0, 1000000000
+-	},
+-	{
+-		{
+-			"autovacuum_multixact_freeze_min_age",
+-			"Minimum multixact age at which VACUUM should freeze a row multixact's, for autovacuum",
+-			RELOPT_KIND_HEAP | RELOPT_KIND_TOAST,
+-			ShareUpdateExclusiveLock
+-		},
+-		-1, 0, 1000000000
+-	},
+-	{
+-		{
+-			"autovacuum_freeze_max_age",
+-			"Age at which to autovacuum a table to prevent transaction ID wraparound",
+-			RELOPT_KIND_HEAP | RELOPT_KIND_TOAST,
+-			ShareUpdateExclusiveLock
+-		},
+-		-1, 100000, 2000000000
+-	},
+-	{
+-		{
+-			"autovacuum_multixact_freeze_max_age",
+-			"Multixact age at which to autovacuum a table to prevent multixact wraparound",
+-			RELOPT_KIND_HEAP | RELOPT_KIND_TOAST,
+-			ShareUpdateExclusiveLock
+-		},
+-		-1, 10000, 2000000000
+-	},
+-	{
+-		{
+-			"autovacuum_freeze_table_age",
+-			"Age at which VACUUM should perform a full table sweep to freeze row versions",
+-			RELOPT_KIND_HEAP | RELOPT_KIND_TOAST,
+-			ShareUpdateExclusiveLock
+-		}, -1, 0, 2000000000
+-	},
+-	{
+-		{
+-			"autovacuum_multixact_freeze_table_age",
+-			"Age of multixact at which VACUUM should perform a full table sweep to freeze row versions",
+-			RELOPT_KIND_HEAP | RELOPT_KIND_TOAST,
+-			ShareUpdateExclusiveLock
+-		}, -1, 0, 2000000000
+-	},
+-	{
+-		{
+ 			"log_autovacuum_min_duration",
+ 			"Sets the minimum execution time above which vacuum actions by autovacuum will be logged",
+ 			RELOPT_KIND_HEAP | RELOPT_KIND_TOAST,
+@@ -419,6 +367,60 @@
+ 
+ static relopt_int64 int64RelOpts[] =
+ {
++	{
++		{
++			"autovacuum_freeze_min_age",
++			"Minimum age at which VACUUM should freeze a table row, for autovacuum",
++			RELOPT_KIND_HEAP | RELOPT_KIND_TOAST,
++			ShareUpdateExclusiveLock
++		},
++		INT64CONST(-1), INT64CONST(0), INT64CONST(1000000000)
++	},
++	{
++		{
++			"autovacuum_multixact_freeze_min_age",
++			"Minimum multixact age at which VACUUM should freeze a row multixact's, for autovacuum",
++			RELOPT_KIND_HEAP | RELOPT_KIND_TOAST,
++			ShareUpdateExclusiveLock
++		},
++		INT64CONST(-1), INT64CONST(0), INT64CONST(1000000000)
++	},
++	{
++		{
++			"autovacuum_freeze_max_age",
++			"Age at which to autovacuum a table to prevent transaction ID wraparound",
++			RELOPT_KIND_HEAP | RELOPT_KIND_TOAST,
++			ShareUpdateExclusiveLock
++		},
++		INT64CONST(-1), INT64CONST(100000), INT64CONST(2000000000)
++	},
++	{
++		{
++			"autovacuum_multixact_freeze_max_age",
++			"Multixact age at which to autovacuum a table to prevent multixact wraparound",
++			RELOPT_KIND_HEAP | RELOPT_KIND_TOAST,
++			ShareUpdateExclusiveLock
++		},
++		INT64CONST(-1), INT64CONST(10000), INT64CONST(2000000000)
++	},
++	{
++		{
++			"autovacuum_freeze_table_age",
++			"Age at which VACUUM should perform a full table sweep to freeze row versions",
++			RELOPT_KIND_HEAP | RELOPT_KIND_TOAST,
++			ShareUpdateExclusiveLock
++		},
++		INT64CONST(-1), INT64CONST(0), INT64CONST(2000000000)
++	},
++	{
++		{
++			"autovacuum_multixact_freeze_table_age",
++			"Age of multixact at which VACUUM should perform a full table sweep to freeze row versions",
++			RELOPT_KIND_HEAP | RELOPT_KIND_TOAST,
++			ShareUpdateExclusiveLock
++		},
++		INT64CONST(-1), INT64CONST(0), INT64CONST(2000000000)
++	},
+ 	/* list terminator */
+ 	{{NULL}}
+ };
+@@ -2059,17 +2061,17 @@
  		offsetof(StdRdOptions, autovacuum) + offsetof(AutoVacOpts, analyze_threshold)},
  		{"autovacuum_vacuum_cost_limit", RELOPT_TYPE_INT,
  		offsetof(StdRdOptions, autovacuum) + offsetof(AutoVacOpts, vacuum_cost_limit)},
@@ -11760,10 +11862,39 @@ index 0fe63c6bb8..fcbc078350 100644
  	entry->user_fn = user_fn;
  	entry->inforec = inforec;
 diff --git a/src/backend/utils/misc/guc_parameters.dat b/src/backend/utils/misc/guc_parameters.dat
-index 0703e78c1b..5fb584bf92 100644
 --- a/src/backend/utils/misc/guc_parameters.dat
 +++ b/src/backend/utils/misc/guc_parameters.dat
-@@ -3219,7 +3219,7 @@
+@@ -153,12 +153,12 @@
+ 
+ # see varsup.c for why this is PGC_POSTMASTER not PGC_SIGHUP
+ # see vacuum_failsafe_age if you change the upper-limit value.
+-{ name => 'autovacuum_freeze_max_age', type => 'int', context => 'PGC_POSTMASTER', group => 'VACUUM_AUTOVACUUM',
++{ name => 'autovacuum_freeze_max_age', type => 'int64', context => 'PGC_POSTMASTER', group => 'VACUUM_AUTOVACUUM',
+   short_desc => 'Age at which to autovacuum a table to prevent transaction ID wraparound.',
+   variable => 'autovacuum_freeze_max_age',
+   boot_val => '200000000',
+   min => '100000',
+-  max => '2000000000',
++  max => '0x7FFFFFFFFFFFFFFF',
+ },
+ 
+ { name => 'autovacuum_freeze_score_weight', type => 'real', context => 'PGC_SIGHUP', group => 'VACUUM_AUTOVACUUM',
+@@ -186,12 +186,12 @@
+ },
+ 
+ # see multixact.c for why this is PGC_POSTMASTER not PGC_SIGHUP
+-{ name => 'autovacuum_multixact_freeze_max_age', type => 'int', context => 'PGC_POSTMASTER', group => 'VACUUM_AUTOVACUUM',
++{ name => 'autovacuum_multixact_freeze_max_age', type => 'int64', context => 'PGC_POSTMASTER', group => 'VACUUM_AUTOVACUUM',
+   short_desc => 'Multixact age at which to autovacuum a table to prevent multixact wraparound.',
+   variable => 'autovacuum_multixact_freeze_max_age',
+   boot_val => '400000000',
+   min => '10000',
+-  max => '2000000000',
++  max => '0x7FFFFFFFFFFFFFFF',
+ },
+ 
+ { name => 'autovacuum_multixact_freeze_score_weight', type => 'real', context => 'PGC_SIGHUP', group => 'VACUUM_AUTOVACUUM',
+@@ -3369,7 +3369,7 @@
    max => '10000',
  },
  
@@ -11772,24 +11903,69 @@ index 0703e78c1b..5fb584bf92 100644
    short_desc => 'Age at which VACUUM should trigger failsafe to avoid a wraparound outage.',
    variable => 'vacuum_failsafe_age',
    boot_val => '1600000000',
-diff --git a/src/backend/utils/misc/help_config.c b/src/backend/utils/misc/help_config.c
-index 2810715693..a18a1965e9 100644
---- a/src/backend/utils/misc/help_config.c
-+++ b/src/backend/utils/misc/help_config.c
-@@ -90,7 +90,12 @@ printMixedStruct(const struct config_generic *structToPrint)
- 				   structToPrint->_int.min,
- 				   structToPrint->_int.max);
- 			break;
+@@ -3377,20 +3377,20 @@
+   max => '2100000000',
+ },
+ 
+-{ name => 'vacuum_freeze_min_age', type => 'int', context => 'PGC_USERSET', group => 'VACUUM_FREEZING',
++{ name => 'vacuum_freeze_min_age', type => 'int64', context => 'PGC_USERSET', group => 'VACUUM_FREEZING',
+   short_desc => 'Minimum age at which VACUUM should freeze a table row.',
+   variable => 'vacuum_freeze_min_age',
+   boot_val => '50000000',
+   min => '0',
+-  max => '1000000000',
+-},
 -
-+		case PGC_INT64:
-+			printf("INTEGER\t%" PRIi64 "\t%" PRIi64 "\t%" PRIi64 "\t",
-+				   structToPrint->_int64.reset_val,
-+				   structToPrint->_int64.min,
-+				   structToPrint->_int64.max);
-+			break;
- 		case PGC_REAL:
- 			printf("REAL\t%g\t%g\t%g\t",
- 				   structToPrint->_real.reset_val,
+-{ name => 'vacuum_freeze_table_age', type => 'int', context => 'PGC_USERSET', group => 'VACUUM_FREEZING',
++  max => '0x7FFFFFFFFFFFFFFF',
++},
++
++{ name => 'vacuum_freeze_table_age', type => 'int64', context => 'PGC_USERSET', group => 'VACUUM_FREEZING',
+   short_desc => 'Age at which VACUUM should scan whole table to freeze tuples.',
+   variable => 'vacuum_freeze_table_age',
+   boot_val => '150000000',
+   min => '0',
+-  max => '2000000000',
++  max => '0x7FFFFFFFFFFFFFFF',
+ },
+ 
+ { name => 'vacuum_max_eager_freeze_failure_rate', type => 'real', context => 'PGC_USERSET', group => 'VACUUM_FREEZING',
+@@ -3402,7 +3402,7 @@
+   max => '1.0',
+ },
+ 
+-{ name => 'vacuum_multixact_failsafe_age', type => 'int', context => 'PGC_USERSET', group => 'VACUUM_FREEZING',
++{ name => 'vacuum_multixact_failsafe_age', type => 'int64', context => 'PGC_USERSET', group => 'VACUUM_FREEZING',
+   short_desc => 'Multixact age at which VACUUM should trigger failsafe to avoid a wraparound outage.',
+   variable => 'vacuum_multixact_failsafe_age',
+   boot_val => '1600000000',
+@@ -3410,20 +3410,20 @@
+   max => '2100000000',
+ },
+ 
+-{ name => 'vacuum_multixact_freeze_min_age', type => 'int', context => 'PGC_USERSET', group => 'VACUUM_FREEZING',
++{ name => 'vacuum_multixact_freeze_min_age', type => 'int64', context => 'PGC_USERSET', group => 'VACUUM_FREEZING',
+   short_desc => 'Minimum age at which VACUUM should freeze a MultiXactId in a table row.',
+   variable => 'vacuum_multixact_freeze_min_age',
+   boot_val => '5000000',
+   min => '0',
+-  max => '1000000000',
+-},
+-
+-{ name => 'vacuum_multixact_freeze_table_age', type => 'int', context => 'PGC_USERSET', group => 'VACUUM_FREEZING',
++  max => '0x7FFFFFFFFFFFFFFF',
++},
++
++{ name => 'vacuum_multixact_freeze_table_age', type => 'int64', context => 'PGC_USERSET', group => 'VACUUM_FREEZING',
+   short_desc => 'Multixact age at which VACUUM should scan whole table to freeze tuples.',
+   variable => 'vacuum_multixact_freeze_table_age',
+   boot_val => '150000000',
+   min => '0',
+-  max => '2000000000',
++  max => '0x7FFFFFFFFFFFFFFF',
+ },
+ 
+ { name => 'vacuum_truncate', type => 'bool', context => 'PGC_USERSET', group => 'VACUUM_DEFAULT',
 diff --git a/src/backend/utils/misc/pg_controldata.c b/src/backend/utils/misc/pg_controldata.c
 index b4bccf6a34..a7803cfaef 100644
 --- a/src/backend/utils/misc/pg_controldata.c
@@ -18369,4 +18545,3 @@ index 23bce72ae6..239d087fbf 100644
  join_search_hook_type
 -- 
 2.51.0
-
