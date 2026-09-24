@@ -17,16 +17,16 @@ Reviewed-by: Aleksander Alekseev <aleksander@timescale.com>
 Discussion: https://postgr.es/m/CACG%3DezZe1NQSCnfHOr78AtAZxJZeCvxrts0ygrxYwe%3DpyyjVWA%40mail.gmail.com
 Discussion: https://postgr.es/m/CAJ7c6TPDOYBYrnCAeyndkBktO0WG2xSdYduTF0nxq%2BvfkmTF5Q%40mail.gmail.com
 ---
- contrib/amcheck/verify_heapam.c               | 75 ++++++++-----------
- contrib/pageinspect/btreefuncs.c              |  5 +-
- src/backend/access/rmgrdesc/gistdesc.c        | 10 +--
- src/backend/access/rmgrdesc/nbtdesc.c         | 10 +--
- src/backend/access/rmgrdesc/xlogdesc.c        |  5 +-
- src/backend/utils/misc/pg_controldata.c       |  5 +-
- src/bin/pg_amcheck/t/004_verify_heapam.pl     | 10 +--
- src/bin/pg_controldata/pg_controldata.c       |  5 +-
- src/bin/pg_upgrade/controldata.c              | 32 ++++++--
- .../modules/xid_wraparound/xid_wraparound.c   | 12 ++-
+ contrib/amcheck/verify_heapam.c                  | 75 ++++++++++--------------
+ contrib/pageinspect/btreefuncs.c                 |  5 +-
+ src/backend/access/rmgrdesc/gistdesc.c           | 10 ++--
+ src/backend/access/rmgrdesc/nbtdesc.c            | 10 ++--
+ src/backend/access/rmgrdesc/xlogdesc.c           |  5 +-
+ src/backend/utils/misc/pg_controldata.c          |  5 +-
+ src/bin/pg_amcheck/t/004_verify_heapam.pl        | 10 ++--
+ src/bin/pg_controldata/pg_controldata.c          |  5 +-
+ src/bin/pg_upgrade/controldata.c                 | 32 ++++++++--
+ src/test/modules/xid_wraparound/xid_wraparound.c | 12 ++--
  10 files changed, 83 insertions(+), 86 deletions(-)
 
 diff --git a/contrib/amcheck/verify_heapam.c b/contrib/amcheck/verify_heapam.c
@@ -266,44 +266,42 @@ index 8747dd64c6..21f6c460ab 100644
  				break;
  			}
 diff --git a/src/backend/access/rmgrdesc/xlogdesc.c b/src/backend/access/rmgrdesc/xlogdesc.c
-index 002f0d1e1e..53cff28ad8 100644
 --- a/src/backend/access/rmgrdesc/xlogdesc.c
 +++ b/src/backend/access/rmgrdesc/xlogdesc.c
-@@ -66,7 +66,7 @@ xlog_desc(StringInfo buf, XLogReaderState *record)
+@@ -101,7 +101,7 @@
  		CheckPoint *checkpoint = (CheckPoint *) rec;
  
  		appendStringInfo(buf, "redo %X/%08X; "
--						 "tli %u; prev tli %u; fpw %s; wal_level %s; xid %u:%llu; oid %u; multi %llu; offset %llu; "
-+						 "tli %u; prev tli %u; fpw %s; wal_level %s; xid %llu; oid %u; multi %llu; offset %llu; "
+-						 "tli %u; prev tli %u; fpw %s; wal_level %s; logical decoding %s; xid %u:%llu; oid %u; multi %llu; offset %" PRIu64 "; "
++						 "tli %u; prev tli %u; fpw %s; wal_level %s; logical decoding %s; xid %llu; oid %u; multi %llu; offset %" PRIu64 "; "
  						 "oldest xid %llu in DB %u; oldest multi %llu in DB %u; "
  						 "oldest/newest commit timestamp xid: %llu/%llu; "
- 						 "oldest running xid %llu; %s",
-@@ -75,8 +75,7 @@ xlog_desc(StringInfo buf, XLogReaderState *record)
- 						 checkpoint->PrevTimeLineID,
+ 						 "oldest running xid %llu; "
+@@ -112,8 +112,7 @@
  						 checkpoint->fullPageWrites ? "true" : "false",
  						 get_wal_level_string(checkpoint->wal_level),
+ 						 checkpoint->logicalDecodingEnabled ? "true" : "false",
 -						 EpochFromFullTransactionId(checkpoint->nextXid),
 -						 (unsigned long long) XidFromFullTransactionId(checkpoint->nextXid),
 +						 (unsigned long long) U64FromFullTransactionId(checkpoint->nextXid),
  						 checkpoint->nextOid,
  						 (unsigned long long) checkpoint->nextMulti,
- 						 (unsigned long long) checkpoint->nextMultiOffset,
+ 						 checkpoint->nextMultiOffset,
 diff --git a/src/backend/utils/misc/pg_controldata.c b/src/backend/utils/misc/pg_controldata.c
-index 4a14e61a84..b4bccf6a34 100644
 --- a/src/backend/utils/misc/pg_controldata.c
 +++ b/src/backend/utils/misc/pg_controldata.c
-@@ -116,9 +116,8 @@ pg_control_checkpoint(PG_FUNCTION_ARGS)
- 	values[5] = BoolGetDatum(ControlFile->checkPointCopy.fullPageWrites);
- 	nulls[5] = false;
- 
--	values[6] = CStringGetTextDatum(psprintf("%u:%llu",
--											 EpochFromFullTransactionId(ControlFile->checkPointCopy.nextXid),
--											 (unsigned long long) XidFromFullTransactionId(ControlFile->checkPointCopy.nextXid)));
-+	values[6] = CStringGetTextDatum(psprintf("%llu",
-+											 (unsigned long long) U64FromFullTransactionId(ControlFile->checkPointCopy.nextXid)));
+@@ -119,9 +119,8 @@
+ 	values[6] = BoolGetDatum(ControlFile->checkPointCopy.logicalDecodingEnabled);
  	nulls[6] = false;
  
- 	values[7] = ObjectIdGetDatum(ControlFile->checkPointCopy.nextOid);
+-	values[7] = CStringGetTextDatum(psprintf("%u:%llu",
+-											 EpochFromFullTransactionId(ControlFile->checkPointCopy.nextXid),
+-											 (unsigned long long) XidFromFullTransactionId(ControlFile->checkPointCopy.nextXid)));
++	values[7] = CStringGetTextDatum(psprintf("%llu",
++											 (unsigned long long) U64FromFullTransactionId(ControlFile->checkPointCopy.nextXid)));
+ 	nulls[7] = false;
+ 
+ 	values[8] = ObjectIdGetDatum(ControlFile->checkPointCopy.nextOid);
 diff --git a/src/bin/pg_amcheck/t/004_verify_heapam.pl b/src/bin/pg_amcheck/t/004_verify_heapam.pl
 index 72693660fb..5cdab044b9 100644
 --- a/src/bin/pg_amcheck/t/004_verify_heapam.pl
@@ -354,13 +352,12 @@ index 72693660fb..5cdab044b9 100644
  	elsif ($offnum == 17)
  	{
 diff --git a/src/bin/pg_controldata/pg_controldata.c b/src/bin/pg_controldata/pg_controldata.c
-index d308643463..ccec945fb9 100644
 --- a/src/bin/pg_controldata/pg_controldata.c
 +++ b/src/bin/pg_controldata/pg_controldata.c
-@@ -264,9 +264,8 @@ main(int argc, char *argv[])
- 		   ControlFile->checkPointCopy.PrevTimeLineID);
- 	printf(_("Latest checkpoint's full_page_writes: %s\n"),
+@@ -266,9 +266,8 @@
  		   ControlFile->checkPointCopy.fullPageWrites ? _("on") : _("off"));
+ 	printf(_("Latest checkpoint's logical decoding: %s\n"),
+ 		   ControlFile->checkPointCopy.logicalDecodingEnabled ? _("on") : _("off"));
 -	printf(_("Latest checkpoint's NextXID:          %u:%llu\n"),
 -		   EpochFromFullTransactionId(ControlFile->checkPointCopy.nextXid),
 -		   (unsigned long long) XidFromFullTransactionId(ControlFile->checkPointCopy.nextXid));
@@ -434,17 +431,16 @@ index 90cef0864d..b603758599 100644
  		}
  		else if ((p = strstr(bufin, "Latest checkpoint's NextOID:")) != NULL)
 diff --git a/src/test/modules/xid_wraparound/xid_wraparound.c b/src/test/modules/xid_wraparound/xid_wraparound.c
-index 14d42d4eab..ba288b6117 100644
 --- a/src/test/modules/xid_wraparound/xid_wraparound.c
 +++ b/src/test/modules/xid_wraparound/xid_wraparound.c
-@@ -136,16 +136,14 @@ consume_xids_common(FullTransactionId untilxid, uint64 nxids)
+@@ -136,16 +136,13 @@
  		if (consumed - last_reported_at >= REPORT_INTERVAL)
  		{
  			if (nxids > 0)
 -				elog(NOTICE, "consumed %" PRIu64 " / %" PRIu64 " XIDs, latest %u:%llu",
 +				elog(NOTICE, "consumed %" PRIu64 " / %" PRIu64 " XIDs, latest %llu",
  					 consumed, nxids,
- 					 EpochFromFullTransactionId(lastxid),
+-					 EpochFromFullTransactionId(lastxid),
 -					 (unsigned long long) XidFromFullTransactionId(lastxid));
 +					 (unsigned long long) U64FromFullTransactionId(lastxid));
  			else
@@ -459,6 +455,7 @@ index 14d42d4eab..ba288b6117 100644
  			last_reported_at = consumed;
  		}
  	}
+
 -- 
 2.51.0
 
