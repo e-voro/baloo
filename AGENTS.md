@@ -8,9 +8,11 @@ historical; verify it against the actual checkout.
 ## User workflow and authorization
 
 - Follow the user's current command. Do not start the next patch without authorization.
-- When asked to continue the series, fix familiar context/formatting issues already
-  explained to the user. If a new kind of problem appears, report it and stop
-  adaptation until subsequent instructions. Do not silently broaden scope.
+- Latest instruction (2026-09-24) authorizes continuing and adapting patches,
+  including attempting new fixes; describe every fixed case. Preserve PG19
+  behavior and distinguish context repairs from functional adaptations.
+  Escalate unresolved design decisions rather than applying an unsafe workaround.
+
 - Log in REAL TIME to baloo/codex.log, not at the end of the operation. Stream
   command output with tee -a and append decisions/findings as they occur.
 - Use set -o pipefail so tee does not conceal failures. Add set -e to dependent
@@ -79,4 +81,27 @@ historical; verify it against the actual checkout.
 - MINISTEPS backup predates the final build fix; do not treat it as the final artifact.
 - This file lives in baloo/AGENTS.md. Paths above are relative to the PostgreSQL
   repository root. The report is alongside it. codex.log is an untracked live log.
-- Patch 0002 remains unstarted. Await the user's command.
+- Patch 0002 is aggregated at 44f020d606d; its full check-world passed.
+- Patches 0003 and 0004 are aggregated via git am at 7e42cdce0f1 and
+  8ca324058af. Separate preceding BALOO commits are cac3384a446 and c01491a5684.
+  Baloo patch/probe revision is 5ba14d3. world-bin, focused GUC probe and full
+  check-world passed; recovery 027 ran with WAL consistency checking.
+  Aggregated source/tree equals pre-aggregation ead7bcc4da2 exactly.
+  Regenerated mini scripts include final fixes: do not replay them here.
+- Backup MINISTEPS_0003-Use-64-bit-SLRU-pages-in-callers points to 1502ac9ee0b;
+  MINISTEPS_0004-Use-64-bit-GUCs points to ead7bcc4da2. Both names have prefix
+  pg19beta3xid64_CODEX_. Preserve these historical branches.
+- PG19 SLRU options use SimpleLruRequest/SlruOpts.long_segment_names;
+  multixact members already use long names. New-cluster offsets writers must
+  also use long names, while pre-v19 readers and synthetic old fixtures stay short.
+- The original patch 0004 depended on 0005 for backing storage. The adapted
+  0004 provides infrastructure only: freeze-age GUC/reloption migration is now
+  in working 0005, alongside its backing-storage widening. Preserve this boundary.
+- Working v1900-0005 is only partially adapted and NOT applied. It includes the
+  migration relocation and excludes help_config support moved into 0004.
+- PG19 relopt_value has an anonymous union; use int64_val, not values.int64_val.
+  Use uint32 rather than removed bits32, and embedded config_generic._int64
+  fields rather than casts to a standalone config_int64.
+- Retain 0004 parser, rollback and INT64_MIN serialization fixes. The focused
+  reproducible probe is baloo/dev/tests/xid64_guc/run.sh PREFIX. Its original
+  rollback failure was fixed; check the report for coverage and limitations.
