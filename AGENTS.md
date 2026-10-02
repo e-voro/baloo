@@ -5,6 +5,40 @@ Read the tail of baloo/codex.log, inspect git status in both the main repository
 and baloo, and inspect branch history before changing anything. The report is
 historical; verify it against the actual checkout.
 
+## IMPORTANT: PG19 prune/VM WAL and xid64 checkpoint (2026-10-02)
+
+**Decision:** Melanie Plageman's PG19 work is functionally connected to xid64.
+On-access pruning can set VM all-visible bits (commit `b46e1e54d07`);
+VACUUM logs VM changes in `XLOG_HEAP2_PRUNE_VACUUM_SCAN` (`1252a4ee286`,
+`a759ced2f1e`), and `XLOG_HEAP2_VISIBLE` replay was removed (`a881cc9c7e8`).
+The VM stores visibility bits, **not tuple xmin/xmax**. Heap tuples still store
+short XIDs relative to the heap page's xid base; do not add xmin/xmax to VM
+pages or a separate tuple-XID payload to prune WAL.
+
+- **Read from heap page:** Reconstruct full xmin/xmax before HOT-chain checks,
+  pruning hints, freeze decisions, and the `newest_live_xid` test that may set
+  all-visible. Use full tuple XID accessors. The optimistic, unlocked
+  `heap_page_prune_opt()` read needs `HeapPageGetPruneXidNoAssert(page,
+  IsToastRelation(relation))`; locked reads/writes use `HeapPageGetPruneXid()`
+  and `HeapPageSetPruneXid()` so `pd_prune_xid` stays page-relative.
+- **Write to WAL:** PG19's prune record already carries a snapshot conflict
+  horizon as `sizeof(TransactionId)`, selected from newest live xmin, freeze
+  conflict XID, and latest removed XID. Keep that field full-width. The WAL
+  record also needs toast-layout and fragmentation flags so redo reproduces
+  the heap page operation; VM bits themselves need no xid64 format change.
+- **Implemented in mini0034:** `pruneheap.c` reconstructs tuple XIDs for HOT
+  chains, visibility bookkeeping, and removed-tuple conflict horizons;
+  `vacuumlazy.c` uses full xmin for its VM visibility check. `heapam.h` and
+  `heapam_xlog.h` align signatures and WAL flags with redo. Source commit
+  `64b76f28c6d`; adapted mini and parent prune section in Baloo `9015fe1`;
+  parent gitlink commit `5552a07075f`.
+- **Validation/remaining work:** mini0034 reverse-apply check and source
+  `git show --check` passed. No build or recovery test yet: this partial 0005
+  series lacks later xid64 helper definitions and a configured build tree.
+  Continue adapting later minis, including remaining PG18-context sections of
+  the aggregate patch; then build and test with WAL consistency checking.
+  Do not treat the current aggregate patch as fully rebased.
+
 ## User workflow and authorization
 
 - Follow the user's current command. Do not start the next patch without authorization.
