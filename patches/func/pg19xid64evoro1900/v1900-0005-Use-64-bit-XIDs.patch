@@ -169,7 +169,7 @@ Discussion: https://postgr.es/m/CAJ7c6TPDOYBYrnCAeyndkBktO0WG2xSdYduTF0nxq%2Bvfk
  src/include/access/rmgrlist.h                      |    1 
  src/include/access/tableam.h                       |    2 
  src/include/access/transam.h                       |  128 +--
- src/include/access/tupmacs.h                       |    6 
+ src/include/access/tupmacs.h                       |    4 
  src/include/access/xact.h                          |   13 
  src/include/access/xloginsert.h                    |    1 
  src/include/access/xlogrecord.h                    |    4 
@@ -236,7 +236,7 @@ Discussion: https://postgr.es/m/CAJ7c6TPDOYBYrnCAeyndkBktO0WG2xSdYduTF0nxq%2Bvfk
  src/test/xid-64/t/006_zeropage.pl                  |   33 +
  src/test/xid-64/t/007_first_multi.pl               |   83 ++
  src/tools/pgindent/typedefs.list                   |    4 
- 214 files changed, 6968 insertions(+), 2561 deletions(-)
+ 214 files changed, 6966 insertions(+), 2561 deletions(-)
 
 diff --git a/contrib/amcheck/verify_heapam.c b/contrib/amcheck/verify_heapam.c
 index e5ea68b801..14ce47cf80 100644
@@ -15532,13 +15532,11 @@ index 84b3e7fd89..39ce513369 100644
  )
  
  /*
-@@ -314,6 +314,9 @@ typalign_to_alignby(char typalign)
+@@ -314,6 +314,7 @@ typalign_to_alignby(char typalign)
  		case TYPALIGN_DOUBLE:
++		case TYPALIGN_XID:
  			alignby = ALIGNOF_DOUBLE;
  			break;
-+		case TYPALIGN_XID:
-+			alignby = ALIGNOF_DOUBLE;
-+			break;
  		default:
  #ifndef FRONTEND
  			elog(ERROR, "invalid typalign value: %c", typalign);
