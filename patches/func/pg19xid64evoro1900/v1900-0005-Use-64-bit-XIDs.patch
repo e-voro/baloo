@@ -4036,19 +4036,19 @@ index d40493eb7ff..e1052a4d326 100644
  			HeapCheckForSerializableConflictOut(valid, scan->rs_rd, &loctup,
  												buffer, snapshot);
 diff --git a/src/backend/access/heap/heapam_visibility.c b/src/backend/access/heap/heapam_visibility.c
-index 05f6946fe6..a9b6fa0b1d 100644
+index 361b76e5065..e82ebda9a0b 100644
 --- a/src/backend/access/heap/heapam_visibility.c
 +++ b/src/backend/access/heap/heapam_visibility.c
-@@ -218,7 +218,7 @@ HeapTupleSatisfiesSelf(HeapTuple htup, Snapshot snapshot, Buffer buffer)
- 				}
- 			}
- 		}
+@@ -308,7 +308,7 @@ HeapTupleSatisfiesSelf(HeapTuple htup, Snapshot snapshot, Buffer buffer)
+ 
+ 		if (!HeapTupleCleanMoved(tuple, buffer))
+ 			return false;
 -		else if (TransactionIdIsCurrentTransactionId(HeapTupleHeaderGetRawXmin(tuple)))
 +		else if (TransactionIdIsCurrentTransactionId(HeapTupleGetRawXmin(htup)))
  		{
  			if (tuple->t_infomask & HEAP_XMAX_INVALID)	/* xid invalid */
  				return true;
-@@ -230,7 +230,7 @@ HeapTupleSatisfiesSelf(HeapTuple htup, Snapshot snapshot, Buffer buffer)
+@@ -320,7 +320,7 @@ HeapTupleSatisfiesSelf(HeapTuple htup, Snapshot snapshot, Buffer buffer)
  			{
  				TransactionId xmax;
  
@@ -4057,7 +4057,7 @@ index 05f6946fe6..a9b6fa0b1d 100644
  
  				/* not LOCKED_ONLY, so it has to have an xmax */
  				Assert(TransactionIdIsValid(xmax));
-@@ -242,7 +242,7 @@ HeapTupleSatisfiesSelf(HeapTuple htup, Snapshot snapshot, Buffer buffer)
+@@ -332,7 +332,7 @@ HeapTupleSatisfiesSelf(HeapTuple htup, Snapshot snapshot, Buffer buffer)
  					return false;
  			}
  
@@ -4066,7 +4066,7 @@ index 05f6946fe6..a9b6fa0b1d 100644
  			{
  				/* deleting subtransaction must have aborted */
  				SetHintBits(tuple, buffer, HEAP_XMAX_INVALID,
-@@ -252,11 +252,11 @@ HeapTupleSatisfiesSelf(HeapTuple htup, Snapshot snapshot, Buffer buffer)
+@@ -342,11 +342,11 @@ HeapTupleSatisfiesSelf(HeapTuple htup, Snapshot snapshot, Buffer buffer)
  
  			return false;
  		}
@@ -4081,7 +4081,7 @@ index 05f6946fe6..a9b6fa0b1d 100644
  		else
  		{
  			/* it must have aborted or crashed */
-@@ -285,7 +285,7 @@ HeapTupleSatisfiesSelf(HeapTuple htup, Snapshot snapshot, Buffer buffer)
+@@ -375,7 +375,7 @@ HeapTupleSatisfiesSelf(HeapTuple htup, Snapshot snapshot, Buffer buffer)
  		if (HEAP_XMAX_IS_LOCKED_ONLY(tuple->t_infomask))
  			return true;
  
@@ -4090,7 +4090,7 @@ index 05f6946fe6..a9b6fa0b1d 100644
  
  		/* not LOCKED_ONLY, so it has to have an xmax */
  		Assert(TransactionIdIsValid(xmax));
-@@ -300,17 +300,17 @@ HeapTupleSatisfiesSelf(HeapTuple htup, Snapshot snapshot, Buffer buffer)
+@@ -390,17 +390,17 @@ HeapTupleSatisfiesSelf(HeapTuple htup, Snapshot snapshot, Buffer buffer)
  		return true;
  	}
  
@@ -4111,7 +4111,7 @@ index 05f6946fe6..a9b6fa0b1d 100644
  	{
  		/* it must have aborted or crashed */
  		SetHintBits(tuple, buffer, HEAP_XMAX_INVALID,
-@@ -328,7 +328,7 @@ HeapTupleSatisfiesSelf(HeapTuple htup, Snapshot snapshot, Buffer buffer)
+@@ -418,7 +418,7 @@ HeapTupleSatisfiesSelf(HeapTuple htup, Snapshot snapshot, Buffer buffer)
  	}
  
  	SetHintBits(tuple, buffer, HEAP_XMAX_COMMITTED,
@@ -4120,7 +4120,7 @@ index 05f6946fe6..a9b6fa0b1d 100644
  	return false;
  }
  
-@@ -417,7 +417,7 @@ HeapTupleSatisfiesToast(HeapTuple htup, Snapshot snapshot,
+@@ -470,7 +470,7 @@ HeapTupleSatisfiesToast(HeapTuple htup, Snapshot snapshot,
  		 * is canceled by super-deleting the tuple.  This also applies to
  		 * TOAST tuples created during speculative insertion.
  		 */
@@ -4129,7 +4129,7 @@ index 05f6946fe6..a9b6fa0b1d 100644
  			return false;
  	}
  
-@@ -459,9 +459,13 @@ HeapTupleSatisfiesUpdate(HeapTuple htup, CommandId curcid,
+@@ -512,9 +512,13 @@ HeapTupleSatisfiesUpdate(HeapTuple htup, CommandId curcid,
  						 Buffer buffer)
  {
  	HeapTupleHeader tuple = htup->t_data;
@@ -4143,10 +4143,10 @@ index 05f6946fe6..a9b6fa0b1d 100644
  
  	if (!HeapTupleHeaderXminCommitted(tuple))
  	{
-@@ -507,9 +511,9 @@ HeapTupleSatisfiesUpdate(HeapTuple htup, CommandId curcid,
- 				}
- 			}
- 		}
+@@ -523,9 +527,9 @@ HeapTupleSatisfiesUpdate(HeapTuple htup, CommandId curcid,
+ 
+ 		else if (!HeapTupleCleanMoved(tuple, buffer))
+ 			return TM_Invisible;
 -		else if (TransactionIdIsCurrentTransactionId(HeapTupleHeaderGetRawXmin(tuple)))
 +		else if (TransactionIdIsCurrentTransactionId(HeapTupleGetRawXmin(htup)))
  		{
@@ -4155,7 +4155,7 @@ index 05f6946fe6..a9b6fa0b1d 100644
  				return TM_Invisible;	/* inserted after scan started */
  
  			if (tuple->t_infomask & HEAP_XMAX_INVALID)	/* xid invalid */
-@@ -519,7 +523,7 @@ HeapTupleSatisfiesUpdate(HeapTuple htup, CommandId curcid,
+@@ -535,7 +539,7 @@ HeapTupleSatisfiesUpdate(HeapTuple htup, CommandId curcid,
  			{
  				TransactionId xmax;
  
@@ -4164,7 +4164,7 @@ index 05f6946fe6..a9b6fa0b1d 100644
  
  				/*
  				 * Careful here: even though this tuple was created by our own
-@@ -550,7 +554,7 @@ HeapTupleSatisfiesUpdate(HeapTuple htup, CommandId curcid,
+@@ -566,7 +570,7 @@ HeapTupleSatisfiesUpdate(HeapTuple htup, CommandId curcid,
  			{
  				TransactionId xmax;
  
@@ -4173,7 +4173,7 @@ index 05f6946fe6..a9b6fa0b1d 100644
  
  				/* not LOCKED_ONLY, so it has to have an xmax */
  				Assert(TransactionIdIsValid(xmax));
-@@ -558,21 +562,21 @@ HeapTupleSatisfiesUpdate(HeapTuple htup, CommandId curcid,
+@@ -574,21 +578,21 @@ HeapTupleSatisfiesUpdate(HeapTuple htup, CommandId curcid,
  				/* deleting subtransaction must have aborted */
  				if (!TransactionIdIsCurrentTransactionId(xmax))
  				{
@@ -4198,7 +4198,7 @@ index 05f6946fe6..a9b6fa0b1d 100644
  			{
  				/* deleting subtransaction must have aborted */
  				SetHintBits(tuple, buffer, HEAP_XMAX_INVALID,
-@@ -580,16 +584,16 @@ HeapTupleSatisfiesUpdate(HeapTuple htup, CommandId curcid,
+@@ -596,16 +600,16 @@ HeapTupleSatisfiesUpdate(HeapTuple htup, CommandId curcid,
  				return TM_Ok;
  			}
  
@@ -4219,7 +4219,7 @@ index 05f6946fe6..a9b6fa0b1d 100644
  		else
  		{
  			/* it must have aborted or crashed */
-@@ -623,17 +627,17 @@ HeapTupleSatisfiesUpdate(HeapTuple htup, CommandId curcid,
+@@ -639,17 +643,17 @@ HeapTupleSatisfiesUpdate(HeapTuple htup, CommandId curcid,
  
  		if (HEAP_XMAX_IS_LOCKED_ONLY(tuple->t_infomask))
  		{
@@ -4240,7 +4240,7 @@ index 05f6946fe6..a9b6fa0b1d 100644
  				return TM_BeingModified;
  		}
  
-@@ -642,13 +646,13 @@ HeapTupleSatisfiesUpdate(HeapTuple htup, CommandId curcid,
+@@ -658,13 +662,13 @@ HeapTupleSatisfiesUpdate(HeapTuple htup, CommandId curcid,
  
  		if (TransactionIdIsCurrentTransactionId(xmax))
  		{
@@ -4256,7 +4256,7 @@ index 05f6946fe6..a9b6fa0b1d 100644
  			return TM_BeingModified;
  
  		if (TransactionIdDidCommit(xmax))
-@@ -664,7 +668,7 @@ HeapTupleSatisfiesUpdate(HeapTuple htup, CommandId curcid,
+@@ -680,7 +684,7 @@ HeapTupleSatisfiesUpdate(HeapTuple htup, CommandId curcid,
  		 * what about the other members?
  		 */
  
@@ -4265,7 +4265,7 @@ index 05f6946fe6..a9b6fa0b1d 100644
  		{
  			/*
  			 * There's no member, even just a locker, alive anymore, so we can
-@@ -681,20 +685,20 @@ HeapTupleSatisfiesUpdate(HeapTuple htup, CommandId curcid,
+@@ -697,20 +701,20 @@ HeapTupleSatisfiesUpdate(HeapTuple htup, CommandId curcid,
  		}
  	}
  
@@ -4290,7 +4290,7 @@ index 05f6946fe6..a9b6fa0b1d 100644
  	{
  		/* it must have aborted or crashed */
  		SetHintBits(tuple, buffer, HEAP_XMAX_INVALID,
-@@ -712,7 +716,7 @@ HeapTupleSatisfiesUpdate(HeapTuple htup, CommandId curcid,
+@@ -728,7 +732,7 @@ HeapTupleSatisfiesUpdate(HeapTuple htup, CommandId curcid,
  	}
  
  	SetHintBits(tuple, buffer, HEAP_XMAX_COMMITTED,
@@ -4299,16 +4299,16 @@ index 05f6946fe6..a9b6fa0b1d 100644
  	if (!ItemPointerEquals(&htup->t_self, &tuple->t_ctid))
  		return TM_Updated;		/* updated by other */
  	else
-@@ -795,7 +799,7 @@ HeapTupleSatisfiesDirty(HeapTuple htup, Snapshot snapshot,
- 				}
- 			}
- 		}
+@@ -774,7 +778,7 @@ HeapTupleSatisfiesDirty(HeapTuple htup, Snapshot snapshot,
+ 
+ 		if (!HeapTupleCleanMoved(tuple, buffer))
+ 			return false;
 -		else if (TransactionIdIsCurrentTransactionId(HeapTupleHeaderGetRawXmin(tuple)))
 +		else if (TransactionIdIsCurrentTransactionId(HeapTupleGetRawXmin(htup)))
  		{
  			if (tuple->t_infomask & HEAP_XMAX_INVALID)	/* xid invalid */
  				return true;
-@@ -807,7 +811,7 @@ HeapTupleSatisfiesDirty(HeapTuple htup, Snapshot snapshot,
+@@ -786,7 +790,7 @@ HeapTupleSatisfiesDirty(HeapTuple htup, Snapshot snapshot,
  			{
  				TransactionId xmax;
  
@@ -4317,7 +4317,7 @@ index 05f6946fe6..a9b6fa0b1d 100644
  
  				/* not LOCKED_ONLY, so it has to have an xmax */
  				Assert(TransactionIdIsValid(xmax));
-@@ -819,7 +823,7 @@ HeapTupleSatisfiesDirty(HeapTuple htup, Snapshot snapshot,
+@@ -798,7 +802,7 @@ HeapTupleSatisfiesDirty(HeapTuple htup, Snapshot snapshot,
  					return false;
  			}
  
@@ -4326,7 +4326,7 @@ index 05f6946fe6..a9b6fa0b1d 100644
  			{
  				/* deleting subtransaction must have aborted */
  				SetHintBits(tuple, buffer, HEAP_XMAX_INVALID,
-@@ -829,7 +833,7 @@ HeapTupleSatisfiesDirty(HeapTuple htup, Snapshot snapshot,
+@@ -808,7 +812,7 @@ HeapTupleSatisfiesDirty(HeapTuple htup, Snapshot snapshot,
  
  			return false;
  		}
@@ -4335,7 +4335,7 @@ index 05f6946fe6..a9b6fa0b1d 100644
  		{
  			/*
  			 * Return the speculative token to caller.  Caller can worry about
-@@ -845,13 +849,13 @@ HeapTupleSatisfiesDirty(HeapTuple htup, Snapshot snapshot,
+@@ -824,13 +828,13 @@ HeapTupleSatisfiesDirty(HeapTuple htup, Snapshot snapshot,
  				Assert(snapshot->speculativeToken != 0);
  			}
  
@@ -4352,7 +4352,7 @@ index 05f6946fe6..a9b6fa0b1d 100644
  		else
  		{
  			/* it must have aborted or crashed */
-@@ -880,7 +884,7 @@ HeapTupleSatisfiesDirty(HeapTuple htup, Snapshot snapshot,
+@@ -859,7 +863,7 @@ HeapTupleSatisfiesDirty(HeapTuple htup, Snapshot snapshot,
  		if (HEAP_XMAX_IS_LOCKED_ONLY(tuple->t_infomask))
  			return true;
  
@@ -4361,7 +4361,7 @@ index 05f6946fe6..a9b6fa0b1d 100644
  
  		/* not LOCKED_ONLY, so it has to have an xmax */
  		Assert(TransactionIdIsValid(xmax));
-@@ -898,21 +902,21 @@ HeapTupleSatisfiesDirty(HeapTuple htup, Snapshot snapshot,
+@@ -877,21 +881,21 @@ HeapTupleSatisfiesDirty(HeapTuple htup, Snapshot snapshot,
  		return true;
  	}
  
@@ -4387,7 +4387,7 @@ index 05f6946fe6..a9b6fa0b1d 100644
  	{
  		/* it must have aborted or crashed */
  		SetHintBits(tuple, buffer, HEAP_XMAX_INVALID,
-@@ -930,7 +934,7 @@ HeapTupleSatisfiesDirty(HeapTuple htup, Snapshot snapshot,
+@@ -909,7 +913,7 @@ HeapTupleSatisfiesDirty(HeapTuple htup, Snapshot snapshot,
  	}
  
  	SetHintBits(tuple, buffer, HEAP_XMAX_COMMITTED,
@@ -4396,10 +4396,10 @@ index 05f6946fe6..a9b6fa0b1d 100644
  	return false;				/* updated by other */
  }
  
-@@ -1018,9 +1022,9 @@ HeapTupleSatisfiesMVCC(HeapTuple htup, Snapshot snapshot,
- 				}
- 			}
- 		}
+@@ -960,9 +964,9 @@ HeapTupleSatisfiesMVCC(HeapTuple htup, Snapshot snapshot,
+ 
+ 		if (!HeapTupleCleanMoved(tuple, buffer))
+ 			return false;
 -		else if (TransactionIdIsCurrentTransactionId(HeapTupleHeaderGetRawXmin(tuple)))
 +		else if (TransactionIdIsCurrentTransactionId(HeapTupleGetRawXmin(htup)))
  		{
@@ -4408,7 +4408,7 @@ index 05f6946fe6..a9b6fa0b1d 100644
  				return false;	/* inserted after scan started */
  
  			if (tuple->t_infomask & HEAP_XMAX_INVALID)	/* xid invalid */
-@@ -1033,7 +1037,7 @@ HeapTupleSatisfiesMVCC(HeapTuple htup, Snapshot snapshot,
+@@ -975,7 +979,7 @@ HeapTupleSatisfiesMVCC(HeapTuple htup, Snapshot snapshot,
  			{
  				TransactionId xmax;
  
@@ -4417,7 +4417,7 @@ index 05f6946fe6..a9b6fa0b1d 100644
  
  				/* not LOCKED_ONLY, so it has to have an xmax */
  				Assert(TransactionIdIsValid(xmax));
-@@ -1041,13 +1045,13 @@ HeapTupleSatisfiesMVCC(HeapTuple htup, Snapshot snapshot,
+@@ -983,13 +987,13 @@ HeapTupleSatisfiesMVCC(HeapTuple htup, Snapshot snapshot,
  				/* updating subtransaction must have aborted */
  				if (!TransactionIdIsCurrentTransactionId(xmax))
  					return true;
@@ -4432,8 +4432,8 @@ index 05f6946fe6..a9b6fa0b1d 100644
 +			if (!TransactionIdIsCurrentTransactionId(HeapTupleGetRawXmax(htup)))
  			{
  				/* deleting subtransaction must have aborted */
- 				SetHintBits(tuple, buffer, HEAP_XMAX_INVALID,
-@@ -1055,16 +1059,16 @@ HeapTupleSatisfiesMVCC(HeapTuple htup, Snapshot snapshot,
+ 				SetHintBitsExt(tuple, buffer, HEAP_XMAX_INVALID,
+@@ -997,16 +1001,16 @@ HeapTupleSatisfiesMVCC(HeapTuple htup, Snapshot snapshot,
  				return true;
  			}
  
@@ -4448,13 +4448,13 @@ index 05f6946fe6..a9b6fa0b1d 100644
  			return false;
 -		else if (TransactionIdDidCommit(HeapTupleHeaderGetRawXmin(tuple)))
 +		else if (TransactionIdDidCommit(HeapTupleGetRawXmin(htup)))
- 			SetHintBits(tuple, buffer, HEAP_XMIN_COMMITTED,
--						HeapTupleHeaderGetRawXmin(tuple));
-+						HeapTupleGetRawXmin(htup));
+ 			SetHintBitsExt(tuple, buffer, HEAP_XMIN_COMMITTED,
+-						   HeapTupleHeaderGetRawXmin(tuple), state);
++						   HeapTupleGetRawXmin(htup), state);
  		else
  		{
  			/* it must have aborted or crashed */
-@@ -1077,7 +1081,7 @@ HeapTupleSatisfiesMVCC(HeapTuple htup, Snapshot snapshot,
+@@ -1019,7 +1023,7 @@ HeapTupleSatisfiesMVCC(HeapTuple htup, Snapshot snapshot,
  	{
  		/* xmin is committed, but maybe not according to our snapshot */
  		if (!HeapTupleHeaderXminFrozen(tuple) &&
@@ -4463,7 +4463,7 @@ index 05f6946fe6..a9b6fa0b1d 100644
  			return false;		/* treat as still in progress */
  	}
  
-@@ -1096,14 +1100,14 @@ HeapTupleSatisfiesMVCC(HeapTuple htup, Snapshot snapshot,
+@@ -1038,14 +1042,14 @@ HeapTupleSatisfiesMVCC(HeapTuple htup, Snapshot snapshot,
  		/* already checked above */
  		Assert(!HEAP_XMAX_IS_LOCKED_ONLY(tuple->t_infomask));
  
@@ -4480,7 +4480,7 @@ index 05f6946fe6..a9b6fa0b1d 100644
  				return true;	/* deleted after scan started */
  			else
  				return false;	/* deleted before scan started */
-@@ -1118,18 +1122,18 @@ HeapTupleSatisfiesMVCC(HeapTuple htup, Snapshot snapshot,
+@@ -1060,18 +1064,18 @@ HeapTupleSatisfiesMVCC(HeapTuple htup, Snapshot snapshot,
  
  	if (!(tuple->t_infomask & HEAP_XMAX_COMMITTED))
  	{
@@ -4502,13 +4502,13 @@ index 05f6946fe6..a9b6fa0b1d 100644
 +		if (!TransactionIdDidCommit(HeapTupleGetRawXmax(htup)))
  		{
  			/* it must have aborted or crashed */
- 			SetHintBits(tuple, buffer, HEAP_XMAX_INVALID,
-@@ -1139,12 +1143,12 @@ HeapTupleSatisfiesMVCC(HeapTuple htup, Snapshot snapshot,
+ 			SetHintBitsExt(tuple, buffer, HEAP_XMAX_INVALID,
+@@ -1081,12 +1085,12 @@ HeapTupleSatisfiesMVCC(HeapTuple htup, Snapshot snapshot,
  
  		/* xmax transaction committed */
- 		SetHintBits(tuple, buffer, HEAP_XMAX_COMMITTED,
--					HeapTupleHeaderGetRawXmax(tuple));
-+					HeapTupleGetRawXmax(htup));
+ 		SetHintBitsExt(tuple, buffer, HEAP_XMAX_COMMITTED,
+-					   HeapTupleHeaderGetRawXmax(tuple), state);
++					   HeapTupleGetRawXmax(htup), state);
  	}
  	else
  	{
@@ -4518,7 +4518,7 @@ index 05f6946fe6..a9b6fa0b1d 100644
  			return true;		/* treat as still in progress */
  	}
  
-@@ -1205,11 +1209,19 @@ HTSV_Result
+@@ -1147,11 +1151,19 @@ HTSV_Result
  HeapTupleSatisfiesVacuumHorizon(HeapTuple htup, Buffer buffer, TransactionId *dead_after)
  {
  	HeapTupleHeader tuple = htup->t_data;
@@ -4538,10 +4538,10 @@ index 05f6946fe6..a9b6fa0b1d 100644
  	*dead_after = InvalidTransactionId;
  
  	/*
-@@ -1259,21 +1271,21 @@ HeapTupleSatisfiesVacuumHorizon(HeapTuple htup, Buffer buffer, TransactionId *de
- 				return HEAPTUPLE_DEAD;
- 			}
- 		}
+@@ -1166,21 +1178,21 @@ HeapTupleSatisfiesVacuumHorizon(HeapTuple htup, Buffer buffer, TransactionId *de
+ 			return HEAPTUPLE_DEAD;
+ 		else if (!HeapTupleCleanMoved(tuple, buffer))
+ 			return HEAPTUPLE_DEAD;
 -		else if (TransactionIdIsCurrentTransactionId(HeapTupleHeaderGetRawXmin(tuple)))
 +		else if (TransactionIdIsCurrentTransactionId(HeapTupleGetRawXmin(htup)))
  		{
@@ -4564,7 +4564,7 @@ index 05f6946fe6..a9b6fa0b1d 100644
  		{
  			/*
  			 * It'd be possible to discern between INSERT/DELETE in progress
-@@ -1285,9 +1297,9 @@ HeapTupleSatisfiesVacuumHorizon(HeapTuple htup, Buffer buffer, TransactionId *de
+@@ -1192,9 +1204,9 @@ HeapTupleSatisfiesVacuumHorizon(HeapTuple htup, Buffer buffer, TransactionId *de
  			 */
  			return HEAPTUPLE_INSERT_IN_PROGRESS;
  		}
@@ -4576,7 +4576,7 @@ index 05f6946fe6..a9b6fa0b1d 100644
  		else
  		{
  			/*
-@@ -1329,14 +1341,14 @@ HeapTupleSatisfiesVacuumHorizon(HeapTuple htup, Buffer buffer, TransactionId *de
+@@ -1236,14 +1248,14 @@ HeapTupleSatisfiesVacuumHorizon(HeapTuple htup, Buffer buffer, TransactionId *de
  				 * possibly be running; otherwise have to check.
  				 */
  				if (!HEAP_LOCKED_UPGRADED(tuple->t_infomask) &&
@@ -4593,7 +4593,7 @@ index 05f6946fe6..a9b6fa0b1d 100644
  					return HEAPTUPLE_LIVE;
  				SetHintBits(tuple, buffer, HEAP_XMAX_INVALID,
  							InvalidTransactionId);
-@@ -1354,7 +1366,7 @@ HeapTupleSatisfiesVacuumHorizon(HeapTuple htup, Buffer buffer, TransactionId *de
+@@ -1261,7 +1273,7 @@ HeapTupleSatisfiesVacuumHorizon(HeapTuple htup, Buffer buffer, TransactionId *de
  
  	if (tuple->t_infomask & HEAP_XMAX_IS_MULTI)
  	{
@@ -4602,7 +4602,7 @@ index 05f6946fe6..a9b6fa0b1d 100644
  
  		/* already checked above */
  		Assert(!HEAP_XMAX_IS_LOCKED_ONLY(tuple->t_infomask));
-@@ -1377,7 +1389,7 @@ HeapTupleSatisfiesVacuumHorizon(HeapTuple htup, Buffer buffer, TransactionId *de
+@@ -1284,7 +1296,7 @@ HeapTupleSatisfiesVacuumHorizon(HeapTuple htup, Buffer buffer, TransactionId *de
  			*dead_after = xmax;
  			return HEAPTUPLE_RECENTLY_DEAD;
  		}
@@ -4611,7 +4611,7 @@ index 05f6946fe6..a9b6fa0b1d 100644
  		{
  			/*
  			 * Not in Progress, Not Committed, so either Aborted or crashed.
-@@ -1391,11 +1403,11 @@ HeapTupleSatisfiesVacuumHorizon(HeapTuple htup, Buffer buffer, TransactionId *de
+@@ -1298,11 +1310,11 @@ HeapTupleSatisfiesVacuumHorizon(HeapTuple htup, Buffer buffer, TransactionId *de
  
  	if (!(tuple->t_infomask & HEAP_XMAX_COMMITTED))
  	{
@@ -4626,7 +4626,7 @@ index 05f6946fe6..a9b6fa0b1d 100644
  		else
  		{
  			/*
-@@ -1417,7 +1429,7 @@ HeapTupleSatisfiesVacuumHorizon(HeapTuple htup, Buffer buffer, TransactionId *de
+@@ -1324,7 +1336,7 @@ HeapTupleSatisfiesVacuumHorizon(HeapTuple htup, Buffer buffer, TransactionId *de
  	 * Deleter committed, allow caller to check if it was recent enough that
  	 * some open transactions could still see the tuple.
  	 */
@@ -4635,16 +4635,16 @@ index 05f6946fe6..a9b6fa0b1d 100644
  	return HEAPTUPLE_RECENTLY_DEAD;
  }
  
-@@ -1513,7 +1525,7 @@ HeapTupleIsSurelyDead(HeapTuple htup, GlobalVisState *vistest)
+@@ -1420,7 +1432,7 @@ HeapTupleIsSurelyDead(HeapTuple htup, GlobalVisState *vistest)
  
  	/* Deleter committed, so tuple is dead if the XID is old enough. */
  	return GlobalVisTestIsRemovableXid(vistest,
--									   HeapTupleHeaderGetRawXmax(tuple));
-+									   HeapTupleGetRawXmax(htup));
+-									   HeapTupleHeaderGetRawXmax(tuple),
++									   HeapTupleGetRawXmax(htup),
+ 									   true);
  }
  
- /*
-@@ -1526,8 +1538,9 @@ HeapTupleIsSurelyDead(HeapTuple htup, GlobalVisState *vistest)
+@@ -1434,8 +1446,9 @@ HeapTupleIsSurelyDead(HeapTuple htup, GlobalVisState *vistest)
   * at the top of this file.
   */
  bool
@@ -4655,7 +4655,7 @@ index 05f6946fe6..a9b6fa0b1d 100644
  	TransactionId xmax;
  
  	/* if there's no valid Xmax, then there's obviously no update either */
-@@ -1538,7 +1551,7 @@ HeapTupleHeaderIsOnlyLocked(HeapTupleHeader tuple)
+@@ -1446,7 +1459,7 @@ HeapTupleHeaderIsOnlyLocked(HeapTupleHeader tuple)
  		return true;
  
  	/* invalid xmax means no update */
@@ -4664,7 +4664,7 @@ index 05f6946fe6..a9b6fa0b1d 100644
  		return true;
  
  	/*
-@@ -1549,7 +1562,7 @@ HeapTupleHeaderIsOnlyLocked(HeapTupleHeader tuple)
+@@ -1457,7 +1470,7 @@ HeapTupleHeaderIsOnlyLocked(HeapTupleHeader tuple)
  		return false;
  
  	/* ... but if it's a multi, then perhaps the updating Xid aborted. */
@@ -4673,7 +4673,7 @@ index 05f6946fe6..a9b6fa0b1d 100644
  
  	/* not LOCKED_ONLY, so it has to have an xmax */
  	Assert(TransactionIdIsValid(xmax));
-@@ -1597,8 +1610,8 @@ HeapTupleSatisfiesHistoricMVCC(HeapTuple htup, Snapshot snapshot,
+@@ -1505,8 +1518,8 @@ HeapTupleSatisfiesHistoricMVCC(HeapTuple htup, Snapshot snapshot,
  							   Buffer buffer)
  {
  	HeapTupleHeader tuple = htup->t_data;
@@ -4684,7 +4684,7 @@ index 05f6946fe6..a9b6fa0b1d 100644
  
  	Assert(ItemPointerIsValid(&htup->t_self));
  	Assert(htup->t_tableOid != InvalidOid);
-@@ -1698,7 +1711,7 @@ HeapTupleSatisfiesHistoricMVCC(HeapTuple htup, Snapshot snapshot,
+@@ -1606,7 +1619,7 @@ HeapTupleSatisfiesHistoricMVCC(HeapTuple htup, Snapshot snapshot,
  	 */
  	else if (tuple->t_infomask & HEAP_XMAX_IS_MULTI)
  	{
@@ -4693,7 +4693,7 @@ index 05f6946fe6..a9b6fa0b1d 100644
  	}
  
  	/* check if it's one of our txids, toplevel is also in there */
-@@ -1775,6 +1788,12 @@ HeapTupleSatisfiesHistoricMVCC(HeapTuple htup, Snapshot snapshot,
+@@ -1731,6 +1744,12 @@ HeapTupleSatisfiesMVCCBatch(Snapshot snapshot, Buffer buffer,
  bool
  HeapTupleSatisfiesVisibility(HeapTuple htup, Snapshot snapshot, Buffer buffer)
  {
