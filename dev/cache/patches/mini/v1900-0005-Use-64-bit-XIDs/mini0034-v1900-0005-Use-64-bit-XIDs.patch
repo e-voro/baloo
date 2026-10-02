@@ -1,0 +1,385 @@
+diff --git a/src/backend/access/heap/pruneheap.c b/src/backend/access/heap/pruneheap.c
+index e1be6c37084..5288f762c6b 100644
+--- a/src/backend/access/heap/pruneheap.c
++++ b/src/backend/access/heap/pruneheap.c
+@@ -291,7 +291,7 @@ heap_page_prune_opt(Relation relation, Buffer buffer, Buffer *vmbuffer,
+ 	 * (i.e. no updates/deletes left potentially dead tuples around and no
+ 	 * inserts inserted new tuples that may be visible to all).
+ 	 */
+-	prune_xid = PageGetPruneXid(page);
++	prune_xid = HeapPageGetPruneXidNoAssert(page, IsToastRelation(relation));
+ 	if (!TransactionIdIsValid(prune_xid))
+ 		return;
+ 
+@@ -699,7 +699,12 @@ prune_freeze_plan(PruneState *prstate, OffsetNumber *off_loc)
+ 
+ 			if (likely(!HeapTupleHeaderIsHotUpdated(htup)))
+ 			{
+-				HeapTupleHeaderAdvanceConflictHorizon(htup,
++				HeapTupleData tuple;
++
++				tuple.t_data = htup;
++				tuple.t_len = ItemIdGetLength(itemid);
++				HeapTupleCopyXidsFromPage(prstate->buffer, &tuple, page);
++				HeapTupleHeaderAdvanceConflictHorizon(&tuple,
+ 													  &prstate->latest_xid_removed);
+ 				heap_prune_record_unused(prstate, offnum, true);
+ 			}
+@@ -823,7 +828,8 @@ heap_page_will_freeze(bool did_tuple_hint_fpi,
+ 		 * Validate the tuples we will be freezing before entering the
+ 		 * critical section.
+ 		 */
+-		heap_pre_freeze_checks(prstate->buffer, prstate->frozen, prstate->nfrozen);
++		heap_pre_freeze_checks(prstate->relation, prstate->buffer,
++							   prstate->frozen, prstate->nfrozen);
+ 		Assert(TransactionIdPrecedes(prstate->pagefrz.FreezePageConflictXid,
+ 									 prstate->cutoffs->OldestXmin));
+ 	}
+@@ -1040,7 +1046,7 @@ prune_freeze_fast_path(PruneState *prstate, PruneFreezeResult *presult)
+ 	memset(presult, 0, sizeof(PruneFreezeResult));
+ 
+ 	/* Clear any stale prune hint */
+-	if (TransactionIdIsValid(PageGetPruneXid(page)))
++	if (TransactionIdIsValid(HeapPageGetPruneXid(page)))
+ 	{
+ 		PageClearPrunable(page);
+ 		MarkBufferDirtyHint(prstate->buffer, true);
+@@ -1193,7 +1199,7 @@ heap_page_prune_and_freeze(PruneFreezeParams *params,
+ 	 * pd_prune_xid field or the page was marked full, we will update the hint
+ 	 * bit.
+ 	 */
+-	do_hint_prune = PageGetPruneXid(prstate.page) != prstate.new_prune_xid ||
++	do_hint_prune = HeapPageGetPruneXid(prstate.page) != prstate.new_prune_xid ||
+ 		PageIsFull(prstate.page);
+ 
+ 	/*
+@@ -1258,7 +1264,7 @@ heap_page_prune_and_freeze(PruneFreezeParams *params,
+ 		 * Update the page's pd_prune_xid field to either zero, or the lowest
+ 		 * XID of any soon-prunable tuple.
+ 		 */
+-		((PageHeader) prstate.page)->pd_prune_xid = prstate.new_prune_xid;
++		HeapPageSetPruneXid(prstate.page, prstate.new_prune_xid);
+ 
+ 		/*
+ 		 * Also clear the "page is full" flag, since there's no point in
+@@ -1287,11 +1293,13 @@ heap_page_prune_and_freeze(PruneFreezeParams *params,
+ 			heap_page_prune_execute(prstate.buffer, false,
+ 									prstate.redirected, prstate.nredirected,
+ 									prstate.nowdead, prstate.ndead,
+-									prstate.nowunused, prstate.nunused);
++									prstate.nowunused, prstate.nunused,
++									true, IsToastRelation(prstate.relation));
+ 		}
+ 
+ 		if (do_freeze)
+-			heap_freeze_prepared_tuples(prstate.buffer, prstate.frozen, prstate.nfrozen);
++			heap_freeze_prepared_tuples(prstate.relation, prstate.buffer,
++										prstate.frozen, prstate.nfrozen);
+ 
+ 		/* Set the visibility map and page visibility hint */
+ 		if (do_set_vm)
+@@ -1330,7 +1338,8 @@ heap_page_prune_and_freeze(PruneFreezeParams *params,
+ 									  prstate.frozen, prstate.nfrozen,
+ 									  prstate.redirected, prstate.nredirected,
+ 									  prstate.nowdead, prstate.ndead,
+-									  prstate.nowunused, prstate.nunused);
++									  prstate.nowunused, prstate.nunused,
++									  true);
+ 		}
+ 	}
+ 
+@@ -1518,7 +1527,9 @@ heap_prune_chain(OffsetNumber maxoff, OffsetNumber rootoffnum,
+ 	 */
+ 	int			ndeadchain = 0,
+ 				nchain = 0;
++	HeapTupleData tup;
+ 
++	tup.t_tableOid = RelationGetRelid(prstate->relation);
+ 	rootlp = PageGetItemId(page, rootoffnum);
+ 
+ 	/* Start from the root tuple */
+@@ -1572,12 +1583,16 @@ heap_prune_chain(OffsetNumber maxoff, OffsetNumber rootoffnum,
+ 		Assert(ItemIdIsNormal(lp));
+ 
+ 		htup = (HeapTupleHeader) PageGetItem(page, lp);
++		tup.t_data = htup;
++		tup.t_len = ItemIdGetLength(lp);
++		HeapTupleCopyXidsFromPage(prstate->buffer, &tup, page);
++		ItemPointerSet(&tup.t_self, prstate->block, offnum);
+ 
+ 		/*
+ 		 * Check the tuple XMIN against prior XMAX, if any
+ 		 */
+ 		if (TransactionIdIsValid(priorXmax) &&
+-			!TransactionIdEquals(HeapTupleHeaderGetXmin(htup), priorXmax))
++			!TransactionIdEquals(HeapTupleGetXmin(&tup), priorXmax))
+ 			break;
+ 
+ 		/*
+@@ -1591,7 +1606,7 @@ heap_prune_chain(OffsetNumber maxoff, OffsetNumber rootoffnum,
+ 
+ 				/* Remember the last DEAD tuple seen */
+ 				ndeadchain = nchain;
+-				HeapTupleHeaderAdvanceConflictHorizon(htup,
++				HeapTupleHeaderAdvanceConflictHorizon(&tup,
+ 													  &prstate->latest_xid_removed);
+ 				/* Advance to next chain member */
+ 				break;
+@@ -1641,7 +1656,7 @@ heap_prune_chain(OffsetNumber maxoff, OffsetNumber rootoffnum,
+ 		 */
+ 		Assert(ItemPointerGetBlockNumber(&htup->t_ctid) == prstate->block);
+ 		offnum = ItemPointerGetOffsetNumber(&htup->t_ctid);
+-		priorXmax = HeapTupleHeaderGetUpdateXid(htup);
++		priorXmax = HeapTupleGetUpdateXidAny(&tup);
+ 	}
+ 
+ 	if (ItemIdIsRedirected(rootlp) && nchain < 2)
+@@ -1857,6 +1872,7 @@ static void
+ heap_prune_record_unchanged_lp_normal(PruneState *prstate, OffsetNumber offnum)
+ {
+ 	HeapTupleHeader htup;
++	HeapTupleData tup;
+ 	TransactionId xmin;
+ 	Page		page = prstate->page;
+ 
+@@ -1886,6 +1902,9 @@ heap_prune_record_unchanged_lp_normal(PruneState *prstate, OffsetNumber offnum)
+ 	 * should be negligible.)
+ 	 */
+ 	htup = (HeapTupleHeader) PageGetItem(page, PageGetItemId(page, offnum));
++	tup.t_data = htup;
++	tup.t_len = ItemIdGetLength(PageGetItemId(page, offnum));
++	HeapTupleCopyXidsFromPage(prstate->buffer, &tup, page);
+ 
+ 	switch (prstate->htsv[offnum])
+ 	{
+@@ -1919,7 +1938,7 @@ heap_prune_record_unchanged_lp_normal(PruneState *prstate, OffsetNumber offnum)
+ 			 * any snapshot that still considers the newest xid on the page to
+ 			 * be running. If so, we don't consider the page all-visible.
+ 			 */
+-			xmin = HeapTupleHeaderGetXmin(htup);
++			xmin = HeapTupleGetXmin(&tup);
+ 
+ 			/* Track newest xmin on page. */
+ 			if (TransactionIdFollows(xmin, prstate->newest_live_xid) &&
+@@ -1938,7 +1957,7 @@ heap_prune_record_unchanged_lp_normal(PruneState *prstate, OffsetNumber offnum)
+ 			 * that the page is reconsidered for pruning in future.
+ 			 */
+ 			heap_prune_record_prunable(prstate,
+-									   HeapTupleHeaderGetUpdateXid(htup),
++									   HeapTupleGetUpdateXidAny(&tup),
+ 									   offnum);
+ 			break;
+ 
+@@ -1960,7 +1979,7 @@ heap_prune_record_unchanged_lp_normal(PruneState *prstate, OffsetNumber offnum)
+ 			 * mark them all-visible during the next round of pruning.
+ 			 */
+ 			heap_prune_record_prunable(prstate,
+-									   HeapTupleHeaderGetXmin(htup),
++									   HeapTupleGetXmin(&tup),
+ 									   offnum);
+ 			break;
+ 
+@@ -1980,7 +1999,7 @@ heap_prune_record_unchanged_lp_normal(PruneState *prstate, OffsetNumber offnum)
+ 			 * the page is reconsidered for pruning in future.
+ 			 */
+ 			heap_prune_record_prunable(prstate,
+-									   HeapTupleHeaderGetUpdateXid(htup),
++									   HeapTupleGetUpdateXidAny(&tup),
+ 									   offnum);
+ 			break;
+ 
+@@ -2000,7 +2019,7 @@ heap_prune_record_unchanged_lp_normal(PruneState *prstate, OffsetNumber offnum)
+ 	{
+ 		bool		totally_frozen;
+ 
+-		if ((heap_prepare_freeze_tuple(htup,
++		if ((heap_prepare_freeze_tuple(&tup,
+ 									   prstate->cutoffs,
+ 									   &prstate->pagefrz,
+ 									   &prstate->frozen[prstate->nfrozen],
+@@ -2088,7 +2107,8 @@ void
+ heap_page_prune_execute(Buffer buffer, bool lp_truncate_only,
+ 						OffsetNumber *redirected, int nredirected,
+ 						OffsetNumber *nowdead, int ndead,
+-						OffsetNumber *nowunused, int nunused)
++						OffsetNumber *nowunused, int nunused,
++						bool repairFragmentation, bool is_toast)
+ {
+ 	Page		page = BufferGetPage(buffer);
+ 	OffsetNumber *offnum;
+@@ -2236,7 +2256,8 @@ heap_page_prune_execute(Buffer buffer, bool lp_truncate_only,
+ 		 * Finally, repair any fragmentation, and update the page's hint bit
+ 		 * about whether it has free pointers.
+ 		 */
+-		PageRepairFragmentation(page);
++		if (repairFragmentation)
++			PageRepairFragmentation(page, is_toast);
+ 
+ 		/*
+ 		 * Now that the page has been modified, assert that redirect items
+@@ -2309,7 +2330,8 @@ page_verify_redirects(Page page)
+  * and reused by a completely unrelated tuple.
+  */
+ void
+-heap_get_root_tuples(Page page, OffsetNumber *root_offsets)
++heap_get_root_tuples(Relation relation, Buffer buffer, Page page,
++					 OffsetNumber *root_offsets)
+ {
+ 	OffsetNumber offnum,
+ 				maxoff;
+@@ -2324,7 +2346,9 @@ heap_get_root_tuples(Page page, OffsetNumber *root_offsets)
+ 		HeapTupleHeader htup;
+ 		OffsetNumber nextoffnum;
+ 		TransactionId priorXmax;
++		HeapTupleData tup;
+ 
++		tup.t_tableOid = RelationGetRelid(relation);
+ 		/* skip unused and dead items */
+ 		if (!ItemIdIsUsed(lp) || ItemIdIsDead(lp))
+ 			continue;
+@@ -2332,6 +2356,9 @@ heap_get_root_tuples(Page page, OffsetNumber *root_offsets)
+ 		if (ItemIdIsNormal(lp))
+ 		{
+ 			htup = (HeapTupleHeader) PageGetItem(page, lp);
++			tup.t_data = htup;
++			tup.t_len = ItemIdGetLength(lp);
++			HeapTupleCopyXidsFromPage(buffer, &tup, page);
+ 
+ 			/*
+ 			 * Check if this tuple is part of a HOT-chain rooted at some other
+@@ -2353,7 +2380,7 @@ heap_get_root_tuples(Page page, OffsetNumber *root_offsets)
+ 
+ 			/* Set up to scan the HOT-chain */
+ 			nextoffnum = ItemPointerGetOffsetNumber(&htup->t_ctid);
+-			priorXmax = HeapTupleHeaderGetUpdateXid(htup);
++			priorXmax = HeapTupleGetUpdateXidAny(&tup);
+ 		}
+ 		else
+ 		{
+@@ -2392,9 +2419,12 @@ heap_get_root_tuples(Page page, OffsetNumber *root_offsets)
+ 				break;
+ 
+ 			htup = (HeapTupleHeader) PageGetItem(page, lp);
++			tup.t_data = htup;
++			tup.t_len = ItemIdGetLength(lp);
++			HeapTupleCopyXidsFromPage(buffer, &tup, page);
+ 
+ 			if (TransactionIdIsValid(priorXmax) &&
+-				!TransactionIdEquals(priorXmax, HeapTupleHeaderGetXmin(htup)))
++				!TransactionIdEquals(priorXmax, HeapTupleGetXmin(&tup)))
+ 				break;
+ 
+ 			/* Remember the root line pointer for this item */
+@@ -2408,7 +2438,7 @@ heap_get_root_tuples(Page page, OffsetNumber *root_offsets)
+ 			Assert(!HeapTupleHeaderIndicatesMovedPartitions(htup));
+ 
+ 			nextoffnum = ItemPointerGetOffsetNumber(&htup->t_ctid);
+-			priorXmax = HeapTupleHeaderGetUpdateXid(htup);
++			priorXmax = HeapTupleGetUpdateXidAny(&tup);
+ 		}
+ 	}
+ }
+@@ -2589,7 +2619,8 @@ log_heap_prune_and_freeze(Relation relation, Buffer buffer,
+ 						  HeapTupleFreeze *frozen, int nfrozen,
+ 						  OffsetNumber *redirected, int nredirected,
+ 						  OffsetNumber *dead, int ndead,
+-						  OffsetNumber *unused, int nunused)
++						  OffsetNumber *unused, int nunused,
++						  bool repairFragmentation)
+ {
+ 	xl_heap_prune xlrec;
+ 	XLogRecPtr	recptr;
+@@ -2612,6 +2643,10 @@ log_heap_prune_and_freeze(Relation relation, Buffer buffer,
+ 	Assert((vmflags & VISIBILITYMAP_VALID_BITS) == vmflags);
+ 
+ 	xlrec.flags = 0;
++	if (IsToastRelation(relation))
++		xlrec.flags |= XLHP_TOAST_RELATION;
++	if (repairFragmentation)
++		xlrec.flags |= XLHP_REPAIR_FRAGMENTATION;
+ 	regbuf_flags_heap = REGBUF_STANDARD;
+ 
+ 	/*
+diff --git a/src/backend/access/heap/vacuumlazy.c b/src/backend/access/heap/vacuumlazy.c
+index 9aad95a4b2f..2ba72d4e465 100644
+--- a/src/backend/access/heap/vacuumlazy.c
++++ b/src/backend/access/heap/vacuumlazy.c
+@@ -1989,7 +1989,8 @@ lazy_scan_new_or_empty(LVRelState *vacrel, Buffer buf, BlockNumber blkno,
+ 										  NULL, 0,
+ 										  NULL, 0,
+ 										  NULL, 0,
+-										  NULL, 0);
++										  NULL, 0,
++										  false);
+ 
+ 			END_CRIT_SECTION();
+ 
+@@ -2873,7 +2874,8 @@ lazy_vacuum_heap_page(LVRelState *vacrel, BlockNumber blkno, Buffer buffer,
+ 								  NULL, 0,	/* frozen */
+ 								  NULL, 0,	/* redirected */
+ 								  NULL, 0,	/* dead */
+-								  unused, nunused);
++								  unused, nunused,
++								  false);
+ 	}
+ 
+ 	END_CRIT_SECTION();
+@@ -3730,7 +3732,7 @@ heap_page_would_be_all_visible(Relation rel, Buffer buf,
+ 					 * to be running. In that case, the page is not considered
+ 					 * all-visible.
+ 					 */
+-					xmin = HeapTupleHeaderGetXmin(tuple.t_data);
++					xmin = HeapTupleGetXmin(&tuple);
+ 
+ 					/* Track newest xmin on page. */
+ 					if (TransactionIdFollows(xmin, *newest_live_xid) &&
+@@ -3739,7 +3741,7 @@ heap_page_would_be_all_visible(Relation rel, Buffer buf,
+ 
+ 					/* Check whether this tuple is already frozen or not */
+ 					if (all_visible && *all_frozen &&
+-						heap_tuple_needs_eventual_freeze(tuple.t_data))
++						heap_tuple_needs_eventual_freeze(&tuple))
+ 						*all_frozen = false;
+ 				}
+ 				break;
+diff --git a/src/include/access/heapam.h b/src/include/access/heapam.h
+index 5176478c295..679ab0247ce 100644
+--- a/src/include/access/heapam.h
++++ b/src/include/access/heapam.h
+@@ -452,8 +452,10 @@ extern void heap_page_prune_and_freeze(PruneFreezeParams *params,
+ extern void heap_page_prune_execute(Buffer buffer, bool lp_truncate_only,
+ 									OffsetNumber *redirected, int nredirected,
+ 									OffsetNumber *nowdead, int ndead,
+-									OffsetNumber *nowunused, int nunused);
+-extern void heap_get_root_tuples(Page page, OffsetNumber *root_offsets);
++									OffsetNumber *nowunused, int nunused,
++									bool repairFragmentation, bool is_toast);
++extern void heap_get_root_tuples(Relation relation, Buffer buffer, Page page,
++								 OffsetNumber *root_offsets);
+ extern void log_heap_prune_and_freeze(Relation relation, Buffer buffer,
+ 									  Buffer vmbuffer, uint8 vmflags,
+ 									  TransactionId conflict_xid,
+@@ -462,7 +464,8 @@ extern void log_heap_prune_and_freeze(Relation relation, Buffer buffer,
+ 									  HeapTupleFreeze *frozen, int nfrozen,
+ 									  OffsetNumber *redirected, int nredirected,
+ 									  OffsetNumber *dead, int ndead,
+-									  OffsetNumber *unused, int nunused);
++									  OffsetNumber *unused, int nunused,
++									  bool repairFragmentation);
+ 
+ /* in heap/vacuumlazy.c */
+ extern void heap_vacuum_rel(Relation rel,
+diff --git a/src/include/access/heapam_xlog.h b/src/include/access/heapam_xlog.h
+index 3f79c389a90..1bdcf5ee67a 100644
+--- a/src/include/access/heapam_xlog.h
++++ b/src/include/access/heapam_xlog.h
+@@ -367,6 +367,9 @@ typedef struct xl_heap_prune
+  */
+ #define		XLHP_VM_ALL_VISIBLE			(1 << 8)
+ #define		XLHP_VM_ALL_FROZEN			(1 << 9)
++/* Preserve xid64 page layout when replaying a prune record. */
++#define		XLHP_TOAST_RELATION			(1 << 10)
++#define		XLHP_REPAIR_FRAGMENTATION	(1 << 11)
+ 
+ /*
+  * xlhp_freeze_plan describes how to freeze a group of one or more heap tuples
