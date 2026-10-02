@@ -57,7 +57,7 @@ Discussion: https://postgr.es/m/CAJ7c6TPDOYBYrnCAeyndkBktO0WG2xSdYduTF0nxq%2Bvfk
  src/backend/access/heap/heaptoast.c                |    3 
  src/backend/access/heap/hio.c                      |   39 +
  src/backend/access/heap/pruneheap.c                |   83 ++++++++++++++++++++++++++++++++++++++++------------------------
- src/backend/access/heap/rewriteheap.c              |  100 ++
+ src/backend/access/heap/rewriteheap.c              |  101 ++++++++++++++++++++++++++++++++++++++++-----------------------
  src/backend/access/heap/vacuumlazy.c               |  146 +--
  src/backend/access/nbtree/nbtpage.c                |    2 
  src/backend/access/nbtree/nbtsplitloc.c            |   16 
@@ -237,7 +237,7 @@ Discussion: https://postgr.es/m/CAJ7c6TPDOYBYrnCAeyndkBktO0WG2xSdYduTF0nxq%2Bvfk
  src/test/xid-64/t/006_zeropage.pl                  |   33 +
  src/test/xid-64/t/007_first_multi.pl               |   83 ++
  src/tools/pgindent/typedefs.list                   |    4 
- 215 files changed, 6963 insertions(+), 2553 deletions(-)
+ 215 files changed, 6962 insertions(+), 2555 deletions(-)
 
 diff --git a/contrib/amcheck/verify_heapam.c b/contrib/amcheck/verify_heapam.c
 index e5ea68b801..14ce47cf80 100644
@@ -5533,10 +5533,10 @@ index e1be6c37084..5288f762c6b 100644
  
  	/*
 diff --git a/src/backend/access/heap/rewriteheap.c b/src/backend/access/heap/rewriteheap.c
-index 66ab48f0fe..5fc3af66fb 100644
+index 5a5398a76ae..1a5888821f5 100644
 --- a/src/backend/access/heap/rewriteheap.c
 +++ b/src/backend/access/heap/rewriteheap.c
-@@ -359,6 +359,7 @@ rewrite_heap_tuple(RewriteState state,
+@@ -360,6 +360,7 @@ rewrite_heap_tuple(RewriteState state,
  		   &old_tuple->t_data->t_choice.t_heap,
  		   sizeof(HeapTupleFields));
  
@@ -5544,7 +5544,7 @@ index 66ab48f0fe..5fc3af66fb 100644
  	new_tuple->t_data->t_infomask &= ~HEAP_XACT_MASK;
  	new_tuple->t_data->t_infomask2 &= ~HEAP2_XACT_MASK;
  	new_tuple->t_data->t_infomask |=
-@@ -368,7 +369,7 @@ rewrite_heap_tuple(RewriteState state,
+@@ -369,7 +370,7 @@ rewrite_heap_tuple(RewriteState state,
  	 * While we have our hands on the tuple, we may as well freeze any
  	 * eligible xmin or xmax, so that future VACUUM effort can be saved.
  	 */
@@ -5553,8 +5553,8 @@ index 66ab48f0fe..5fc3af66fb 100644
  					  state->rs_old_rel->rd_rel->relfrozenxid,
  					  state->rs_old_rel->rd_rel->relminmxid,
  					  state->rs_freeze_xid,
-@@ -384,7 +385,7 @@ rewrite_heap_tuple(RewriteState state,
- 	 * If the tuple has been updated, check the old-to-new mapping hash table.
+@@ -388,7 +389,7 @@ rewrite_heap_tuple(RewriteState state,
+ 	 * heapam_relation_copy_for_cluster() to have set hint bits.
  	 */
  	if (!((old_tuple->t_data->t_infomask & HEAP_XMAX_INVALID) ||
 -		  HeapTupleHeaderIsOnlyLocked(old_tuple->t_data)) &&
@@ -5562,7 +5562,7 @@ index 66ab48f0fe..5fc3af66fb 100644
  		!HeapTupleHeaderIndicatesMovedPartitions(old_tuple->t_data) &&
  		!(ItemPointerEquals(&(old_tuple->t_self),
  							&(old_tuple->t_data->t_ctid))))
-@@ -392,7 +393,7 @@ rewrite_heap_tuple(RewriteState state,
+@@ -396,7 +397,7 @@ rewrite_heap_tuple(RewriteState state,
  		OldToNewMapping mapping;
  
  		memset(&hashkey, 0, sizeof(hashkey));
@@ -5571,7 +5571,7 @@ index 66ab48f0fe..5fc3af66fb 100644
  		hashkey.tid = old_tuple->t_data->t_ctid;
  
  		mapping = (OldToNewMapping)
-@@ -465,7 +466,7 @@ rewrite_heap_tuple(RewriteState state,
+@@ -469,7 +470,7 @@ rewrite_heap_tuple(RewriteState state,
  		 * RECENTLY_DEAD if and only if the xmin is not before OldestXmin.
  		 */
  		if ((new_tuple->t_data->t_infomask & HEAP_UPDATED) &&
@@ -5580,7 +5580,7 @@ index 66ab48f0fe..5fc3af66fb 100644
  								   state->rs_oldest_xmin))
  		{
  			/*
-@@ -474,7 +475,7 @@ rewrite_heap_tuple(RewriteState state,
+@@ -478,7 +479,7 @@ rewrite_heap_tuple(RewriteState state,
  			UnresolvedTup unresolved;
  
  			memset(&hashkey, 0, sizeof(hashkey));
@@ -5589,7 +5589,7 @@ index 66ab48f0fe..5fc3af66fb 100644
  			hashkey.tid = old_tid;
  
  			unresolved = hash_search(state->rs_unresolved_tups, &hashkey,
-@@ -562,7 +563,7 @@ rewrite_heap_dead_tuple(RewriteState state, HeapTuple old_tuple)
+@@ -566,7 +567,7 @@ rewrite_heap_dead_tuple(RewriteState state, HeapTuple old_tuple)
  	bool		found;
  
  	memset(&hashkey, 0, sizeof(hashkey));
@@ -5598,7 +5598,7 @@ index 66ab48f0fe..5fc3af66fb 100644
  	hashkey.tid = old_tuple->t_self;
  
  	unresolved = hash_search(state->rs_unresolved_tups, &hashkey,
-@@ -598,6 +599,8 @@ raw_heap_insert(RewriteState state, HeapTuple tup)
+@@ -602,6 +603,8 @@ raw_heap_insert(RewriteState state, HeapTuple tup)
  	Size		len;
  	OffsetNumber newoff;
  	HeapTuple	heaptup;
@@ -5607,29 +5607,42 @@ index 66ab48f0fe..5fc3af66fb 100644
  
  	/*
  	 * If the new tuple is too big for storage or contains already toasted
-@@ -632,9 +635,19 @@ raw_heap_insert(RewriteState state, HeapTuple tup)
+@@ -636,9 +639,13 @@ raw_heap_insert(RewriteState state, HeapTuple tup)
  	len = MAXALIGN(heaptup->t_len); /* be conservative */
  
  	/*
 -	 * If we're gonna fail for oversize tuple, do it right away
-+	 * Due to update to 64-xid maximum plain tuple size was decreased due to adding
-+	 * PageSpecial to a heap page. Pages with tuple that became too large to fit,
-+	 * should remain in Double Xmax format (read only). Inserting plain tuples with
-+	 * size over new MaxHeapTupleSizs is prohibited anyway, but vaccum full will
-+	 * transfer this page to a rebuild relation unmodified.
++	 * Legacy tuples that only fit on a page without xid64 special space must
++	 * retain that format when copied during a rewrite.
  	 */
 -	if (len > MaxHeapTupleSize)
 +	immutable_tuple = len <= MaxHeapTupleSize_32 && len > MaxHeapTupleSize;
 +
-+	/*
-+	 * If we're gonna fail for oversize tuple, do it right away. But allow to process
-+	 * immutable_tuple (see above).
-+	 */
++	/* Reject tuples that fit neither page format. */
 +	if (len > MaxHeapTupleSize && !immutable_tuple)
  		ereport(ERROR,
  				(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
  				 errmsg("row is too big: size %zu, maximum size %zu",
-@@ -666,12 +679,43 @@ raw_heap_insert(RewriteState state, HeapTuple tup)
+@@ -648,13 +655,16 @@ raw_heap_insert(RewriteState state, HeapTuple tup)
+ 	saveFreeSpace = RelationGetTargetPageFreeSpace(state->rs_new_rel,
+ 												   HEAP_DEFAULT_FILLFACTOR);
+ 
+-	/* Now we can check to see if there's enough free space already. */
++	/* Keep legacy no-special pages separate from xid64 pages. */
+ 	page = (Page) state->rs_buffer;
+ 	if (page)
+ 	{
++		bool		page_is_legacy = PageGetSpecialSize(page) == 0;
++
+ 		pageFreeSpace = PageGetHeapFreeSpace(page);
+ 
+-		if (len + saveFreeSpace > pageFreeSpace)
++		if (page_is_legacy != immutable_tuple ||
++			len + saveFreeSpace > pageFreeSpace)
+ 		{
+ 			/*
+ 			 * Doesn't fit, so write out the existing page.  It always
+@@ -670,12 +680,43 @@ raw_heap_insert(RewriteState state, HeapTuple tup)
  
  	if (!page)
  	{
@@ -5674,7 +5687,7 @@ index 66ab48f0fe..5fc3af66fb 100644
  	/* And now we can insert the tuple into the page */
  	newoff = PageAddItem(page, heaptup->t_data, heaptup->t_len, InvalidOffsetNumber, false, true);
  	if (newoff == InvalidOffsetNumber)
-@@ -951,19 +995,24 @@ logical_rewrite_log_mapping(RewriteState state, TransactionId xid,
+@@ -955,19 +996,24 @@ logical_rewrite_log_mapping(RewriteState state, TransactionId xid,
  	 */
  	if (!found)
  	{
@@ -5702,7 +5715,7 @@ index 66ab48f0fe..5fc3af66fb 100644
  
  		dclist_init(&src->mappings);
  		src->off = 0;
-@@ -1010,9 +1059,9 @@ logical_rewrite_heap_tuple(RewriteState state, ItemPointerData old_tid,
+@@ -1014,9 +1060,9 @@ logical_rewrite_heap_tuple(RewriteState state, ItemPointerData old_tid,
  	if (!state->rs_logical_rewrite)
  		return;
  
@@ -5714,7 +5727,7 @@ index 66ab48f0fe..5fc3af66fb 100644
  
  	/*
  	 * Log the mapping iff the tuple has been created recently.
-@@ -1076,14 +1125,19 @@ heap_xlog_logical_rewrite(XLogReaderState *r)
+@@ -1080,14 +1126,19 @@ heap_xlog_logical_rewrite(XLogReaderState *r)
  	xl_heap_rewrite_mapping *xlrec;
  	uint32		len;
  	char	   *data;
@@ -5735,7 +5748,7 @@ index 66ab48f0fe..5fc3af66fb 100644
  
  	fd = OpenTransientFile(path,
  						   O_CREAT | O_WRONLY | PG_BINARY);
-@@ -1178,10 +1232,12 @@ CheckPointLogicalRewriteHeap(void)
+@@ -1182,10 +1233,12 @@ CheckPointLogicalRewriteHeap(void)
  		Oid			dboid;
  		Oid			relid;
  		XLogRecPtr	lsn;
@@ -5752,7 +5765,7 @@ index 66ab48f0fe..5fc3af66fb 100644
  		PGFileType	de_type;
  
  		if (strcmp(mapping_de->d_name, ".") == 0 ||
-@@ -1199,10 +1255,12 @@ CheckPointLogicalRewriteHeap(void)
+@@ -1203,10 +1256,12 @@ CheckPointLogicalRewriteHeap(void)
  			continue;
  
  		if (sscanf(mapping_de->d_name, LOGICAL_REWRITE_FORMAT,
