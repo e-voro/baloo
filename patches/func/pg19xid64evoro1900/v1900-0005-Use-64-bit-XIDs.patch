@@ -49,7 +49,6 @@ Discussion: https://postgr.es/m/CAJ7c6TPDOYBYrnCAeyndkBktO0WG2xSdYduTF0nxq%2Bvfk
  contrib/postgres_fdw/sql/postgres_fdw.sql          |   15 
  src/backend/access/common/heaptuple.c              |   10 
  src/backend/access/common/reloptions.c             |  118 +-
- src/backend/access/common/tupdesc.c                |    3 
  src/backend/access/heap/heapam.c                   |  995 +++++++++++++++++---
  src/backend/access/heap/heapam_handler.c           |   53 +
  src/backend/access/heap/heapam_visibility.c        |  191 ++--
@@ -170,7 +169,7 @@ Discussion: https://postgr.es/m/CAJ7c6TPDOYBYrnCAeyndkBktO0WG2xSdYduTF0nxq%2Bvfk
  src/include/access/rmgrlist.h                      |    1 
  src/include/access/tableam.h                       |    2 
  src/include/access/transam.h                       |  128 +--
- src/include/access/tupmacs.h                       |    3 
+ src/include/access/tupmacs.h                       |    6 
  src/include/access/xact.h                          |   13 
  src/include/access/xloginsert.h                    |    1 
  src/include/access/xlogrecord.h                    |    4 
@@ -237,7 +236,7 @@ Discussion: https://postgr.es/m/CAJ7c6TPDOYBYrnCAeyndkBktO0WG2xSdYduTF0nxq%2Bvfk
  src/test/xid-64/t/006_zeropage.pl                  |   33 +
  src/test/xid-64/t/007_first_multi.pl               |   83 ++
  src/tools/pgindent/typedefs.list                   |    4 
- 215 files changed, 6968 insertions(+), 2561 deletions(-)
+ 214 files changed, 6968 insertions(+), 2561 deletions(-)
 
 diff --git a/contrib/amcheck/verify_heapam.c b/contrib/amcheck/verify_heapam.c
 index e5ea68b801..14ce47cf80 100644
@@ -1770,20 +1769,6 @@ diff --git a/src/backend/access/common/reloptions.c b/src/backend/access/common/
  		offsetof(StdRdOptions, autovacuum) + offsetof(AutoVacOpts, multixact_freeze_table_age)},
  		{"log_autovacuum_min_duration", RELOPT_TYPE_INT,
  		offsetof(StdRdOptions, autovacuum) + offsetof(AutoVacOpts, log_vacuum_min_duration)},
-diff --git a/src/backend/access/common/tupdesc.c b/src/backend/access/common/tupdesc.c
-index d715c345dd..ebf6fe03cb 100644
---- a/src/backend/access/common/tupdesc.c
-+++ b/src/backend/access/common/tupdesc.c
-@@ -100,6 +100,9 @@ populate_compact_attribute_internal(Form_pg_attribute src,
- 		case TYPALIGN_SHORT:
- 			dst->attalignby = ALIGNOF_SHORT;
- 			break;
-+		case TYPALIGN_XID:
-+			dst->attalignby = ALIGNOF_DOUBLE;
-+			break;
- 		default:
- 			dst->attalignby = 0;
- 			elog(ERROR, "invalid attalign value: %c", src->attalign);
 diff --git a/src/backend/access/heap/heapam.c b/src/backend/access/heap/heapam.c
 index 747c6d330a..86468a7d3e 100644
 --- a/src/backend/access/heap/heapam.c
@@ -15547,6 +15532,16 @@ index 84b3e7fd89..39ce513369 100644
  )
  
  /*
+@@ -314,6 +314,9 @@ typalign_to_alignby(char typalign)
+ 		case TYPALIGN_DOUBLE:
+ 			alignby = ALIGNOF_DOUBLE;
+ 			break;
++		case TYPALIGN_XID:
++			alignby = ALIGNOF_DOUBLE;
++			break;
+ 		default:
+ #ifndef FRONTEND
+ 			elog(ERROR, "invalid typalign value: %c", typalign);
 diff --git a/src/include/access/xact.h b/src/include/access/xact.h
 index 4528e51829..3fe50fcfcd 100644
 --- a/src/include/access/xact.h

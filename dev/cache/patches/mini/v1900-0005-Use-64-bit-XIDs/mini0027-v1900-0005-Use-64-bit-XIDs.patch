@@ -1,0 +1,13 @@
+diff --git a/src/include/access/tupmacs.h b/src/include/access/tupmacs.h
+--- a/src/include/access/tupmacs.h
++++ b/src/include/access/tupmacs.h
+@@ -314,6 +314,9 @@ typalign_to_alignby(char typalign)
+ 		case TYPALIGN_DOUBLE:
+ 			alignby = ALIGNOF_DOUBLE;
+ 			break;
++		case TYPALIGN_XID:
++			alignby = ALIGNOF_DOUBLE;
++			break;
+ 		default:
+ #ifndef FRONTEND
+ 			elog(ERROR, "invalid typalign value: %c", typalign);
