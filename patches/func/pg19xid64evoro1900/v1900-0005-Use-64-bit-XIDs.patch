@@ -52,7 +52,7 @@ Discussion: https://postgr.es/m/CAJ7c6TPDOYBYrnCAeyndkBktO0WG2xSdYduTF0nxq%2Bvfk
  src/backend/access/heap/heapam.c                   |  992 +++++++++++++++++---
  src/backend/access/heap/heapam_indexscan.c         |    9 
  src/backend/access/heap/heapam_handler.c           |   75 +-
- src/backend/access/heap/heapam_visibility.c        |  191 ++--
+ src/backend/access/heap/heapam_visibility.c |  187 ++++++++++++++++++++++++++++++++++++++++----------------------------------------
  src/backend/access/heap/heapam_xlog.c              |  165 ++-
  src/backend/access/heap/heaptoast.c                |    3 
  src/backend/access/heap/hio.c                      |   39 +
@@ -190,7 +190,7 @@ Discussion: https://postgr.es/m/CAJ7c6TPDOYBYrnCAeyndkBktO0WG2xSdYduTF0nxq%2Bvfk
  src/include/storage/aio_internal.h                 |    2 
  src/include/storage/buf_internals.h                |   15 
  src/include/storage/bufmgr.h                       |    6 
- src/include/storage/bufpage.h                      |  251 +++++
+ src/include/storage/bufpage.h                      |  249 +++++
  src/include/storage/itemid.h                       |    2 
  src/include/storage/lock.h                         |   14 
  src/include/storage/proc.h                         |    6 
@@ -237,7 +237,7 @@ Discussion: https://postgr.es/m/CAJ7c6TPDOYBYrnCAeyndkBktO0WG2xSdYduTF0nxq%2Bvfk
  src/test/xid-64/t/006_zeropage.pl                  |   33 +
  src/test/xid-64/t/007_first_multi.pl               |   83 ++
  src/tools/pgindent/typedefs.list                   |    4 
- 215 files changed, 6951 insertions(+), 2458 deletions(-)
+ 215 files changed, 6947 insertions(+), 2456 deletions(-)
 
 diff --git a/contrib/amcheck/verify_heapam.c b/contrib/amcheck/verify_heapam.c
 index e5ea68b801..14ce47cf80 100644
@@ -4036,7 +4036,7 @@ index d40493eb7ff..e1052a4d326 100644
  			HeapCheckForSerializableConflictOut(valid, scan->rs_rd, &loctup,
  												buffer, snapshot);
 diff --git a/src/backend/access/heap/heapam_visibility.c b/src/backend/access/heap/heapam_visibility.c
-index 361b76e5065..e82ebda9a0b 100644
+index 361b76e5065..e0f58cb023d 100644
 --- a/src/backend/access/heap/heapam_visibility.c
 +++ b/src/backend/access/heap/heapam_visibility.c
 @@ -308,7 +308,7 @@ HeapTupleSatisfiesSelf(HeapTuple htup, Snapshot snapshot, Buffer buffer)
@@ -4518,7 +4518,7 @@ index 361b76e5065..e82ebda9a0b 100644
  			return true;		/* treat as still in progress */
  	}
  
-@@ -1147,11 +1151,19 @@ HTSV_Result
+@@ -1147,11 +1151,15 @@ HTSV_Result
  HeapTupleSatisfiesVacuumHorizon(HeapTuple htup, Buffer buffer, TransactionId *dead_after)
  {
  	HeapTupleHeader tuple = htup->t_data;
@@ -4528,17 +4528,13 @@ index 361b76e5065..e82ebda9a0b 100644
  	Assert(htup->t_tableOid != InvalidOid);
  	Assert(dead_after != NULL);
  
-+	/*
-+	 * We should not to copy the XIDs from the page if we are working with a
-+	 * 32-bit page format.
-+	 */
-+	if (PageGetSpecialSize(page))
-+		HeapTupleCopyXidsFromPage(buffer, htup, page);
++	/* Also initializes full XIDs for legacy pages without special space. */
++	HeapTupleCopyXidsFromPage(buffer, htup, page);
 +
  	*dead_after = InvalidTransactionId;
  
  	/*
-@@ -1166,21 +1178,21 @@ HeapTupleSatisfiesVacuumHorizon(HeapTuple htup, Buffer buffer, TransactionId *de
+@@ -1166,21 +1174,21 @@ HeapTupleSatisfiesVacuumHorizon(HeapTuple htup, Buffer buffer, TransactionId *de
  			return HEAPTUPLE_DEAD;
  		else if (!HeapTupleCleanMoved(tuple, buffer))
  			return HEAPTUPLE_DEAD;
@@ -4564,7 +4560,7 @@ index 361b76e5065..e82ebda9a0b 100644
  		{
  			/*
  			 * It'd be possible to discern between INSERT/DELETE in progress
-@@ -1192,9 +1204,9 @@ HeapTupleSatisfiesVacuumHorizon(HeapTuple htup, Buffer buffer, TransactionId *de
+@@ -1192,9 +1200,9 @@ HeapTupleSatisfiesVacuumHorizon(HeapTuple htup, Buffer buffer, TransactionId *de
  			 */
  			return HEAPTUPLE_INSERT_IN_PROGRESS;
  		}
@@ -4576,7 +4572,7 @@ index 361b76e5065..e82ebda9a0b 100644
  		else
  		{
  			/*
-@@ -1236,14 +1248,14 @@ HeapTupleSatisfiesVacuumHorizon(HeapTuple htup, Buffer buffer, TransactionId *de
+@@ -1236,14 +1244,14 @@ HeapTupleSatisfiesVacuumHorizon(HeapTuple htup, Buffer buffer, TransactionId *de
  				 * possibly be running; otherwise have to check.
  				 */
  				if (!HEAP_LOCKED_UPGRADED(tuple->t_infomask) &&
@@ -4593,7 +4589,7 @@ index 361b76e5065..e82ebda9a0b 100644
  					return HEAPTUPLE_LIVE;
  				SetHintBits(tuple, buffer, HEAP_XMAX_INVALID,
  							InvalidTransactionId);
-@@ -1261,7 +1273,7 @@ HeapTupleSatisfiesVacuumHorizon(HeapTuple htup, Buffer buffer, TransactionId *de
+@@ -1261,7 +1269,7 @@ HeapTupleSatisfiesVacuumHorizon(HeapTuple htup, Buffer buffer, TransactionId *de
  
  	if (tuple->t_infomask & HEAP_XMAX_IS_MULTI)
  	{
@@ -4602,7 +4598,7 @@ index 361b76e5065..e82ebda9a0b 100644
  
  		/* already checked above */
  		Assert(!HEAP_XMAX_IS_LOCKED_ONLY(tuple->t_infomask));
-@@ -1284,7 +1296,7 @@ HeapTupleSatisfiesVacuumHorizon(HeapTuple htup, Buffer buffer, TransactionId *de
+@@ -1284,7 +1292,7 @@ HeapTupleSatisfiesVacuumHorizon(HeapTuple htup, Buffer buffer, TransactionId *de
  			*dead_after = xmax;
  			return HEAPTUPLE_RECENTLY_DEAD;
  		}
@@ -4611,7 +4607,7 @@ index 361b76e5065..e82ebda9a0b 100644
  		{
  			/*
  			 * Not in Progress, Not Committed, so either Aborted or crashed.
-@@ -1298,11 +1310,11 @@ HeapTupleSatisfiesVacuumHorizon(HeapTuple htup, Buffer buffer, TransactionId *de
+@@ -1298,11 +1306,11 @@ HeapTupleSatisfiesVacuumHorizon(HeapTuple htup, Buffer buffer, TransactionId *de
  
  	if (!(tuple->t_infomask & HEAP_XMAX_COMMITTED))
  	{
@@ -4626,7 +4622,7 @@ index 361b76e5065..e82ebda9a0b 100644
  		else
  		{
  			/*
-@@ -1324,7 +1336,7 @@ HeapTupleSatisfiesVacuumHorizon(HeapTuple htup, Buffer buffer, TransactionId *de
+@@ -1324,7 +1332,7 @@ HeapTupleSatisfiesVacuumHorizon(HeapTuple htup, Buffer buffer, TransactionId *de
  	 * Deleter committed, allow caller to check if it was recent enough that
  	 * some open transactions could still see the tuple.
  	 */
@@ -4635,7 +4631,7 @@ index 361b76e5065..e82ebda9a0b 100644
  	return HEAPTUPLE_RECENTLY_DEAD;
  }
  
-@@ -1420,7 +1432,7 @@ HeapTupleIsSurelyDead(HeapTuple htup, GlobalVisState *vistest)
+@@ -1420,7 +1428,7 @@ HeapTupleIsSurelyDead(HeapTuple htup, GlobalVisState *vistest)
  
  	/* Deleter committed, so tuple is dead if the XID is old enough. */
  	return GlobalVisTestIsRemovableXid(vistest,
@@ -4644,7 +4640,7 @@ index 361b76e5065..e82ebda9a0b 100644
  									   true);
  }
  
-@@ -1434,8 +1446,9 @@ HeapTupleIsSurelyDead(HeapTuple htup, GlobalVisState *vistest)
+@@ -1434,8 +1442,9 @@ HeapTupleIsSurelyDead(HeapTuple htup, GlobalVisState *vistest)
   * at the top of this file.
   */
  bool
@@ -4655,7 +4651,7 @@ index 361b76e5065..e82ebda9a0b 100644
  	TransactionId xmax;
  
  	/* if there's no valid Xmax, then there's obviously no update either */
-@@ -1446,7 +1459,7 @@ HeapTupleHeaderIsOnlyLocked(HeapTupleHeader tuple)
+@@ -1446,7 +1455,7 @@ HeapTupleHeaderIsOnlyLocked(HeapTupleHeader tuple)
  		return true;
  
  	/* invalid xmax means no update */
@@ -4664,7 +4660,7 @@ index 361b76e5065..e82ebda9a0b 100644
  		return true;
  
  	/*
-@@ -1457,7 +1470,7 @@ HeapTupleHeaderIsOnlyLocked(HeapTupleHeader tuple)
+@@ -1457,7 +1466,7 @@ HeapTupleHeaderIsOnlyLocked(HeapTupleHeader tuple)
  		return false;
  
  	/* ... but if it's a multi, then perhaps the updating Xid aborted. */
@@ -4673,7 +4669,7 @@ index 361b76e5065..e82ebda9a0b 100644
  
  	/* not LOCKED_ONLY, so it has to have an xmax */
  	Assert(TransactionIdIsValid(xmax));
-@@ -1505,8 +1518,8 @@ HeapTupleSatisfiesHistoricMVCC(HeapTuple htup, Snapshot snapshot,
+@@ -1505,8 +1514,8 @@ HeapTupleSatisfiesHistoricMVCC(HeapTuple htup, Snapshot snapshot,
  							   Buffer buffer)
  {
  	HeapTupleHeader tuple = htup->t_data;
@@ -4684,7 +4680,7 @@ index 361b76e5065..e82ebda9a0b 100644
  
  	Assert(ItemPointerIsValid(&htup->t_self));
  	Assert(htup->t_tableOid != InvalidOid);
-@@ -1606,7 +1619,7 @@ HeapTupleSatisfiesHistoricMVCC(HeapTuple htup, Snapshot snapshot,
+@@ -1606,7 +1615,7 @@ HeapTupleSatisfiesHistoricMVCC(HeapTuple htup, Snapshot snapshot,
  	 */
  	else if (tuple->t_infomask & HEAP_XMAX_IS_MULTI)
  	{
@@ -4693,7 +4689,7 @@ index 361b76e5065..e82ebda9a0b 100644
  	}
  
  	/* check if it's one of our txids, toplevel is also in there */
-@@ -1731,6 +1744,12 @@ HeapTupleSatisfiesMVCCBatch(Snapshot snapshot, Buffer buffer,
+@@ -1731,6 +1740,12 @@ HeapTupleSatisfiesMVCCBatch(Snapshot snapshot, Buffer buffer,
  bool
  HeapTupleSatisfiesVisibility(HeapTuple htup, Snapshot snapshot, Buffer buffer)
  {
@@ -15909,7 +15905,7 @@ index abc2cf2a02..c2df78e55e 100644
  #define PG_DATA_CHECKSUM_VERSION	1
  
  /* ----------------------------------------------------------------
-@@ -442,18 +476,195 @@ PageClearAllVisible(Page page)
+@@ -442,18 +476,197 @@ PageClearAllVisible(Page page)
  }
  
  /*
@@ -16025,8 +16021,8 @@ index abc2cf2a02..c2df78e55e 100644
 -		TransactionIdPrecedes(xid, ((PageHeader) (page))->pd_prune_xid)) \
 -		((PageHeader) (page))->pd_prune_xid = (xid); \
 -} while (0)
--#define PageClearPrunable(page) \
--	(((PageHeader) (page))->pd_prune_xid = InvalidTransactionId)
+ #define PageClearPrunable(page) \
+ 	(((PageHeader) (page))->pd_prune_xid = InvalidTransactionId)
 +static inline void
 +HeapPageSetPruneXid(Page page, TransactionId xid)
 +{
@@ -16115,7 +16111,7 @@ index abc2cf2a02..c2df78e55e 100644
  
  /* ----------------------------------------------------------------
   *		extern declarations
-@@ -484,6 +695,20 @@ do { \
+@@ -484,6 +697,20 @@ do { \
  StaticAssertDecl(BLCKSZ == ((BLCKSZ / sizeof(size_t)) * sizeof(size_t)),
  				 "BLCKSZ has to be a multiple of sizeof(size_t)");
  
@@ -16136,7 +16132,7 @@ index abc2cf2a02..c2df78e55e 100644
  extern void PageInit(Page page, Size pageSize, Size specialSize);
  extern bool PageIsVerified(PageData *page, BlockNumber blkno, int flags,
  						   bool *checksum_failure_p);
-@@ -493,7 +718,7 @@ extern Page PageGetTempPage(const PageData *page);
+@@ -493,7 +720,7 @@ extern Page PageGetTempPage(const PageData *page);
  extern Page PageGetTempPageCopy(const PageData *page);
  extern Page PageGetTempPageCopySpecial(const PageData *page);
  extern void PageRestoreTempPage(Page tempPage, Page oldPage);
