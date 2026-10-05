@@ -65,7 +65,7 @@ Discussion: https://postgr.es/m/CAJ7c6TPDOYBYrnCAeyndkBktO0WG2xSdYduTF0nxq%2Bvfk
  src/backend/access/rmgrdesc/heapdesc.c             |   32 +
  src/backend/access/rmgrdesc/nbtdesc.c              |    4 
  src/backend/access/rmgrdesc/xactdesc.c             |    6 
- src/backend/access/rmgrdesc/xlogdesc.c             |    2 
+ src/backend/access/rmgrdesc/xlogdesc.c          |    2 +-
  src/backend/access/transam/clog.c                  |   19 
  src/backend/access/transam/commit_ts.c             |   19 
  src/backend/access/transam/multixact.c             |  688 +-------------
@@ -6086,18 +6086,18 @@ index 267eab42a4..121924751b 100644
  		data += sizeof(xl_xact_twophase);
  
 diff --git a/src/backend/access/rmgrdesc/xlogdesc.c b/src/backend/access/rmgrdesc/xlogdesc.c
-index 53cff28ad8..593271dac6 100644
+index c95b2c9683b..4c2f13716e1 100644
 --- a/src/backend/access/rmgrdesc/xlogdesc.c
 +++ b/src/backend/access/rmgrdesc/xlogdesc.c
-@@ -75,7 +75,7 @@ xlog_desc(StringInfo buf, XLogReaderState *record)
- 						 checkpoint->PrevTimeLineID,
+@@ -112,7 +112,7 @@ xlog_desc(StringInfo buf, XLogReaderState *record)
  						 checkpoint->fullPageWrites ? "true" : "false",
  						 get_wal_level_string(checkpoint->wal_level),
+ 						 checkpoint->logicalDecodingEnabled ? "true" : "false",
 -						 (unsigned long long) U64FromFullTransactionId(checkpoint->nextXid),
 +						 (unsigned long long) XidFromFullTransactionId(checkpoint->nextXid),
  						 checkpoint->nextOid,
  						 (unsigned long long) checkpoint->nextMulti,
- 						 (unsigned long long) checkpoint->nextMultiOffset,
+ 						 checkpoint->nextMultiOffset,
 diff --git a/src/backend/access/transam/clog.c b/src/backend/access/transam/clog.c
 index a92198528d..37954ee9b2 100644
 --- a/src/backend/access/transam/clog.c
