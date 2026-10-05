@@ -7,6 +7,10 @@ historical; verify it against the actual checkout.
 
 ## IMPORTANT: PG19 prune/VM WAL and xid64 checkpoint (2026-10-02)
 
+**Standing review rule:** At every mini, inspect PG19-only code against the PG18
+patch and trace full XIDs through tuple reads, page hints, VM decisions, WAL,
+and redo. Preserve PG19 behavior, including wraparound failsafe.
+
 **Decision:** Melanie Plageman's PG19 work is functionally connected to xid64.
 On-access pruning can set VM all-visible bits (commit `b46e1e54d07`);
 VACUUM logs VM changes in `XLOG_HEAP2_PRUNE_VACUUM_SCAN` (`1252a4ee286`,
@@ -32,6 +36,10 @@ pages or a separate tuple-XID payload to prune WAL.
   `heapam_xlog.h` align signatures and WAL flags with redo. Source commit
   `64b76f28c6d`; adapted mini and parent prune section in Baloo `9015fe1`;
   parent gitlink commit `5552a07075f`.
+- **Later audit findings:** `HeapTupleSatisfiesVacuumHorizon()` must initialize
+  full XIDs even on legacy no-special pages; its tuple helper supports them.
+  The correction is folded into adapted mini0030. Future mini0168 must retain
+  PG19's `PageClearPrunable()` API, still used in seven backend call sites.
 - **Validation/remaining work:** mini0034 reverse-apply check and source
   `git show --check` passed. No build or recovery test yet: this partial 0005
   series lacks later xid64 helper definitions and a configured build tree.
