@@ -8361,15 +8361,15 @@ index c8604e8989..f05470058b 100644
  		/* mapping for another database */
  		if (f_dboid != dboid)
 diff --git a/src/backend/replication/logical/slotsync.c b/src/backend/replication/logical/slotsync.c
-index c184cdf1c17..1e8b91a98a6 100644
+index 8b4afd87dc..a72d4d7fdf 100644
 --- a/src/backend/replication/logical/slotsync.c
 +++ b/src/backend/replication/logical/slotsync.c
-@@ -288,11 +288,11 @@ update_local_synced_slot(RemoteSlot *remote_slot, Oid remote_dbid)
+@@ -212,11 +212,11 @@ update_local_synced_slot(RemoteSlot *remote_slot, Oid remote_dbid,
  		ereport(slot->data.persistency == RS_TEMPORARY ? LOG : DEBUG1,
  				errmsg("could not synchronize replication slot \"%s\"",
  					   remote_slot->name),
 -				errdetail("Synchronization could lead to data loss, because the remote slot needs WAL at LSN %X/%08X and catalog xmin %u, but the standby has LSN %X/%08X and catalog xmin %u.",
-+				errdetail("Synchronization could lead to data loss, because the remote slot needs WAL at LSN %X/%08X and catalog xmin %llu, but the standby has LSN %X/%08X and catalog xmin %llu.",
++				errdetail("Synchronization could lead to data loss, because the remote slot needs WAL at LSN %X/%08X and catalog xmin %llu, but the standby has LSN %X/%X and catalog xmin %llu.",
  						  LSN_FORMAT_ARGS(remote_slot->restart_lsn),
 -						  remote_slot->catalog_xmin,
 +						  (unsigned long long) remote_slot->catalog_xmin,
@@ -8377,13 +8377,13 @@ index c184cdf1c17..1e8b91a98a6 100644
 -						  slot->data.catalog_xmin));
 +						  (unsigned long long) slot->data.catalog_xmin));
  
- 		/*
- 		 * Skip updating the configuration. This is required to avoid syncing
+ 		if (remote_slot_precedes)
+ 			*remote_slot_precedes = true;
 diff --git a/src/backend/replication/logical/snapbuild.c b/src/backend/replication/logical/snapbuild.c
-index 3ae911c8b86..62d2a03da25 100644
+index a7847da2ee..6993e26e9d 100644
 --- a/src/backend/replication/logical/snapbuild.c
 +++ b/src/backend/replication/logical/snapbuild.c
-@@ -465,7 +465,7 @@ SnapBuildInitialSnapshot(SnapBuild *builder)
+@@ -461,7 +461,7 @@ SnapBuildInitialSnapshot(SnapBuild *builder)
  		elog(ERROR, "cannot build an initial slot snapshot, not all transactions are monitored anymore");
  
  	/* so we don't overwrite the existing value */
@@ -8392,7 +8392,7 @@ index 3ae911c8b86..62d2a03da25 100644
  		elog(ERROR, "cannot build an initial slot snapshot when MyProc->xmin already is valid");
  
  	snap = SnapBuildBuildSnapshot(builder);
-@@ -487,7 +487,7 @@ SnapBuildInitialSnapshot(SnapBuild *builder)
+@@ -483,7 +483,7 @@ SnapBuildInitialSnapshot(SnapBuild *builder)
  		elog(ERROR, "cannot build an initial slot snapshot as oldest safe xid %llu follows snapshot's xmin %llu",
  			 (unsigned long long) safeXid, (unsigned long long) snap->xmin);
  
@@ -8400,7 +8400,7 @@ index 3ae911c8b86..62d2a03da25 100644
 +	pg_atomic_write_u64(&MyProc->xmin, snap->xmin);
  
  	/* allocate in transaction context */
- 	newxip = palloc_array(TransactionId, GetMaxSnapshotXidCount());
+ 	newxip = (TransactionId *)
 diff --git a/src/backend/replication/logical/worker.c b/src/backend/replication/logical/worker.c
 index 5865daca2d..6c66b3cbd2 100644
 --- a/src/backend/replication/logical/worker.c
