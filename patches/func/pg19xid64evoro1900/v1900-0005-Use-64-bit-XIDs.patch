@@ -80,7 +80,7 @@ Discussion: https://postgr.es/m/CAJ7c6TPDOYBYrnCAeyndkBktO0WG2xSdYduTF0nxq%2Bvfk
  src/backend/access/transam/xlogreader.c            |    3 
  src/backend/catalog/heap.c                         |    4 
  src/backend/catalog/pg_inherits.c                  |    2 
- src/backend/commands/async.c                       |    2 
+ src/backend/commands/async.c                       |    4 ++--
  src/backend/commands/dbcommands.c                  |    5 
  src/backend/commands/indexcmds.c                   |    6 
  src/backend/commands/sequence.c                    |   30 +
@@ -238,7 +238,7 @@ Discussion: https://postgr.es/m/CAJ7c6TPDOYBYrnCAeyndkBktO0WG2xSdYduTF0nxq%2Bvfk
  src/test/xid-64/t/006_zeropage.pl                  |   33 +
  src/test/xid-64/t/007_first_multi.pl               |   83 ++
  src/tools/pgindent/typedefs.list                   |    4 
- 216 files changed, 6937 insertions(+), 2070 deletions(-)
+ 216 files changed, 6938 insertions(+), 2071 deletions(-)
 
 diff --git a/contrib/amcheck/verify_heapam.c b/contrib/amcheck/verify_heapam.c
 index e5ea68b801..14ce47cf80 100644
@@ -7480,14 +7480,16 @@ index 929bb53b62..3b613971e3 100644
  
  				if (!XidInMVCCSnapshot(xmin, snap))
 diff --git a/src/backend/commands/async.c b/src/backend/commands/async.c
-index e1cf659485..be685c0248 100644
+index eee8bc29f38..3bf242ef11e 100644
 --- a/src/backend/commands/async.c
 +++ b/src/backend/commands/async.c
-@@ -184,7 +184,7 @@ typedef struct AsyncQueueEntry
+@@ -221,8 +221,8 @@ typedef struct AsyncQueueEntry
+ 	char		data[NAMEDATALEN + NOTIFY_PAYLOAD_MAX_LENGTH];
  } AsyncQueueEntry;
  
- /* Currently, no field of AsyncQueueEntry requires more than int alignment */
+-/* Currently, no field of AsyncQueueEntry requires more than int alignment */
 -#define QUEUEALIGN(len)		INTALIGN(len)
++/* The sender XID requires 8-byte alignment in the queue entry. */
 +#define QUEUEALIGN(len)		TYPEALIGN(8, len)
  
  #define AsyncQueueEntryEmptySize	(offsetof(AsyncQueueEntry, data) + 2)

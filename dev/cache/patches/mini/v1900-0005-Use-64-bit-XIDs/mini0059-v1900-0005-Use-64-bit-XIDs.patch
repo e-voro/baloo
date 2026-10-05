@@ -1,0 +1,15 @@
+diff --git a/src/backend/commands/async.c b/src/backend/commands/async.c
+index eee8bc29f38..3bf242ef11e 100644
+--- a/src/backend/commands/async.c
++++ b/src/backend/commands/async.c
+@@ -221,8 +221,8 @@ typedef struct AsyncQueueEntry
+ 	char		data[NAMEDATALEN + NOTIFY_PAYLOAD_MAX_LENGTH];
+ } AsyncQueueEntry;
+ 
+-/* Currently, no field of AsyncQueueEntry requires more than int alignment */
+-#define QUEUEALIGN(len)		INTALIGN(len)
++/* The sender XID requires 8-byte alignment in the queue entry. */
++#define QUEUEALIGN(len)		TYPEALIGN(8, len)
+ 
+ #define AsyncQueueEntryEmptySize	(offsetof(AsyncQueueEntry, data) + 2)
+ 
