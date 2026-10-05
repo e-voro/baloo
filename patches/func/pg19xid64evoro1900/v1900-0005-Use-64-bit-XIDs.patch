@@ -66,7 +66,7 @@ Discussion: https://postgr.es/m/CAJ7c6TPDOYBYrnCAeyndkBktO0WG2xSdYduTF0nxq%2Bvfk
  src/backend/access/rmgrdesc/nbtdesc.c              |    4 
  src/backend/access/rmgrdesc/xactdesc.c             |    6 
  src/backend/access/rmgrdesc/xlogdesc.c          |    2 +-
- src/backend/access/transam/clog.c                  |   19 
+ src/backend/access/transam/clog.c             |   19 +++----------------
  src/backend/access/transam/commit_ts.c             |   19 
  src/backend/access/transam/multixact.c             |  688 +-------------
  src/backend/access/transam/slru.c                  |   11 
@@ -6099,10 +6099,10 @@ index c95b2c9683b..4c2f13716e1 100644
  						 (unsigned long long) checkpoint->nextMulti,
  						 checkpoint->nextMultiOffset,
 diff --git a/src/backend/access/transam/clog.c b/src/backend/access/transam/clog.c
-index a92198528d..37954ee9b2 100644
+index 64926e89cdc..ac4695e194a 100644
 --- a/src/backend/access/transam/clog.c
 +++ b/src/backend/access/transam/clog.c
-@@ -316,7 +316,7 @@ TransactionIdSetPageStatus(TransactionId xid, int nsubxids,
+@@ -327,7 +327,7 @@ TransactionIdSetPageStatus(TransactionId xid, int nsubxids,
  	 * sub-XIDs and all of the XIDs for which we're adjusting clog should be
  	 * on the same page.  Check those conditions, too.
  	 */
@@ -6111,7 +6111,7 @@ index a92198528d..37954ee9b2 100644
  		nsubxids <= THRESHOLD_SUBTRANS_CLOG_OPT &&
  		nsubxids == MyProc->subxidStatus.count &&
  		(nsubxids == 0 ||
-@@ -999,24 +999,11 @@ TruncateCLOG(TransactionId oldestXact, Oid oldestxid_datoid)
+@@ -1018,24 +1018,11 @@ TruncateCLOG(TransactionId oldestXact, Oid oldestxid_datoid)
  	SimpleLruTruncate(XactCtl, cutoffPage);
  }
  
@@ -6133,8 +6133,8 @@ index a92198528d..37954ee9b2 100644
 - * require making oldestXact, not just the page containing oldestXact,
 - * available to this callback.  The benefit would be rare and small, so we
 - * don't optimize that edge case.
-+ * With 64xid this function is just "<", but we left it as a function in order
-+ * for its calls remain "vanilla" like.
++ * XIDs and CLOG page numbers widen to 64 bits.  Keep the page comparison
++ * consistent with TransactionIdPrecedes() across the 64-bit wrap boundary.
   */
  static bool
  CLOGPagePrecedes(int64 page1, int64 page2)
