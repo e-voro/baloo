@@ -78,7 +78,6 @@ Discussion: https://postgr.es/m/CAJ7c6TPDOYBYrnCAeyndkBktO0WG2xSdYduTF0nxq%2Bvfk
  src/backend/access/transam/xlog.c                  |    3 
  src/backend/access/transam/xloginsert.c            |    7 
  src/backend/access/transam/xlogreader.c            |    3 
- src/backend/bootstrap/bootstrap.c                  |    2 
  src/backend/catalog/heap.c                         |    4 
  src/backend/catalog/pg_inherits.c                  |    2 
  src/backend/commands/async.c                       |    2 
@@ -239,7 +238,7 @@ Discussion: https://postgr.es/m/CAJ7c6TPDOYBYrnCAeyndkBktO0WG2xSdYduTF0nxq%2Bvfk
  src/test/xid-64/t/006_zeropage.pl                  |   33 +
  src/test/xid-64/t/007_first_multi.pl               |   83 ++
  src/tools/pgindent/typedefs.list                   |    4 
- 217 files changed, 6938 insertions(+), 2071 deletions(-)
+ 216 files changed, 6937 insertions(+), 2070 deletions(-)
 
 diff --git a/contrib/amcheck/verify_heapam.c b/contrib/amcheck/verify_heapam.c
 index e5ea68b801..14ce47cf80 100644
@@ -7445,19 +7444,6 @@ index 9cc7488e89..435c616064 100644
  }
  
  #endif
-diff --git a/src/backend/bootstrap/bootstrap.c b/src/backend/bootstrap/bootstrap.c
-index fc8638c1b6..bfe258c7a9 100644
---- a/src/backend/bootstrap/bootstrap.c
-+++ b/src/backend/bootstrap/bootstrap.c
-@@ -117,7 +117,7 @@ static const struct typinfo TypInfo[] = {
- 	F_OIDIN, F_OIDOUT},
- 	{"tid", TIDOID, 0, 6, false, TYPALIGN_SHORT, TYPSTORAGE_PLAIN, InvalidOid,
- 	F_TIDIN, F_TIDOUT},
--	{"xid", XIDOID, 0, 4, true, TYPALIGN_INT, TYPSTORAGE_PLAIN, InvalidOid,
-+	{"xid", XIDOID, 0, 8, true, TYPALIGN_XID, TYPSTORAGE_PLAIN, InvalidOid,
- 	F_XIDIN, F_XIDOUT},
- 	{"cid", CIDOID, 0, 4, true, TYPALIGN_INT, TYPSTORAGE_PLAIN, InvalidOid,
- 	F_CIDIN, F_CIDOUT},
 diff --git a/src/backend/catalog/heap.c b/src/backend/catalog/heap.c
 index fd6537567e..d573e32254 100644
 --- a/src/backend/catalog/heap.c

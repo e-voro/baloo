@@ -1,0 +1,1 @@
+mini0056 is obsolete for PG19: bootstrap.c has no xid entry in its hard-coded TypInfo array. The catalog definition in src/include/catalog/pg_type.dat is adapted in mini0156. Do not apply the original PG18 mini0056 patch.
