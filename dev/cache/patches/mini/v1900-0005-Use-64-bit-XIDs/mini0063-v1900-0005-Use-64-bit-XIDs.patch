@@ -1,0 +1,123 @@
+diff --git a/src/backend/access/transam/multixact.c b/src/backend/access/transam/multixact.c
+index 322d27e7dae..67520a6ecad 100644
+--- a/src/backend/access/transam/multixact.c
++++ b/src/backend/access/transam/multixact.c
+@@ -2420,7 +2420,7 @@ find_multixact_start(MultiXactId multi, MultiXactOffset *result)
+  * oldestOffset: Oldest offset still in use
+  */
+ void
+-GetMultiXactInfo(uint32 *multixacts, MultiXactOffset *nextOffset,
++GetMultiXactInfo(uint64 *multixacts, MultiXactOffset *nextOffset,
+ 				 MultiXactId *oldestMultiXactId, MultiXactOffset *oldestOffset)
+ {
+ 	MultiXactId nextMultiXactId;
+@@ -2463,13 +2463,13 @@ GetMultiXactInfo(uint32 *multixacts, MultiXactOffset *nextOffset,
+  * freeze_max_age to zero, and every vacuum of any table will freeze every
+  * multixact.
+  */
+-int
++int64
+ MultiXactMemberFreezeThreshold(void)
+ {
+-	uint32		multixacts;
+-	uint32		victim_multixacts;
++	uint64		multixacts;
++	uint64		victim_multixacts;
+ 	double		fraction;
+-	int			result;
++	uint64		result;
+ 	MultiXactId oldestMultiXactId;
+ 	MultiXactOffset oldestOffset;
+ 	MultiXactOffset nextOffset;
+@@ -2509,7 +2509,7 @@ MultiXactMemberFreezeThreshold(void)
+ 	 * Clamp to autovacuum_multixact_freeze_max_age, so that we never make
+ 	 * autovacuum less aggressive than it would otherwise be.
+ 	 */
+-	return Min(result, autovacuum_multixact_freeze_max_age);
++	return (int64) Min(result, (uint64) autovacuum_multixact_freeze_max_age);
+ }
+ 
+ 
+diff --git a/src/backend/commands/vacuum.c b/src/backend/commands/vacuum.c
+index f67e1804718..e6ae8c53b01 100644
+--- a/src/backend/commands/vacuum.c
++++ b/src/backend/commands/vacuum.c
+@@ -73,12 +73,12 @@
+ /*
+  * GUC parameters
+  */
+-int			vacuum_freeze_min_age;
+-int			vacuum_freeze_table_age;
+-int			vacuum_multixact_freeze_min_age;
+-int			vacuum_multixact_freeze_table_age;
+-int			vacuum_failsafe_age;
+-int			vacuum_multixact_failsafe_age;
++int64		vacuum_freeze_min_age;
++int64		vacuum_freeze_table_age;
++int64		vacuum_multixact_freeze_min_age;
++int64		vacuum_multixact_freeze_table_age;
++int64		vacuum_failsafe_age;
++int64		vacuum_multixact_failsafe_age;
+ double		vacuum_max_eager_freeze_failure_rate;
+ bool		track_cost_delay_timing;
+ bool		vacuum_truncate;
+@@ -1106,7 +1106,7 @@ bool
+ vacuum_get_cutoffs(Relation rel, const VacuumParams *params,
+ 				   struct VacuumCutoffs *cutoffs)
+ {
+-	int			freeze_min_age,
++	int64		freeze_min_age,
+ 				multixact_freeze_min_age,
+ 				freeze_table_age,
+ 				multixact_freeze_table_age,
+@@ -1277,7 +1277,7 @@ vacuum_xid_failsafe_check(const struct VacuumCutoffs *cutoffs)
+ 	MultiXactId relminmxid = cutoffs->relminmxid;
+ 	TransactionId xid_skip_limit;
+ 	MultiXactId multi_skip_limit;
+-	int			skip_index_vacuum;
++	int64		skip_index_vacuum;
+ 
+ 	Assert(TransactionIdIsNormal(relfrozenxid));
+ 	Assert(MultiXactIdIsValid(relminmxid));
+@@ -1528,6 +1528,9 @@ vac_update_relstats(Relation relation,
+ 	futurexid = false;
+ 	if (frozenxid_updated)
+ 		*frozenxid_updated = false;
++
++	Assert(TransactionIdPrecedesOrEquals(frozenxid, ReadNextTransactionId()));
++
+ 	if (TransactionIdIsNormal(frozenxid) && oldfrozenxid != frozenxid)
+ 	{
+ 		bool		update = false;
+@@ -1551,6 +1554,9 @@ vac_update_relstats(Relation relation,
+ 	futuremxid = false;
+ 	if (minmulti_updated)
+ 		*minmulti_updated = false;
++
++	Assert(MultiXactIdPrecedesOrEquals(minmulti, ReadNextMultiXactId()));
++
+ 	if (MultiXactIdIsValid(minmulti) && oldminmulti != minmulti)
+ 	{
+ 		bool		update = false;
+diff --git a/src/include/access/multixact.h b/src/include/access/multixact.h
+index 6be5299ab68..7f5a6108124 100644
+--- a/src/include/access/multixact.h
++++ b/src/include/access/multixact.h
+@@ -107,7 +107,7 @@ extern bool MultiXactIdIsRunning(MultiXactId multi, bool isLockOnly);
+ extern void MultiXactIdSetOldestMember(void);
+ extern int	GetMultiXactIdMembers(MultiXactId multi, MultiXactMember **members,
+ 								  bool from_pgupgrade, bool isLockOnly);
+-extern void GetMultiXactInfo(uint32 *multixacts, MultiXactOffset *nextOffset,
++extern void GetMultiXactInfo(uint64 *multixacts, MultiXactOffset *nextOffset,
+ 							 MultiXactId *oldestMultiXactId,
+ 							 MultiXactOffset *oldestOffset);
+ extern bool MultiXactIdPrecedes(MultiXactId multi1, MultiXactId multi2);
+@@ -140,7 +140,7 @@ extern void MultiXactSetNextMXact(MultiXactId nextMulti,
+ extern void MultiXactAdvanceNextMXact(MultiXactId minMulti,
+ 									  MultiXactOffset minMultiOffset);
+ extern void MultiXactAdvanceOldest(MultiXactId oldestMulti, Oid oldestMultiDB);
+-extern int	MultiXactMemberFreezeThreshold(void);
++extern int64 MultiXactMemberFreezeThreshold(void);
+ 
+ extern void multixact_twophase_recover(FullTransactionId fxid, uint16 info,
+ 									   void *recdata, uint32 len);
