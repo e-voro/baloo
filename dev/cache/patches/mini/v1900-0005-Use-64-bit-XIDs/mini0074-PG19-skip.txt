@@ -1,0 +1,1 @@
+mini0074 is obsolete for PG19: logical conflict messages already print localxmin as a 64-bit value with an unsigned long long cast. Do not apply the PG18 diagnostic-format patch.
