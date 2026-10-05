@@ -1,0 +1,24 @@
+diff --git a/src/backend/nodes/gen_node_support.pl b/src/backend/nodes/gen_node_support.pl
+index f4b1317e99f..7126987547b 100644
+--- a/src/backend/nodes/gen_node_support.pl
++++ b/src/backend/nodes/gen_node_support.pl
+@@ -1009,8 +1009,7 @@ _read${n}(void)
+ 		}
+ 		elsif ($t eq 'uint32'
+ 			|| $t eq 'BlockNumber'
+-			|| $t eq 'Index'
+-			|| $t eq 'SubTransactionId')
++			|| $t eq 'Index')
+ 		{
+ 			print $off "\tWRITE_UINT_FIELD($f);\n";
+ 			print $rff "\tREAD_UINT_FIELD($f);\n" unless $no_read;
+@@ -1021,7 +1020,8 @@ _read${n}(void)
+ 			print $rff "\tREAD_INT64_FIELD($f);\n" unless $no_read;
+ 		}
+ 		elsif ($t eq 'uint64'
+-			|| $t eq 'AclMode')
++			|| $t eq 'AclMode'
++			|| $t eq 'SubTransactionId')
+ 		{
+ 			print $off "\tWRITE_UINT64_FIELD($f);\n";
+ 			print $rff "\tREAD_UINT64_FIELD($f);\n" unless $no_read;
