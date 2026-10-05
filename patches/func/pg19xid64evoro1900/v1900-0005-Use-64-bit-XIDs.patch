@@ -58,7 +58,7 @@ Discussion: https://postgr.es/m/CAJ7c6TPDOYBYrnCAeyndkBktO0WG2xSdYduTF0nxq%2Bvfk
  src/backend/access/heap/hio.c                      |   39 +
  src/backend/access/heap/pruneheap.c                |   83 ++++++++++++++++++++++++++++++++++++++++------------------------
  src/backend/access/heap/rewriteheap.c              |  101 ++++++++++++++++++++++++++++++++++++++++-----------------------
- src/backend/access/heap/vacuumlazy.c               |  146 +--
+ src/backend/access/heap/vacuumlazy.c               |   38 +++++++++++++++++++++-----------------
  src/backend/access/nbtree/nbtpage.c                |    2 
  src/backend/access/nbtree/nbtsplitloc.c            |   16 
  src/backend/access/rmgrdesc/gistdesc.c             |    4 
@@ -237,7 +237,7 @@ Discussion: https://postgr.es/m/CAJ7c6TPDOYBYrnCAeyndkBktO0WG2xSdYduTF0nxq%2Bvfk
  src/test/xid-64/t/006_zeropage.pl                  |   33 +
  src/test/xid-64/t/007_first_multi.pl               |   83 ++
  src/tools/pgindent/typedefs.list                   |    4 
- 215 files changed, 6962 insertions(+), 2555 deletions(-)
+ 215 files changed, 6951 insertions(+), 2458 deletions(-)
 
 diff --git a/contrib/amcheck/verify_heapam.c b/contrib/amcheck/verify_heapam.c
 index e5ea68b801..14ce47cf80 100644
@@ -5781,26 +5781,10 @@ index 5a5398a76ae..1a5888821f5 100644
  		if (lsn < cutoff || !XLogRecPtrIsValid(cutoff))
  		{
 diff --git a/src/backend/access/heap/vacuumlazy.c b/src/backend/access/heap/vacuumlazy.c
-index 33ec78ff8e..460df0f58d 100644
+index 9aad95a4b2f..706f5ce3bb0 100644
 --- a/src/backend/access/heap/vacuumlazy.c
 +++ b/src/backend/access/heap/vacuumlazy.c
-@@ -443,7 +443,6 @@ static void lazy_vacuum_heap_rel(LVRelState *vacrel);
- static void lazy_vacuum_heap_page(LVRelState *vacrel, BlockNumber blkno,
- 								  Buffer buffer, OffsetNumber *deadoffsets,
- 								  int num_offsets, Buffer vmbuffer);
--static bool lazy_check_wraparound_failsafe(LVRelState *vacrel);
- static void lazy_cleanup_all_indexes(LVRelState *vacrel);
- static IndexBulkDeleteResult *lazy_vacuum_one_index(Relation indrel,
- 													IndexBulkDeleteResult *istat,
-@@ -841,7 +840,6 @@ heap_vacuum_rel(Relation rel, const VacuumParams params,
- 	 * ensure that parallel VACUUM won't be attempted at all when relfrozenxid
- 	 * is already dangerously old.)
- 	 */
--	lazy_check_wraparound_failsafe(vacrel);
- 	dead_items_alloc(vacrel, params.nworkers);
- 
- 	/*
-@@ -969,7 +967,7 @@ heap_vacuum_rel(Relation rel, const VacuumParams params,
+@@ -1006,7 +1006,7 @@ heap_vacuum_rel(Relation rel, const VacuumParams *params,
  			BufferUsage bufferusage;
  			StringInfoData buf;
  			char	   *msgfmt;
@@ -5809,7 +5793,7 @@ index 33ec78ff8e..460df0f58d 100644
  			double		read_rate = 0,
  						write_rate = 0;
  			int64		total_blks_hit;
-@@ -1042,7 +1040,7 @@ heap_vacuum_rel(Relation rel, const VacuumParams params,
+@@ -1079,7 +1079,7 @@ heap_vacuum_rel(Relation rel, const VacuumParams *params,
  								 _("tuples missed: %" PRId64 " dead from %u pages not removed due to cleanup lock contention\n"),
  								 vacrel->missed_dead_tuples,
  								 vacrel->missed_dead_pages);
@@ -5818,7 +5802,7 @@ index 33ec78ff8e..460df0f58d 100644
  							vacrel->cutoffs.OldestXmin);
  			appendStringInfo(&buf,
  							 _("removable cutoff: %llu, which was %lld XIDs old when operation ended\n"),
-@@ -1050,7 +1048,7 @@ heap_vacuum_rel(Relation rel, const VacuumParams params,
+@@ -1087,7 +1087,7 @@ heap_vacuum_rel(Relation rel, const VacuumParams *params,
  							 (long long) diff);
  			if (frozenxid_updated)
  			{
@@ -5827,7 +5811,7 @@ index 33ec78ff8e..460df0f58d 100644
  								vacrel->cutoffs.relfrozenxid);
  				appendStringInfo(&buf,
  								 _("new relfrozenxid: %llu, which is %lld XIDs ahead of previous value\n"),
-@@ -1059,7 +1057,7 @@ heap_vacuum_rel(Relation rel, const VacuumParams params,
+@@ -1096,7 +1096,7 @@ heap_vacuum_rel(Relation rel, const VacuumParams *params,
  			}
  			if (minmulti_updated)
  			{
@@ -5836,53 +5820,29 @@ index 33ec78ff8e..460df0f58d 100644
  								vacrel->cutoffs.relminmxid);
  				appendStringInfo(&buf,
  								 _("new relminmxid: %llu, which is %lld MXIDs ahead of previous value\n"),
-@@ -1269,19 +1267,6 @@ lazy_scan_heap(LVRelState *vacrel)
- 
- 		vacuum_delay_point(false);
- 
--		/*
--		 * Regularly check if wraparound failsafe should trigger.
--		 *
--		 * There is a similar check inside lazy_vacuum_all_indexes(), but
--		 * relfrozenxid might start to look dangerously old before we reach
--		 * that point.  This check also provides failsafe coverage for the
--		 * one-pass strategy, and the two-pass strategy with the index_cleanup
--		 * param set to 'off'.
--		 */
--		if (vacrel->scanned_pages > 0 &&
--			vacrel->scanned_pages % FAILSAFE_EVERY_PAGES == 0)
--			lazy_check_wraparound_failsafe(vacrel);
--
- 		/*
- 		 * Consider if we definitely have enough space to process TIDs on page
- 		 * already.  If we are close to overrunning the available space for
-@@ -1852,7 +1837,14 @@ lazy_scan_new_or_empty(LVRelState *vacrel, Buffer buf, BlockNumber blkno,
+@@ -1921,7 +1921,10 @@ lazy_scan_new_or_empty(LVRelState *vacrel, Buffer buf, BlockNumber blkno,
  
  		if (GetRecordedFreeSpace(vacrel->rel, blkno) == 0)
  		{
 -			freespace = BLCKSZ - SizeOfPageHeaderData;
-+			Size		special_size;
-+
-+			special_size = IsToastRelation(vacrel->rel) ?
-+								sizeof(ToastPageSpecialData) :
-+								sizeof(HeapPageSpecialData);
-+			freespace = BufferGetPageSize(buf)
-+						- SizeOfPageHeaderData
-+						- special_size;
++			freespace = BLCKSZ - SizeOfPageHeaderData -
++				(IsToastRelation(vacrel->rel) ?
++				 MAXALIGN(sizeof(ToastPageSpecialData)) :
++				 MAXALIGN(sizeof(HeapPageSpecialData)));
  
  			RecordPageWithFreeSpace(vacrel->rel, blkno, freespace);
  		}
-@@ -1994,7 +1986,8 @@ lazy_scan_prune(LVRelState *vacrel,
- 	heap_page_prune_and_freeze(rel, buf, vacrel->vistest, prune_options,
- 							   &vacrel->cutoffs, &presult, PRUNE_VACUUM_SCAN,
- 							   &vacrel->offnum,
--							   &vacrel->NewRelfrozenXid, &vacrel->NewRelminMxid);
-+							   &vacrel->NewRelfrozenXid, &vacrel->NewRelminMxid,
-+							   true);
+@@ -1989,7 +1992,8 @@ lazy_scan_new_or_empty(LVRelState *vacrel, Buffer buf, BlockNumber blkno,
+ 										  NULL, 0,
+ 										  NULL, 0,
+ 										  NULL, 0,
+-										  NULL, 0);
++										  NULL, 0,
++										  false);
  
- 	Assert(MultiXactIdIsValid(vacrel->NewRelminMxid));
- 	Assert(TransactionIdIsValid(vacrel->NewRelfrozenXid));
-@@ -2272,7 +2265,6 @@ lazy_scan_noprune(LVRelState *vacrel,
+ 			END_CRIT_SECTION();
+ 
+@@ -2185,7 +2189,6 @@ lazy_scan_noprune(LVRelState *vacrel,
  				recently_dead_tuples,
  				missed_dead_tuples;
  	bool		hastup;
@@ -5890,14 +5850,12 @@ index 33ec78ff8e..460df0f58d 100644
  	TransactionId NoFreezePageRelfrozenXid = vacrel->NewRelfrozenXid;
  	MultiXactId NoFreezePageRelminMxid = vacrel->NewRelminMxid;
  	OffsetNumber deadoffsets[MaxHeapTuplesPerPage];
-@@ -2317,8 +2309,15 @@ lazy_scan_noprune(LVRelState *vacrel,
+@@ -2230,8 +2233,13 @@ lazy_scan_noprune(LVRelState *vacrel,
  		}
  
  		hastup = true;			/* page prevents rel truncation */
 -		tupleheader = (HeapTupleHeader) PageGetItem(page, itemid);
 -		if (heap_tuple_should_freeze(tupleheader, &vacrel->cutoffs,
-+		tuple.t_data = (HeapTupleHeader) PageGetItem(page, itemid);
-+		tuple.t_len = ItemIdGetLength(itemid);
 +		ItemPointerSet(&(tuple.t_self), blkno, offnum);
 +		tuple.t_data = (HeapTupleHeader) PageGetItem(page, itemid);
 +		tuple.t_len = ItemIdGetLength(itemid);
@@ -5908,7 +5866,7 @@ index 33ec78ff8e..460df0f58d 100644
  									 &NoFreezePageRelfrozenXid,
  									 &NoFreezePageRelminMxid))
  		{
-@@ -2350,11 +2349,6 @@ lazy_scan_noprune(LVRelState *vacrel,
+@@ -2263,11 +2271,6 @@ lazy_scan_noprune(LVRelState *vacrel,
  			 */
  		}
  
@@ -5920,48 +5878,7 @@ index 33ec78ff8e..460df0f58d 100644
  		switch (HeapTupleSatisfiesVacuum(&tuple, vacrel->cutoffs.OldestXmin,
  										 buf))
  		{
-@@ -2615,13 +2609,6 @@ lazy_vacuum_all_indexes(LVRelState *vacrel)
- 	Assert(vacrel->do_index_vacuuming);
- 	Assert(vacrel->do_index_cleanup);
- 
--	/* Precheck for XID wraparound emergencies */
--	if (lazy_check_wraparound_failsafe(vacrel))
--	{
--		/* Wraparound emergency -- don't even start an index scan */
--		return false;
--	}
--
- 	/*
- 	 * Report that we are now vacuuming indexes and the number of indexes to
- 	 * vacuum.
-@@ -2645,12 +2632,6 @@ lazy_vacuum_all_indexes(LVRelState *vacrel)
- 			pgstat_progress_update_param(PROGRESS_VACUUM_INDEXES_PROCESSED,
- 										 idx + 1);
- 
--			if (lazy_check_wraparound_failsafe(vacrel))
--			{
--				/* Wraparound emergency -- end current index scan */
--				allindexes = false;
--				break;
--			}
- 		}
- 	}
- 	else
-@@ -2658,13 +2639,6 @@ lazy_vacuum_all_indexes(LVRelState *vacrel)
- 		/* Outsource everything to parallel variant */
- 		parallel_vacuum_bulkdel_all_indexes(vacrel->pvs, old_live_tuples,
- 											vacrel->num_index_scans);
--
--		/*
--		 * Do a postcheck to consider applying wraparound failsafe now.  Note
--		 * that parallel VACUUM only gets the precheck and this postcheck.
--		 */
--		if (lazy_check_wraparound_failsafe(vacrel))
--			allindexes = false;
- 	}
- 
- 	/*
-@@ -2958,7 +2932,8 @@ lazy_vacuum_heap_page(LVRelState *vacrel, BlockNumber blkno, Buffer buffer,
+@@ -2873,7 +2876,8 @@ lazy_vacuum_heap_page(LVRelState *vacrel, BlockNumber blkno, Buffer buffer,
  								  NULL, 0,	/* frozen */
  								  NULL, 0,	/* redirected */
  								  NULL, 0,	/* dead */
@@ -5971,97 +5888,16 @@ index 33ec78ff8e..460df0f58d 100644
  	}
  
  	END_CRIT_SECTION();
-@@ -2976,68 +2951,6 @@ lazy_vacuum_heap_page(LVRelState *vacrel, BlockNumber blkno, Buffer buffer,
- 	restore_vacuum_error_info(vacrel, &saved_err_info);
- }
- 
--/*
-- * Trigger the failsafe to avoid wraparound failure when vacrel table has a
-- * relfrozenxid and/or relminmxid that is dangerously far in the past.
-- * Triggering the failsafe makes the ongoing VACUUM bypass any further index
-- * vacuuming and heap vacuuming.  Truncating the heap is also bypassed.
-- *
-- * Any remaining work (work that VACUUM cannot just bypass) is typically sped
-- * up when the failsafe triggers.  VACUUM stops applying any cost-based delay
-- * that it started out with.
-- *
-- * Returns true when failsafe has been triggered.
-- */
--static bool
--lazy_check_wraparound_failsafe(LVRelState *vacrel)
--{
--	/* Don't warn more than once per VACUUM */
--	if (VacuumFailsafeActive)
--		return true;
--
--	if (unlikely(vacuum_xid_failsafe_check(&vacrel->cutoffs)))
--	{
--		const int	progress_index[] = {
--			PROGRESS_VACUUM_INDEXES_TOTAL,
--			PROGRESS_VACUUM_INDEXES_PROCESSED
--		};
--		int64		progress_val[2] = {0, 0};
--
--		VacuumFailsafeActive = true;
--
--		/*
--		 * Abandon use of a buffer access strategy to allow use of all of
--		 * shared buffers.  We assume the caller who allocated the memory for
--		 * the BufferAccessStrategy will free it.
--		 */
--		vacrel->bstrategy = NULL;
--
--		/* Disable index vacuuming, index cleanup, and heap rel truncation */
--		vacrel->do_index_vacuuming = false;
--		vacrel->do_index_cleanup = false;
--		vacrel->do_rel_truncate = false;
--
--		/* Reset the progress counters */
--		pgstat_progress_update_multi_param(2, progress_index, progress_val);
--
--		ereport(WARNING,
--				(errmsg("bypassing nonessential maintenance of table \"%s.%s.%s\" as a failsafe after %d index scans",
--						vacrel->dbname, vacrel->relnamespace, vacrel->relname,
--						vacrel->num_index_scans),
--				 errdetail("The table's relfrozenxid or relminmxid is too far in the past."),
--				 errhint("Consider increasing configuration parameter \"maintenance_work_mem\" or \"autovacuum_work_mem\".\n"
--						 "You might also need to consider other ways for VACUUM to keep up with the allocation of transaction IDs.")));
--
--		/* Stop applying cost limits from this point on */
--		VacuumCostActive = false;
--		VacuumCostBalance = 0;
--
--		return true;
--	}
--
--	return false;
--}
--
- /*
-  *	lazy_cleanup_all_indexes() -- cleanup all indexes of relation.
-  */
-@@ -3764,6 +3677,11 @@ heap_page_would_be_all_visible(Relation rel, Buffer buf,
- 
- 		/* Visibility checks may do IO or allocate memory */
- 		Assert(CritSectionCount == 0);
-+
-+		/*
-+		 * Do not need HeapTupleCopyXidsFromPage here, it is inside
-+		 * HeapTupleSatisfiesVacuum.
-+		 */
- 		switch (HeapTupleSatisfiesVacuum(&tuple, OldestXmin, buf))
- 		{
- 			case HEAPTUPLE_LIVE:
-@@ -3782,7 +3700,7 @@ heap_page_would_be_all_visible(Relation rel, Buffer buf,
- 					 * The inserter definitely committed. But is it old enough
- 					 * that everyone sees it as committed?
+@@ -3730,7 +3734,7 @@ heap_page_would_be_all_visible(Relation rel, Buffer buf,
+ 					 * to be running. In that case, the page is not considered
+ 					 * all-visible.
  					 */
 -					xmin = HeapTupleHeaderGetXmin(tuple.t_data);
 +					xmin = HeapTupleGetXmin(&tuple);
- 					if (!TransactionIdPrecedes(xmin, OldestXmin))
- 					{
- 						all_visible = false;
-@@ -3797,7 +3715,7 @@ heap_page_would_be_all_visible(Relation rel, Buffer buf,
+ 
+ 					/* Track newest xmin on page. */
+ 					if (TransactionIdFollows(xmin, *newest_live_xid) &&
+@@ -3739,7 +3743,7 @@ heap_page_would_be_all_visible(Relation rel, Buffer buf,
  
  					/* Check whether this tuple is already frozen or not */
  					if (all_visible && *all_frozen &&
