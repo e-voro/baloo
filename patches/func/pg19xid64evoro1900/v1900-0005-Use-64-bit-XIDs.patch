@@ -7542,10 +7542,10 @@ index 5712fac369..44937e106b 100644
  	LWLockAcquire(ProcArrayLock, LW_EXCLUSIVE);
  	MyProc->statusFlags |= PROC_IN_SAFE_IC;
 diff --git a/src/backend/commands/sequence.c b/src/backend/commands/sequence.c
-index 8d671b7a29..6694eda721 100644
+index 551667650ba..9a18da9205f 100644
 --- a/src/backend/commands/sequence.c
 +++ b/src/backend/commands/sequence.c
-@@ -50,6 +50,25 @@
+@@ -49,6 +49,25 @@
  #include "utils/syscache.h"
  #include "utils/varlena.h"
  
@@ -7559,7 +7559,7 @@ index 8d671b7a29..6694eda721 100644
 +static inline void
 +SeqTupleSetXmax(HeapTuple htup, TransactionId xid)
 +{
-+	htup->t_xmin = xid;
++	htup->t_xmax = xid;
 +	htup->t_data->t_choice.t_heap.t_xmax = xid;
 +}
 +
@@ -7571,7 +7571,7 @@ index 8d671b7a29..6694eda721 100644
  
  /*
   * We don't want to log each fetching of a value from a sequence,
-@@ -388,10 +407,10 @@ fill_seq_fork_with_data(Relation rel, HeapTuple tuple, ForkNumber forkNum)
+@@ -377,10 +396,10 @@ fill_seq_fork_with_data(Relation rel, HeapTuple tuple, ForkNumber forkNum)
  	 * because if the current transaction aborts, no other xact will ever
  	 * examine the sequence tuple anyway.
  	 */
@@ -7585,7 +7585,7 @@ index 8d671b7a29..6694eda721 100644
  	tuple->t_data->t_infomask |= HEAP_XMAX_INVALID;
  	ItemPointerSet(&tuple->t_data->t_ctid, 0, FirstOffsetNumber);
  
-@@ -1222,6 +1241,7 @@ read_seq_tuple(Relation rel, Buffer *buf, HeapTuple seqdatatuple)
+@@ -1211,6 +1230,7 @@ read_seq_tuple(Relation rel, Buffer *buf, HeapTuple seqdatatuple)
  	/* Note we currently only bother to set these two fields of *seqdatatuple */
  	seqdatatuple->t_data = (HeapTupleHeader) PageGetItem(page, lp);
  	seqdatatuple->t_len = ItemIdGetLength(lp);
@@ -7593,7 +7593,7 @@ index 8d671b7a29..6694eda721 100644
  
  	/*
  	 * Previous releases of Postgres neglected to prevent SELECT FOR UPDATE on
-@@ -1232,9 +1252,9 @@ read_seq_tuple(Relation rel, Buffer *buf, HeapTuple seqdatatuple)
+@@ -1221,9 +1241,9 @@ read_seq_tuple(Relation rel, Buffer *buf, HeapTuple seqdatatuple)
  	 * this again if the update gets lost.
  	 */
  	Assert(!(seqdatatuple->t_data->t_infomask & HEAP_XMAX_IS_MULTI));
