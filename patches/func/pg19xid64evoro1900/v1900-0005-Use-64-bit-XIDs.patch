@@ -70,7 +70,7 @@ Discussion: https://postgr.es/m/CAJ7c6TPDOYBYrnCAeyndkBktO0WG2xSdYduTF0nxq%2Bvfk
  src/backend/access/transam/commit_ts.c             |   19 
  src/backend/access/transam/multixact.c             |  275 ++++++++------------------------
  src/backend/access/transam/slru.c                  |   10 
- src/backend/access/transam/subtrans.c              |    4 
+ src/backend/access/transam/subtrans.c              |    3 
  src/backend/access/transam/transam.c               |    1 
  src/backend/access/transam/twophase.c              |   83 +-
  src/backend/access/transam/varsup.c                |  177 ----
@@ -239,7 +239,7 @@ Discussion: https://postgr.es/m/CAJ7c6TPDOYBYrnCAeyndkBktO0WG2xSdYduTF0nxq%2Bvfk
  src/test/xid-64/t/006_zeropage.pl                  |   33 +
  src/test/xid-64/t/007_first_multi.pl               |   83 ++
  src/tools/pgindent/typedefs.list                   |    4 
- 217 files changed, 6953 insertions(+), 2056 deletions(-)
+ 217 files changed, 6952 insertions(+), 2056 deletions(-)
 
 diff --git a/contrib/amcheck/verify_heapam.c b/contrib/amcheck/verify_heapam.c
 index e5ea68b801..14ce47cf80 100644
@@ -6805,10 +6805,10 @@ index 47dd52d6749..55bcea7b6bf 100644
  	Assert(!SlruMayDeleteSegment(ctl,
  								 (newestPage -
 diff --git a/src/backend/access/transam/subtrans.c b/src/backend/access/transam/subtrans.c
-index 3ca794e02d..a50c968f83 100644
+index 40973f6f9a1..1452eafa445 100644
 --- a/src/backend/access/transam/subtrans.c
 +++ b/src/backend/access/transam/subtrans.c
-@@ -315,9 +315,6 @@ StartupSUBTRANS(TransactionId oldestActiveXID)
+@@ -334,9 +334,6 @@ StartupSUBTRANS(TransactionId oldestActiveXID)
  			break;
  
  		startPage++;
@@ -6818,14 +6818,6 @@ index 3ca794e02d..a50c968f83 100644
  	}
  
  	LWLockRelease(lock);
-@@ -395,6 +392,7 @@ TruncateSUBTRANS(TransactionId oldestXact)
- 	 * a page and oldestXact == next XID.  In that case, if we didn't subtract
- 	 * one, we'd trigger SimpleLruTruncate's wraparound detection.
- 	 */
-+
- 	TransactionIdRetreat(oldestXact);
- 	cutoffPage = TransactionIdToPage(oldestXact);
- 
 diff --git a/src/backend/access/transam/transam.c b/src/backend/access/transam/transam.c
 index 5426712aa7..e09e1da6fa 100644
 --- a/src/backend/access/transam/transam.c

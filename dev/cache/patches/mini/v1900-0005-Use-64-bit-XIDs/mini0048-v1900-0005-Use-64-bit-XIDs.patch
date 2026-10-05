@@ -1,0 +1,14 @@
+diff --git a/src/backend/access/transam/subtrans.c b/src/backend/access/transam/subtrans.c
+index 40973f6f9a1..1452eafa445 100644
+--- a/src/backend/access/transam/subtrans.c
++++ b/src/backend/access/transam/subtrans.c
+@@ -334,9 +334,6 @@ StartupSUBTRANS(TransactionId oldestActiveXID)
+ 			break;
+ 
+ 		startPage++;
+-		/* must account for wraparound */
+-		if (startPage > TransactionIdToPage(MaxTransactionId))
+-			startPage = 0;
+ 	}
+ 
+ 	LWLockRelease(lock);
