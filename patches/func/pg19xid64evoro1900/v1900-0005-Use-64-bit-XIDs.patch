@@ -73,7 +73,7 @@ Discussion: https://postgr.es/m/CAJ7c6TPDOYBYrnCAeyndkBktO0WG2xSdYduTF0nxq%2Bvfk
  src/backend/access/transam/subtrans.c              |    3 
  src/backend/access/transam/transam.c               |    1 
  src/backend/access/transam/twophase.c              |   83 +-
- src/backend/access/transam/varsup.c                |  177 ----
+ src/backend/access/transam/varsup.c                |  207 +++---------------------------------
  src/backend/access/transam/xact.c                  |   35 -
  src/backend/access/transam/xlog.c                  |    3 
  src/backend/access/transam/xloginsert.c            |    7 
@@ -239,7 +239,7 @@ Discussion: https://postgr.es/m/CAJ7c6TPDOYBYrnCAeyndkBktO0WG2xSdYduTF0nxq%2Bvfk
  src/test/xid-64/t/006_zeropage.pl                  |   33 +
  src/test/xid-64/t/007_first_multi.pl               |   83 ++
  src/tools/pgindent/typedefs.list                   |    4 
- 217 files changed, 6952 insertions(+), 2056 deletions(-)
+ 217 files changed, 6958 insertions(+), 2080 deletions(-)
 
 diff --git a/contrib/amcheck/verify_heapam.c b/contrib/amcheck/verify_heapam.c
 index e5ea68b801..14ce47cf80 100644
@@ -7032,10 +7032,28 @@ index 23ea4b3eae..fbc0380882 100644
  	PrepareRedoRemoveFull(fxid, giveWarning);
  }
 diff --git a/src/backend/access/transam/varsup.c b/src/backend/access/transam/varsup.c
-index 08295a494d..910ac5f0f9 100644
+index 68e26dcbe14..dc6186ac971 100644
 --- a/src/backend/access/transam/varsup.c
 +++ b/src/backend/access/transam/varsup.c
-@@ -93,9 +93,9 @@ GetNewTransactionId(bool isSubXact)
+@@ -24,7 +24,6 @@
+ #include "storage/pmsignal.h"
+ #include "storage/proc.h"
+ #include "storage/subsystems.h"
+-#include "utils/lsyscache.h"
+ #include "utils/syscache.h"
+ 
+ 
+@@ -61,8 +60,7 @@ VarsupShmemRequest(void *arg)
+  *
+  * Note: when this is called, we are actually already inside a valid
+  * transaction, since XIDs are now not allocated until the transaction
+- * does something.  So it is safe to do a database lookup if we want to
+- * issue a warning about XID wrap.
++ * does something.
+  */
+ FullTransactionId
+ GetNewTransactionId(bool isSubXact)
+@@ -84,9 +82,9 @@ GetNewTransactionId(bool isSubXact)
  	if (IsBootstrapProcessingMode())
  	{
  		Assert(!isSubXact);
@@ -7048,7 +7066,7 @@ index 08295a494d..910ac5f0f9 100644
  	}
  
  	/* safety check, we should never get this far in a HS standby */
-@@ -107,19 +107,6 @@ GetNewTransactionId(bool isSubXact)
+@@ -98,33 +96,9 @@ GetNewTransactionId(bool isSubXact)
  	full_xid = TransamVariables->nextXid;
  	xid = XidFromFullTransactionId(full_xid);
  
@@ -7065,13 +7083,16 @@ index 08295a494d..910ac5f0f9 100644
 -	 * Note that this coding also appears in GetNewMultiXactId.
 -	 *----------
 -	 */
++	/* Request autovacuum once the age-based vacuum limit is reached. */
  	if (TransactionIdFollowsOrEquals(xid, TransamVariables->xidVacLimit))
  	{
- 		/*
-@@ -129,11 +116,6 @@ GetNewTransactionId(bool isSubXact)
- 		 * possibility of deadlock while doing get_database_name(). First,
- 		 * copy all the shared values we'll need in this path.
- 		 */
+-		/*
+-		 * For safety's sake, we release XidGenLock while sending signals,
+-		 * warnings, etc.  This is not so much because we care about
+-		 * preserving concurrency in this situation, as to avoid any
+-		 * possibility of deadlock while doing get_database_name(). First,
+-		 * copy all the shared values we'll need in this path.
+-		 */
 -		TransactionId xidWarnLimit = TransamVariables->xidWarnLimit;
 -		TransactionId xidStopLimit = TransamVariables->xidStopLimit;
 -		TransactionId xidWrapLimit = TransamVariables->xidWrapLimit;
@@ -7080,7 +7101,7 @@ index 08295a494d..910ac5f0f9 100644
  		LWLockRelease(XidGenLock);
  
  		/*
-@@ -144,48 +126,6 @@ GetNewTransactionId(bool isSubXact)
+@@ -135,52 +109,6 @@ GetNewTransactionId(bool isSubXact)
  		if (IsUnderPostmaster && (xid % 65536) == 0)
  			SendPostmasterSignal(PMSIGNAL_START_AUTOVAC_LAUNCHER);
  
@@ -7114,22 +7135,35 @@ index 08295a494d..910ac5f0f9 100644
 -				ereport(WARNING,
 -						(errmsg("database \"%s\" must be vacuumed within %llu transactions",
 -								oldest_datname,
--								(unsigned long long) xidWrapLimit - xid),
+-								(unsigned long long) (xidWrapLimit - xid)),
+-						 errdetail("Approximately %.2f%% of transaction ID space remains before wraparound.",
+-								   (double) (xidWrapLimit - xid) / (MaxTransactionId / 2) * 100),
 -						 errhint("To avoid transaction ID assignment failures, execute a database-wide VACUUM in that database.\n"
 -								 "You might also need to commit or roll back old prepared transactions, or drop stale replication slots.")));
 -			else
 -				ereport(WARNING,
 -						(errmsg("database with OID %u must be vacuumed within %llu transactions",
 -								oldest_datoid,
--								(unsigned long long) xidWrapLimit - xid),
--						 errhint("To avoid XID assignment failures, execute a database-wide VACUUM in that database.\n"
+-								(unsigned long long) (xidWrapLimit - xid)),
+-						 errdetail("Approximately %.2f%% of transaction ID space remains before wraparound.",
+-								   (double) (xidWrapLimit - xid) / (MaxTransactionId / 2) * 100),
+-						 errhint("To avoid transaction ID assignment failures, execute a database-wide VACUUM in that database.\n"
 -								 "You might also need to commit or roll back old prepared transactions, or drop stale replication slots.")));
 -		}
 -
  		/* Re-acquire lock and start over */
  		LWLockAcquire(XidGenLock, LW_EXCLUSIVE);
  		full_xid = TransamVariables->nextXid;
-@@ -255,8 +195,8 @@ GetNewTransactionId(bool isSubXact)
+@@ -217,7 +145,7 @@ GetNewTransactionId(bool isSubXact)
+ 	 * Note that readers of ProcGlobal->xids/PGPROC->xid should be careful to
+ 	 * fetch the value for each proc only once, rather than assume they can
+ 	 * read a value multiple times and get the same answer each time.  Note we
+-	 * are assuming that TransactionId and int fetch/store are atomic.
++	 * use atomic access for the shared top-level XID slots.
+ 	 *
+ 	 * The same comments apply to the subxact xid count and overflow fields.
+ 	 *
+@@ -250,8 +178,8 @@ GetNewTransactionId(bool isSubXact)
  		Assert(!MyProc->subxidStatus.overflowed);
  
  		/* LWLockRelease acts as barrier */
@@ -7140,7 +7174,7 @@ index 08295a494d..910ac5f0f9 100644
  	}
  	else
  	{
-@@ -297,7 +237,7 @@ ReadNextFullTransactionId(void)
+@@ -292,7 +220,7 @@ ReadNextFullTransactionId(void)
  }
  
  /*
@@ -7149,7 +7183,7 @@ index 08295a494d..910ac5f0f9 100644
   * This must only be called during recovery or from two-phase start-up code.
   */
  void
-@@ -305,7 +245,6 @@ AdvanceNextFullTransactionIdPastXid(TransactionId xid)
+@@ -300,7 +228,6 @@ AdvanceNextFullTransactionIdPastXid(TransactionId xid)
  {
  	FullTransactionId newNextFullXid;
  	TransactionId next_xid;
@@ -7157,7 +7191,7 @@ index 08295a494d..910ac5f0f9 100644
  
  	/*
  	 * It is safe to read nextXid without a lock, because this is only called
-@@ -319,19 +258,9 @@ AdvanceNextFullTransactionIdPastXid(TransactionId xid)
+@@ -314,19 +241,9 @@ AdvanceNextFullTransactionIdPastXid(TransactionId xid)
  	if (!TransactionIdFollowsOrEquals(xid, next_xid))
  		return;
  
@@ -7169,7 +7203,7 @@ index 08295a494d..910ac5f0f9 100644
 -	 * because the span of active xids cannot exceed one epoch at any given
 -	 * point in the WAL stream.
 -	 */
-+	/* Compute the FullTransactionId that comes after the given xid. */
++	/* Compute the next full XID directly from the widened transaction ID. */
  	TransactionIdAdvance(xid);
 -	epoch = EpochFromFullTransactionId(TransamVariables->nextXid);
 -	if (unlikely(xid < next_xid))
@@ -7179,7 +7213,16 @@ index 08295a494d..910ac5f0f9 100644
  
  	/*
  	 * We still need to take a lock to modify the value when there are
-@@ -372,61 +301,14 @@ void
+@@ -359,7 +276,7 @@ AdvanceOldestClogXid(TransactionId oldest_datfrozenxid)
+ }
+ 
+ /*
+- * Determine the last safe XID to allocate using the currently oldest
++ * Determine when to force autovacuum using the currently oldest
+  * datfrozenxid (ie, the oldest XID that might exist in any database
+  * of our cluster), and the OID of the (or a) database with that value.
+  */
+@@ -367,61 +284,14 @@ void
  SetTransactionIdLimit(TransactionId oldest_datfrozenxid, Oid oldest_datoid)
  {
  	TransactionId xidVacLimit;
@@ -7218,16 +7261,16 @@ index 08295a494d..910ac5f0f9 100644
 -		xidStopLimit -= FirstNormalTransactionId;
 -
 -	/*
--	 * We'll start complaining loudly when we get within 40M transactions of
+-	 * We'll start complaining loudly when we get within 100M transactions of
 -	 * data loss.  This is kind of arbitrary, but if you let your gas gauge
--	 * get down to 2% of full, would you be looking for the next gas station?
+-	 * get down to 5% of full, would you be looking for the next gas station?
 -	 * We need to be fairly liberal about this number because there are lots
 -	 * of scenarios where most transactions are done by automatic clients that
 -	 * won't pay attention to warnings.  (No, we're not gonna make this
 -	 * configurable.  If you know enough to configure it, you know enough to
 -	 * not get in this kind of trouble in the first place.)
 -	 */
--	xidWarnLimit = xidWrapLimit - 40000000;
+-	xidWarnLimit = xidWrapLimit - 100000000;
 -	if (xidWarnLimit < FirstNormalTransactionId)
 -		xidWarnLimit -= FirstNormalTransactionId;
 -
@@ -7241,7 +7284,14 @@ index 08295a494d..910ac5f0f9 100644
  	 * Note: autovacuum_freeze_max_age is a PGC_POSTMASTER parameter so that
  	 * we don't have to worry about dealing with on-the-fly changes in its
  	 * value.  It doesn't look practical to update shared state from a GUC
-@@ -443,18 +325,10 @@ SetTransactionIdLimit(TransactionId oldest_datfrozenxid, Oid oldest_datoid)
+@@ -431,25 +301,15 @@ SetTransactionIdLimit(TransactionId oldest_datfrozenxid, Oid oldest_datoid)
+ 	 * SetMultiXactIdLimit.
+ 	 */
+ 	xidVacLimit = oldest_datfrozenxid + autovacuum_freeze_max_age;
+-	if (xidVacLimit < FirstNormalTransactionId)
+-		xidVacLimit += FirstNormalTransactionId;
+ 
+ 	/* Grab lock for just long enough to set the new limit values */
  	LWLockAcquire(XidGenLock, LW_EXCLUSIVE);
  	TransamVariables->oldestXid = oldest_datfrozenxid;
  	TransamVariables->xidVacLimit = xidVacLimit;
@@ -7260,7 +7310,7 @@ index 08295a494d..910ac5f0f9 100644
  	/*
  	 * If past the autovacuum force point, immediately signal an autovac
  	 * request.  The reason for this is that autovac only processes one
-@@ -465,41 +339,6 @@ SetTransactionIdLimit(TransactionId oldest_datfrozenxid, Oid oldest_datoid)
+@@ -460,55 +320,16 @@ SetTransactionIdLimit(TransactionId oldest_datfrozenxid, Oid oldest_datoid)
  	if (TransactionIdFollowsOrEquals(curXid, xidVacLimit) &&
  		IsUnderPostmaster && !InRecovery)
  		SendPostmasterSignal(PMSIGNAL_START_AUTOVAC_LAUNCHER);
@@ -7288,20 +7338,36 @@ index 08295a494d..910ac5f0f9 100644
 -			ereport(WARNING,
 -					(errmsg("database \"%s\" must be vacuumed within %llu transactions",
 -							oldest_datname,
--							(unsigned long long) xidWrapLimit - curXid),
--					 errhint("To avoid XID assignment failures, execute a database-wide VACUUM in that database.\n"
+-							(unsigned long long) (xidWrapLimit - curXid)),
+-					 errdetail("Approximately %.2f%% of transaction ID space remains before wraparound.",
+-							   (double) (xidWrapLimit - curXid) / (MaxTransactionId / 2) * 100),
+-					 errhint("To avoid transaction ID assignment failures, execute a database-wide VACUUM in that database.\n"
 -							 "You might also need to commit or roll back old prepared transactions, or drop stale replication slots.")));
 -		else
 -			ereport(WARNING,
 -					(errmsg("database with OID %u must be vacuumed within %llu transactions",
 -							oldest_datoid,
--							(unsigned long long) xidWrapLimit - curXid),
--					 errhint("To avoid XID assignment failures, execute a database-wide VACUUM in that database.\n"
+-							(unsigned long long) (xidWrapLimit - curXid)),
+-					 errdetail("Approximately %.2f%% of transaction ID space remains before wraparound.",
+-							   (double) (xidWrapLimit - curXid) / (MaxTransactionId / 2) * 100),
+-					 errhint("To avoid transaction ID assignment failures, execute a database-wide VACUUM in that database.\n"
 -							 "You might also need to commit or roll back old prepared transactions, or drop stale replication slots.")));
 -	}
  }
  
  
+ /*
+- * ForceTransactionIdLimitUpdate -- does the XID wrap-limit data need updating?
++ * ForceTransactionIdLimitUpdate -- does the XID vacuum limit need updating?
+  *
+  * We primarily check whether oldestXidDB is valid.  The cases we have in
+  * mind are that that database was dropped, or the field was reset to zero
+  * by pg_resetwal.  In either case we should force recalculation of the
+- * wrap limit.  Also do it if oldestXid is old enough to be forcing
++ * vacuum limit.  Also do it if oldestXid is old enough to be forcing
+  * autovacuums or other actions; this ensures we update our state as soon
+  * as possible once extra overhead is being incurred.
+  */
 diff --git a/src/backend/access/transam/xact.c b/src/backend/access/transam/xact.c
 index 73b1f6dbe1..ae057eacd6 100644
 --- a/src/backend/access/transam/xact.c
