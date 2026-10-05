@@ -7703,18 +7703,18 @@ index f67e1804718..e6ae8c53b01 100644
  	{
  		bool		update = false;
 diff --git a/src/backend/commands/wait.c b/src/backend/commands/wait.c
-index a37bddaefb..2e73e28d7a 100644
+index 40a6ffde16b..c7c8db3119a 100644
 --- a/src/backend/commands/wait.c
 +++ b/src/backend/commands/wait.c
-@@ -138,7 +138,7 @@ ExecWaitStmt(ParseState *pstate, WaitStmt *stmt, DestReceiver *dest)
+@@ -178,7 +178,7 @@ ExecWaitStmt(ParseState *pstate, WaitStmt *stmt, bool isTopLevel,
  	 * As the result we should hold no snapshot, and correspondingly our xmin
  	 * should be unset.
  	 */
 -	Assert(MyProc->xmin == InvalidTransactionId);
 +	Assert(pg_atomic_read_u64(&MyProc->xmin) == InvalidTransactionId);
  
- 	waitLSNResult = WaitForLSN(WAIT_LSN_TYPE_REPLAY, lsn, timeout);
- 
+ 	/*
+ 	 * Validate that the requested mode matches the current server state.
 diff --git a/src/backend/executor/execExprInterp.c b/src/backend/executor/execExprInterp.c
 index 0e1a74976f..c8fbbe5ffd 100644
 --- a/src/backend/executor/execExprInterp.c
