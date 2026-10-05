@@ -74,7 +74,7 @@ Discussion: https://postgr.es/m/CAJ7c6TPDOYBYrnCAeyndkBktO0WG2xSdYduTF0nxq%2Bvfk
  src/backend/access/transam/transam.c               |    1 
  src/backend/access/transam/twophase.c              |   83 +-
  src/backend/access/transam/varsup.c                |  207 +++---------------------------------
- src/backend/access/transam/xact.c                  |   35 -
+ src/backend/access/transam/xact.c                  |    6 ++++--
  src/backend/access/transam/xlog.c                  |    3 
  src/backend/access/transam/xloginsert.c            |    7 
  src/backend/access/transam/xlogreader.c            |    3 
@@ -239,7 +239,7 @@ Discussion: https://postgr.es/m/CAJ7c6TPDOYBYrnCAeyndkBktO0WG2xSdYduTF0nxq%2Bvfk
  src/test/xid-64/t/006_zeropage.pl                  |   33 +
  src/test/xid-64/t/007_first_multi.pl               |   83 ++
  src/tools/pgindent/typedefs.list                   |    4 
- 217 files changed, 6958 insertions(+), 2080 deletions(-)
+ 217 files changed, 6938 insertions(+), 2071 deletions(-)
 
 diff --git a/contrib/amcheck/verify_heapam.c b/contrib/amcheck/verify_heapam.c
 index e5ea68b801..14ce47cf80 100644
@@ -7369,63 +7369,20 @@ index 68e26dcbe14..dc6186ac971 100644
   * as possible once extra overhead is being incurred.
   */
 diff --git a/src/backend/access/transam/xact.c b/src/backend/access/transam/xact.c
-index 73b1f6dbe1..ae057eacd6 100644
+index 689890907de..342ad856a54 100644
 --- a/src/backend/access/transam/xact.c
 +++ b/src/backend/access/transam/xact.c
-@@ -5896,6 +5896,17 @@ XactLogCommitRecord(TimestampTz commit_time,
- 		xl_subxacts.nsubxacts = nsubxacts;
- 	}
- 
-+	if (TransactionIdIsValid(twophase_xid))
-+	{
-+		xl_xinfo.xinfo |= XACT_XINFO_HAS_TWOPHASE;
-+		xl_twophase.xid_lo = (uint32) (twophase_xid & 0xFFFFFFFF);
-+		xl_twophase.xid_hi = (uint32) (twophase_xid >> 32);
-+		Assert(twophase_gid != NULL);
-+
-+		if (XLogLogicalInfoActive())
-+			xl_xinfo.xinfo |= XACT_XINFO_HAS_GID;
-+	}
-+
- 	if (nrels > 0)
+@@ -5959,7 +5959,8 @@ XactLogCommitRecord(TimestampTz commit_time,
+ 	if (TransactionIdIsValid(twophase_xid))
  	{
- 		xl_xinfo.xinfo |= XACT_XINFO_HAS_RELFILELOCATORS;
-@@ -5915,16 +5926,6 @@ XactLogCommitRecord(TimestampTz commit_time,
- 		xl_invals.nmsgs = nmsgs;
- 	}
- 
--	if (TransactionIdIsValid(twophase_xid))
--	{
--		xl_xinfo.xinfo |= XACT_XINFO_HAS_TWOPHASE;
+ 		xl_xinfo.xinfo |= XACT_XINFO_HAS_TWOPHASE;
 -		xl_twophase.xid = twophase_xid;
--		Assert(twophase_gid != NULL);
--
--		if (XLogLogicalInfoActive())
--			xl_xinfo.xinfo |= XACT_XINFO_HAS_GID;
--	}
--
- 	/* dump transaction origin information */
- 	if (replorigin_session_origin != InvalidRepOriginId)
- 	{
-@@ -6045,6 +6046,17 @@ XactLogAbortRecord(TimestampTz abort_time,
- 		xl_subxacts.nsubxacts = nsubxacts;
- 	}
- 
-+	if (TransactionIdIsValid(twophase_xid))
-+	{
-+		xl_xinfo.xinfo |= XACT_XINFO_HAS_TWOPHASE;
 +		xl_twophase.xid_lo = (uint32) (twophase_xid & 0xFFFFFFFF);
 +		xl_twophase.xid_hi = (uint32) (twophase_xid >> 32);
-+		Assert(twophase_gid != NULL);
-+
-+		if (XLogLogicalInfoActive())
-+			xl_xinfo.xinfo |= XACT_XINFO_HAS_GID;
-+	}
-+
- 	if (nrels > 0)
- 	{
- 		xl_xinfo.xinfo |= XACT_XINFO_HAS_RELFILELOCATORS;
-@@ -6061,7 +6073,8 @@ XactLogAbortRecord(TimestampTz abort_time,
+ 		Assert(twophase_gid != NULL);
+ 
+ 		if (XLogLogicalInfoActive())
+@@ -6102,7 +6103,8 @@ XactLogAbortRecord(TimestampTz abort_time,
  	if (TransactionIdIsValid(twophase_xid))
  	{
  		xl_xinfo.xinfo |= XACT_XINFO_HAS_TWOPHASE;

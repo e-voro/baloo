@@ -1,0 +1,24 @@
+diff --git a/src/backend/access/transam/xact.c b/src/backend/access/transam/xact.c
+index 689890907de..342ad856a54 100644
+--- a/src/backend/access/transam/xact.c
++++ b/src/backend/access/transam/xact.c
+@@ -5959,7 +5959,8 @@ XactLogCommitRecord(TimestampTz commit_time,
+ 	if (TransactionIdIsValid(twophase_xid))
+ 	{
+ 		xl_xinfo.xinfo |= XACT_XINFO_HAS_TWOPHASE;
+-		xl_twophase.xid = twophase_xid;
++		xl_twophase.xid_lo = (uint32) (twophase_xid & 0xFFFFFFFF);
++		xl_twophase.xid_hi = (uint32) (twophase_xid >> 32);
+ 		Assert(twophase_gid != NULL);
+ 
+ 		if (XLogLogicalInfoActive())
+@@ -6102,7 +6103,8 @@ XactLogAbortRecord(TimestampTz abort_time,
+ 	if (TransactionIdIsValid(twophase_xid))
+ 	{
+ 		xl_xinfo.xinfo |= XACT_XINFO_HAS_TWOPHASE;
+-		xl_twophase.xid = twophase_xid;
++		xl_twophase.xid_lo = (uint32) (twophase_xid & 0xFFFFFFFF);
++		xl_twophase.xid_hi = (uint32) (twophase_xid >> 32);
+ 		Assert(twophase_gid != NULL);
+ 
+ 		if (XLogLogicalInfoActive())
