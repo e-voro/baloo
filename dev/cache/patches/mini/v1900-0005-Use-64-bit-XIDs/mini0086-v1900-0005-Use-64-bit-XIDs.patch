@@ -1,0 +1,13 @@
+diff --git a/src/backend/storage/buffer/Makefile b/src/backend/storage/buffer/Makefile
+index fd7c40dcb08..ffcc0fc290e 100644
+--- a/src/backend/storage/buffer/Makefile
++++ b/src/backend/storage/buffer/Makefile
+@@ -17,6 +17,7 @@ OBJS = \
+ 	buf_table.o \
+ 	bufmgr.o \
+ 	freelist.o \
+-	localbuf.o
++	localbuf.o \
++	heap_convert.o
+ 
+ include $(top_srcdir)/src/backend/common.mk

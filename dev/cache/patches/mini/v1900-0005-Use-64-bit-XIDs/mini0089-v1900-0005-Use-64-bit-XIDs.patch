@@ -1,0 +1,11 @@
+diff --git a/src/backend/storage/buffer/meson.build b/src/backend/storage/buffer/meson.build
+index ed84bf08971..800e7588c75 100644
+--- a/src/backend/storage/buffer/meson.build
++++ b/src/backend/storage/buffer/meson.build
+@@ -5,5 +5,6 @@ backend_sources += files(
+   'buf_table.c',
+   'bufmgr.c',
+   'freelist.c',
++  'heap_convert.c',
+   'localbuf.c',
+ )

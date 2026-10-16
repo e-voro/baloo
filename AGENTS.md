@@ -147,3 +147,27 @@ pages or a separate tuple-XID payload to prune WAL.
 - Retain 0004 parser, rollback and INT64_MIN serialization fixes. The focused
   reproducible probe is baloo/dev/tests/xid64_guc/run.sh PREFIX. Its original
   rollback failure was fixed; check the report for coverage and limitations.
+
+## AIO conversion checkpoint (2026-10-17)
+
+- User explicitly authorized the design in
+  `patches/func/tt186xid64/0008-Upgrade-and-fix-page-conversion-for-the-new-AIO-syst.patch`.
+  Per-handle RelationExtraData replaces the shared Relation pointer; conversion
+  sets BM_CONVERTED and defers WAL logging to a later modifying backend.
+- mini0085(aio_callback.c), mini0164(aio.h), and mini0165(aio_internal.h) are
+  superseded: skip notes replace the obsolete shared-pointer changes.
+- mini0087(bufmgr.c) includes the new metadata headers and the already-applied
+  adaptations of mini0166(buf_internals.h) and mini0167(bufmgr.h). Skip those
+  later minis. PG19 keeps its 64-bit state and lock layout; BM_CONVERTED uses
+  unused flag bit 6 and is published with UnlockBufHdrExt.
+- PG19 content-lock acquisition requires a private pin. Read completion instead
+  converts under the existing exclusive I/O ownership before BM_VALID; failed
+  reads are excluded. Converter helper assertions allow this AIO context.
+- mini0088(heap_convert.c) incorporates the supplied conversion/WAL design;
+  mini0198(regress.c) is prepared for its new signature but is not yet applied.
+- The user will supply the missing-relcache fix later. Keep that case and AIO
+  critical-section error propagation in codex_todo.txt; do not claim them fixed.
+- Applied source checkpoint is through mini0089(meson.build). Next is
+  mini0090(procarray.c). Full compile/recovery testing still awaits the rest
+  of 0005. Saved affected aggregate sections were applied to 8ca324058af in a
+  scratch directory and matched the intended files exactly.

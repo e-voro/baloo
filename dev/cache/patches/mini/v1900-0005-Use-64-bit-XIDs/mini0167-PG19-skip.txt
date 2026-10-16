@@ -1,0 +1,2 @@
+mini0167(bufmgr.h) was adapted and applied early with mini0087(bufmgr.c).
+Its PG19 flag/API definitions are already present; do not replay the old mini.

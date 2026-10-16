@@ -1,0 +1,238 @@
+diff --git a/src/backend/storage/buffer/bufmgr.c b/src/backend/storage/buffer/bufmgr.c
+index 169829eb020..89564657dee 100644
+--- a/src/backend/storage/buffer/bufmgr.c
++++ b/src/backend/storage/buffer/bufmgr.c
+@@ -1952,6 +1952,7 @@ AsyncReadBuffers(ReadBuffersOperation *operation, int *nblocks_progress)
+ 	IOContext	io_context;
+ 	IOObject	io_object;
+ 	instr_time	io_start;
++	PgAioTargetData *sd;
+ 	StartBufferIOResult status;
+ 
+ 	if (persistence == RELPERSISTENCE_TEMP)
+@@ -2149,6 +2150,21 @@ AsyncReadBuffers(ReadBuffersOperation *operation, int *nblocks_progress)
+ 	 *   table)
+ 	 * ---
+ 	 */
++	/* Copy backend-local relation metadata before the IO can be submitted. */
++	sd = pgaio_io_get_target_data(ioh);
++	if (operation->rel)
++	{
++		sd->smgr.relextradata.relfrozenxid = operation->rel->rd_rel->relfrozenxid;
++		sd->smgr.relextradata.relminmxid = operation->rel->rd_rel->relminmxid;
++		sd->smgr.relextradata.relkind = operation->rel->rd_rel->relkind;
++	}
++	else
++	{
++		sd->smgr.relextradata.relfrozenxid = InvalidTransactionId;
++		sd->smgr.relextradata.relminmxid = InvalidMultiXactId;
++		sd->smgr.relextradata.relkind = RELKIND_UNKNOWN;
++	}
++
+ 	io_start = pgstat_prepare_io_time(track_io_timing);
+ 	smgrstartreadv(ioh, operation->smgr, forknum,
+ 				   blocknum,
+@@ -5861,6 +5877,57 @@ MarkBufferDirtyHint(Buffer buffer, bool buffer_std)
+ 							  buffer_std);
+ }
+ 
++/*
++ * Track a format conversion that must be covered by a full image in WAL.
++ * During read completion the AIO subsystem owns the buffer until BM_VALID
++ * is published, so the completing process need not have a private pin.
++ */
++void
++MarkBufferConverted(Buffer buffer, bool converted)
++{
++	BufferDesc *bufHdr;
++	uint64		buf_state;
++
++	Assert(BufferIsValid(buffer) && !BufferIsLocal(buffer));
++	bufHdr = GetBufferDescriptor(buffer - 1);
++	buf_state = pg_atomic_read_u64(&bufHdr->state);
++	Assert(!converted ||
++		   ((buf_state & BM_IO_IN_PROGRESS) && !(buf_state & BM_VALID)) ||
++		   BufferLockHeldByMe(bufHdr));
++
++	if (((buf_state & BM_CONVERTED) != 0) == converted)
++		return;
++
++	buf_state = LockBufHdr(bufHdr);
++	UnlockBufHdrExt(bufHdr, buf_state,
++					converted ? BM_CONVERTED : 0,
++					converted ? 0 : BM_CONVERTED, 0);
++}
++
++bool
++IsBufferConverted(Buffer buffer)
++{
++	BufferDesc *bufHdr;
++
++	Assert(BufferIsValid(buffer) && !BufferIsLocal(buffer));
++	Assert(BufferIsPinned(buffer));
++	bufHdr = GetBufferDescriptor(buffer - 1);
++	return (pg_atomic_read_u64(&bufHdr->state) & BM_CONVERTED) != 0;
++}
++
++bool
++IsBufferLocked(Buffer buffer)
++{
++	return buffer == InvalidBuffer || BufferIsLockedByMe(buffer);
++}
++
++bool
++IsBufferLockedExclusive(Buffer buffer)
++{
++	return buffer == InvalidBuffer ||
++		BufferIsLockedByMeInMode(buffer, BUFFER_LOCK_EXCLUSIVE);
++}
++
+ /*
+  * Release buffer content locks for shared buffers.
+  *
+@@ -8692,6 +8759,33 @@ buffer_readv_complete_one(PgAioTargetData *td, uint8 buf_off, Buffer buffer,
+ 		}
+ 	}
+ 
++	/*
++	 * Convert before publishing BM_VALID.  The AIO pin and IO_IN_PROGRESS
++	 * give this read exclusive access to the invalid buffer.  A shared
++	 * completion callback cannot use the issuer's private pin or relcache.
++	 */
++	if (!failed &&
++		PageGetPageLayoutVersion((Page) bufdata) != 0 &&
++		PageGetPageLayoutVersion((Page) bufdata) != PG_PAGE_LAYOUT_VERSION &&
++		!PageIsNew((Page) bufdata))
++	{
++		Assert(!is_temp);
++		if (tag.forkNum != MAIN_FORKNUM)
++		{
++			RelPathStr path = relpathbackend(td->smgr.rlocator,
++												 INVALID_PROC_NUMBER, tag.forkNum);
++
++			/* TODO: propagate conversion errors through the AIO result. */
++			ereport(ERROR,
++					(errcode(ERRCODE_DATA_CORRUPTED),
++					 errmsg("invalid fork type (%d) in block %u of relation %s",
++							tag.forkNum, tag.blockNum, path.str)));
++		}
++
++		convert_page(&td->smgr.relextradata, &td->smgr.rlocator,
++					 tag.forkNum, (Page) bufdata, buffer, tag.blockNum);
++	}
++
+ 	/* Terminate I/O and set BM_VALID. */
+ 	set_flag_bits = failed ? BM_IO_ERROR : BM_VALID;
+ 	if (is_temp)
+diff --git a/src/include/catalog/pg_class.h b/src/include/catalog/pg_class.h
+index c4af599dc90..ec3d7f42d4f 100644
+--- a/src/include/catalog/pg_class.h
++++ b/src/include/catalog/pg_class.h
+@@ -168,6 +168,9 @@ MAKE_SYSCACHE(RELNAMENSP, pg_class_relname_nsp_index, 128);
+ 
+ #ifdef EXPOSE_TO_CLIENT_CODE
+ 
++/* Internal marker for reads without relation metadata; never a catalog value. */
++#define RELKIND_UNKNOWN 'u'
++
+ #define		  RELKIND_RELATION		  'r'	/* ordinary table */
+ #define		  RELKIND_INDEX			  'i'	/* secondary index */
+ #define		  RELKIND_SEQUENCE		  'S'	/* sequence object */
+diff --git a/src/include/storage/aio_types.h b/src/include/storage/aio_types.h
+index 17b59aeed7c..bf6dfd82df7 100644
+--- a/src/include/storage/aio_types.h
++++ b/src/include/storage/aio_types.h
+@@ -16,6 +16,7 @@
+ #define AIO_TYPES_H
+ 
+ #include "storage/block.h"
++#include "storage/relation_extra_data.h"
+ #include "storage/relfilelocator.h"
+ 
+ 
+@@ -65,6 +66,7 @@ typedef union PgAioTargetData
+ 		RelFileLocator rlocator;	/* physical relation identifier */
+ 		BlockNumber blockNum;	/* blknum relative to begin of reln */
+ 		BlockNumber nblocks;
++		RelationExtraData relextradata;
+ 		ForkNumber	forkNum:8;	/* don't waste 4 byte for four values */
+ 		bool		is_temp:1;	/* proc can be inferred by owning AIO */
+ 		bool		skip_fsync:1;
+diff --git a/src/include/storage/buf_internals.h b/src/include/storage/buf_internals.h
+index a23abf14f8f..87856c2701d 100644
+--- a/src/include/storage/buf_internals.h
++++ b/src/include/storage/buf_internals.h
+@@ -114,7 +114,8 @@ StaticAssertDecl(BUF_REFCOUNT_BITS + BUF_USAGECOUNT_BITS + BUF_FLAG_BITS + BUF_L
+ #define BM_IO_IN_PROGRESS			BUF_DEFINE_FLAG( 4)
+ /* previous I/O failed */
+ #define BM_IO_ERROR					BUF_DEFINE_FLAG( 5)
+-/* flag bit 6 is not used anymore */
++/* converted to xid64 in memory; force a full image on first WAL change */
++#define BM_CONVERTED				BUF_DEFINE_FLAG( 6)
+ /* have waiter for sole pin */
+ #define BM_PIN_COUNT_WAITER			BUF_DEFINE_FLAG( 7)
+ /* must write for checkpoint */
+diff --git a/src/include/storage/bufmgr.h b/src/include/storage/bufmgr.h
+index 6837b35fc6d..da2f515ff51 100644
+--- a/src/include/storage/bufmgr.h
++++ b/src/include/storage/bufmgr.h
+@@ -19,6 +19,7 @@
+ #include "storage/block.h"
+ #include "storage/buf.h"
+ #include "storage/bufpage.h"
++#include "storage/relation_extra_data.h"
+ #include "storage/relfilelocator.h"
+ #include "utils/relcache.h"
+ #include "utils/snapmgr.h"
+@@ -315,6 +316,14 @@ extern void BufferGetTag(Buffer buffer, RelFileLocator *rlocator,
+ 						 ForkNumber *forknum, BlockNumber *blknum);
+ 
+ extern void MarkBufferDirtyHint(Buffer buffer, bool buffer_std);
++extern void MarkBufferConverted(Buffer buffer, bool converted);
++extern bool IsBufferConverted(Buffer buffer);
++extern bool IsBufferLocked(Buffer buffer);
++extern bool IsBufferLockedExclusive(Buffer buffer);
++
++extern void convert_page(RelationExtraData *rel_extra,
++						 RelFileLocator *rlocator, ForkNumber forknum,
++						 Page page, Buffer buffer, BlockNumber blocknum);
+ 
+ extern bool BufferSetHintBits16(uint16 *ptr, uint16 val, Buffer buffer);
+ extern bool BufferBeginSetHintBits(Buffer buffer);
+diff --git a/src/include/storage/relation_extra_data.h b/src/include/storage/relation_extra_data.h
+new file mode 100644
+index 00000000000..365f61a7c45
+--- /dev/null
++++ b/src/include/storage/relation_extra_data.h
+@@ -0,0 +1,31 @@
++/*-------------------------------------------------------------------------
++ *
++ * relation_extra_data.h
++ *    data type for extra information which is needed for
++ *    conversion from Heap v4 to Heap v5
++ *
++ *
++ * Portions Copyright (c) 1996-2026, PostgreSQL Global
++ * Development Group Portions Copyright (c) 1994, Regents of
++ * the University of California
++ *
++ * src/include/storage/relation_extra_data.h
++ *
++ *-------------------------------------------------------------------------
++ */
++
++#ifndef RELATION_EXTRA_DATA_H
++#define RELATION_EXTRA_DATA_H
++
++/*
++ * Relation extra data needed for conversion
++ */
++
++typedef struct RelationExtraData
++{
++	TransactionId relfrozenxid;
++	MultiXactId	relminmxid;
++	char		relkind;
++} RelationExtraData;
++
++#endif /* RELATION_EXTRA_DATA_H */

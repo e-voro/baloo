@@ -1,0 +1,3 @@
+mini0085(aio_callback.c) is superseded by the user-provided PG18 AIO fix.
+Do not apply the old global-pointer helpers/field. Per-handle RelationExtraData
+is included in adapted mini0087(bufmgr.c).

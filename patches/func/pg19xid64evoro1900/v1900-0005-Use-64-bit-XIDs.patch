@@ -22,222 +22,222 @@ Authors:
 Discussion: https://postgr.es/m/CACG%3DezZe1NQSCnfHOr78AtAZxJZeCvxrts0ygrxYwe%3DpyyjVWA%40mail.gmail.com
 Discussion: https://postgr.es/m/CAJ7c6TPDOYBYrnCAeyndkBktO0WG2xSdYduTF0nxq%2BvfkmTF5Q%40mail.gmail.com
 ---
- contrib/amcheck/verify_heapam.c                    |  119 +-
- contrib/amcheck/verify_nbtree.c                    |    2 
- contrib/hstore/hstore_io.c                         |    2 
- contrib/pageinspect/Makefile                       |    2 
- contrib/pageinspect/btreefuncs.c                   |   18 
- contrib/pageinspect/expected/btree.out             |    4 
- contrib/pageinspect/expected/hash_1.out            |  166 +++
- contrib/pageinspect/expected/oldextversions.out    |    2 
- contrib/pageinspect/expected/page.out              |   34 -
- contrib/pageinspect/heapfuncs.c                    |   10 
- contrib/pageinspect/meson.build                    |    1 
- contrib/pageinspect/pageinspect--1.13--1.14.sql    |   23 
- contrib/pageinspect/pageinspect.control            |    2 
- contrib/pageinspect/rawpage.c                      |   34 +
- contrib/pageinspect/sql/btree.sql                  |    3 
- contrib/pg_overexplain/pg_overexplain.c            |    2 
- contrib/pg_surgery/expected/heap_surgery_1.out     |  185 ++++
- contrib/pg_surgery/heap_surgery.c                  |   11 
- contrib/pg_visibility/pg_visibility.c              |    5 
- contrib/pgrowlocks/pgrowlocks.c                    |    2 
- contrib/pgstattuple/pgstatapprox.c                 |    4 
- contrib/pgstattuple/pgstatindex.c                  |    2 
- contrib/postgres_fdw/expected/postgres_fdw.out     |   55 +
- contrib/postgres_fdw/postgres_fdw.c                |    9 
- contrib/postgres_fdw/sql/postgres_fdw.sql          |   15 
- src/backend/access/common/heaptuple.c              |   10 
- src/backend/access/common/reloptions.c             |  118 +-
- src/backend/access/heap/heapam.c                   |  992 +++++++++++++++++---
- src/backend/access/heap/heapam_indexscan.c         |    9 
- src/backend/access/heap/heapam_handler.c           |   75 +-
- src/backend/access/heap/heapam_visibility.c |  187 ++++++++++++++++++++++++++++++++++++++++----------------------------------------
- src/backend/access/heap/heapam_xlog.c              |  165 ++-
- src/backend/access/heap/heaptoast.c                |    3 
- src/backend/access/heap/hio.c                      |   39 +
- src/backend/access/heap/pruneheap.c                |   83 ++++++++++++++++++++++++++++++++++++++++------------------------
- src/backend/access/heap/rewriteheap.c              |  101 ++++++++++++++++++++++++++++++++++++++++-----------------------
- src/backend/access/heap/vacuumlazy.c               |   38 +++++++++++++++++++++-----------------
- src/backend/access/nbtree/nbtpage.c                |    2 
- src/backend/access/nbtree/nbtsplitloc.c            |   16 
- src/backend/access/rmgrdesc/gistdesc.c             |    4 
- src/backend/access/rmgrdesc/heapdesc.c             |   32 +
- src/backend/access/rmgrdesc/nbtdesc.c              |    4 
- src/backend/access/rmgrdesc/xactdesc.c             |    6 
- src/backend/access/rmgrdesc/xlogdesc.c          |    2 +-
- src/backend/access/transam/clog.c             |   19 +++----------------
- src/backend/access/transam/commit_ts.c             |   19 
- src/backend/access/transam/multixact.c             |  287 ++++++++----------------------
- src/backend/access/transam/slru.c                  |   10 
- src/backend/access/transam/subtrans.c              |    3 
- src/backend/access/transam/transam.c               |    1 
- src/backend/access/transam/twophase.c              |   83 +-
- src/backend/access/transam/varsup.c                |  207 +++---------------------------------
- src/backend/access/transam/xact.c                  |    6 ++++--
- src/backend/access/transam/xlog.c                  |    3 
- src/backend/access/transam/xloginsert.c            |    7 
- src/backend/access/transam/xlogreader.c            |    3 
- src/backend/catalog/heap.c                         |    4 
- src/backend/catalog/pg_inherits.c                  |    2 
- src/backend/commands/async.c                       |    4 ++--
- src/backend/commands/dbcommands.c                  |    5 
- src/backend/commands/indexcmds.c                   |    6 
- src/backend/commands/sequence.c                    |   30 +
- src/backend/commands/vacuum.c                      |   22 
- src/backend/commands/wait.c                        |    2 
- src/backend/executor/execExprInterp.c              |    1 
- src/backend/executor/execReplication.c             |    2 
- src/backend/executor/execTuples.c                  |    4 
- src/backend/executor/execUtils.c                   |    1 
- src/backend/executor/nodeModifyTable.c             |    1 
- src/backend/executor/spi.c                         |    1 
- src/backend/nodes/gen_node_support.pl              |    6 
- src/backend/optimizer/util/plancat.c               |    2 
- src/backend/postmaster/autovacuum.c                |   82 +-
- src/backend/replication/logical/decode.c           |   30 +
- src/backend/replication/logical/launcher.c         |    2 
- src/backend/replication/logical/proto.c            |   50 +
- src/backend/replication/logical/reorderbuffer.c    |   17 
- src/backend/replication/logical/slotsync.c         |    6 
- src/backend/replication/logical/snapbuild.c        |    4 
- src/backend/replication/logical/worker.c           |   10 
- src/backend/replication/walreceiver.c              |   28 -
- src/backend/replication/walsender.c                |   76 --
- src/backend/statistics/extended_stats.c            |    1 
- src/backend/storage/aio/aio_callback.c             |   19 
- src/backend/storage/buffer/Makefile                |    3 
- src/backend/storage/buffer/bufmgr.c                |  157 +++
- src/backend/storage/buffer/heap_convert.c          |  549 +++++++++++
- src/backend/storage/buffer/meson.build             |    1 
- src/backend/storage/ipc/procarray.c                |  181 +---
- src/backend/storage/ipc/standby.c                  |    4 
- src/backend/storage/lmgr/lmgr.c                    |   14 
- src/backend/storage/lmgr/lock.c                    |    4 
- src/backend/storage/lmgr/predicate.c               |   36 -
- src/backend/storage/lmgr/proc.c                    |   12 
- src/backend/storage/page/bufpage.c                 |  253 +++++
- src/backend/utils/adt/arrayfuncs.c                 |    6 
- src/backend/utils/adt/enum.c                       |    2 
- src/backend/utils/adt/jsonfuncs.c                  |    2 
- src/backend/utils/adt/lockfuncs.c                  |    9 
- src/backend/utils/adt/pgstatfuncs.c                |    1 
- src/backend/utils/adt/rowtypes.c                   |   12 
- src/backend/utils/adt/xid.c                        |   43 +
- src/backend/utils/adt/xid8funcs.c                  |   68 +
- src/backend/utils/cache/catcache.c                 |    1 
- src/backend/utils/cache/funccache.c                |    4 
- src/backend/utils/cache/relcache.c                 |    3 
- src/backend/utils/fmgr/fmgr.c                      |    4 
- src/backend/utils/misc/guc_parameters.dat          |   36 -
- src/backend/utils/misc/pg_controldata.c            |    2 
- src/backend/utils/misc/postgresql.conf.sample      |    4 
- src/backend/utils/sort/tuplesortvariants.c         |   14 
- src/backend/utils/time/combocid.c                  |   32 -
- src/backend/utils/time/snapmgr.c                   |   22 
- src/bin/pg_amcheck/t/004_verify_heapam.pl          |  185 +++-
- src/bin/pg_controldata/pg_controldata.c            |    2 
- src/bin/pg_dump/pg_dump.c                          |   27 -
- src/bin/pg_dump/pg_dump.h                          |    8 
- src/bin/pg_resetwal/pg_resetwal.c                  |   58 -
- src/bin/pg_resetwal/t/001_basic.pl                 |   16 
- src/bin/pg_upgrade/Makefile                        |    1 
- src/bin/pg_upgrade/check.c                         |   70 +
- src/bin/pg_upgrade/controldata.c                   |   17 
- src/bin/pg_upgrade/file.c                          |   99 ++
- src/bin/pg_upgrade/meson.build                     |    1 
- src/bin/pg_upgrade/multixact_rewrite.c            |   10 +-
- src/bin/pg_upgrade/pg_upgrade.c                    |  143 ++-
- src/bin/pg_upgrade/pg_upgrade.h                    |   35 +
- src/bin/pg_upgrade/relfilenumber.c                 |   33 +
- src/bin/pg_upgrade/segresize.c                     |  582 ++++++++++++
- src/bin/pg_upgrade/t/002_pg_upgrade.pl             |   17 
- src/bin/pg_upgrade/version.c                       |  181 ++++
- src/bin/pg_verifybackup/t/003_corruption.pl        |    6 
- src/bin/pg_waldump/t/001_basic.pl                  |    3 
- src/include/access/ginblock.h                      |   11 
- src/include/access/gist.h                          |    2 
- src/include/access/heapam.h                        |   53 +
- src/include/access/heapam_xlog.h                   |   23 
- src/include/access/heaptoast.h                     |   11 
- src/include/access/htup.h                          |   20 
- src/include/access/htup_details.h                  |  273 +++++
- src/include/access/multixact.h                     |    4 ++--
- src/include/access/multixact_internal.h            |   10 +-
- src/include/access/nbtree.h                        |   10 
- src/include/access/reloptions.h                    |    2 
- src/include/access/rewriteheap.h                   |    4 
- src/include/access/rmgrlist.h                      |    1 
- src/include/access/tableam.h                       |    2 
- src/include/access/transam.h                       |  128 +--
- src/include/access/tupmacs.h                       |    4 
- src/include/access/xact.h                          |   13 
- src/include/access/xloginsert.h                    |    1 
- src/include/access/xlogrecord.h                    |    4 
- src/include/c.h                                    |   20 
- src/include/catalog/catversion.h                   |    2 
- src/include/catalog/pg_operator.dat                |    8 
- src/include/catalog/pg_proc.dat                    |   12 
- src/include/catalog/pg_type.dat                    |    4 
- src/include/catalog/pg_type.h                      |    5 
- src/include/commands/vacuum.h                      |   22 
- src/include/fmgr.h                                 |    2 
- src/include/nodes/pg_list.h                        |    4 
- src/include/port/pg_lfind.h                        |   62 +
- src/include/postgres.h                             |    9 
- src/include/postmaster/autovacuum.h                |    4 
- src/include/storage/aio.h                          |    3 
- src/include/storage/aio_internal.h                 |    2 
- src/include/storage/buf_internals.h                |   15 
- src/include/storage/bufmgr.h                       |    6 
- src/include/storage/bufpage.h                      |  249 +++++
- src/include/storage/itemid.h                       |    2 
- src/include/storage/lock.h                         |   14 
- src/include/storage/proc.h                         |    6 
- src/include/utils/combocid.h                       |    2 
- src/include/utils/rel.h                            |   12 
- src/include/utils/xid8.h                           |    4 
- src/pl/plperl/plperl.c                             |    4 
- src/pl/plpgsql/src/pl_exec.c                       |    2 
- src/pl/plpython/plpy_procedure.c                   |    4 
- src/pl/tcl/pltcl.c                                 |    4 
- src/test/Makefile                                  |    3 
- src/test/meson.build                               |    1 
- .../modules/injection_points/regress_injection.c   |    3 
- src/test/modules/test_lfind/test_lfind.c           |   30 -
- src/test/modules/xid_wraparound/xid_wraparound.c   |    1 
- src/test/perl/PostgreSQL/Test/AdjustUpgrade.pm     |    4 
- src/test/perl/PostgreSQL/Test/Cluster.pm           |   25 -
- src/test/recovery/t/003_recovery_targets.pl        |    2 
- .../recovery/t/035_standby_logical_decoding.pl     |    2 
- src/test/recovery/t/039_end_of_wal.pl              |   19 
- src/test/regress/expected/indirect_toast.out       |    8 
- src/test/regress/expected/insert.out               |   16 
- src/test/regress/expected/opr_sanity.out           |    6 
- src/test/regress/expected/select_views.out         |   86 +-
- src/test/regress/expected/txid.out                 |    8 
- src/test/regress/expected/type_sanity.out          |    5 
- src/test/regress/expected/xid.out                  |   22 
- src/test/regress/expected/xid64.out                |   92 ++
- src/test/regress/parallel_schedule                 |    2 
- src/test/regress/regress.c                         |  293 ++++++
- src/test/regress/sql/indirect_toast.sql            |   11 
- src/test/regress/sql/insert.sql                    |   17 
- src/test/regress/sql/select_views.sql              |    2 
- src/test/regress/sql/type_sanity.sql               |    5 
- src/test/regress/sql/xid.sql                       |    2 
- src/test/regress/sql/xid64.sql                     |   84 ++
- src/test/xid-64/Makefile                           |   22 
- src/test/xid-64/README                             |   16 
- src/test/xid-64/meson.build                        |   16 
- src/test/xid-64/t/002_test_gucs.pl                 |   79 ++
- src/test/xid-64/t/003_test_integrity.pl            |   73 +
- src/test/xid-64/t/004_test_relminmxid.pl           |   90 ++
- src/test/xid-64/t/005_stream_subxact.pl            |  154 +++
- src/test/xid-64/t/006_zeropage.pl                  |   33 +
- src/test/xid-64/t/007_first_multi.pl               |   83 ++
- src/tools/pgindent/typedefs.list                   |    4 
- 215 files changed, 6943 insertions(+), 2072 deletions(-)
+ contrib/amcheck/verify_heapam.c | 119 +-
+ contrib/amcheck/verify_nbtree.c | 2 +-
+ contrib/hstore/hstore_io.c | 2 +
+ contrib/pageinspect/Makefile | 2 +-
+ contrib/pageinspect/btreefuncs.c | 18 +-
+ contrib/pageinspect/expected/btree.out | 4 +-
+ contrib/pageinspect/expected/hash_1.out | 166 +
+ contrib/pageinspect/expected/oldextversions.out | 2 +-
+ contrib/pageinspect/expected/page.out | 34 +-
+ contrib/pageinspect/heapfuncs.c | 10 +-
+ contrib/pageinspect/meson.build | 1 +
+ contrib/pageinspect/pageinspect--1.13--1.14.sql | 23 +
+ contrib/pageinspect/pageinspect.control | 2 +-
+ contrib/pageinspect/rawpage.c | 34 +-
+ contrib/pageinspect/sql/btree.sql | 3 +-
+ contrib/pg_overexplain/pg_overexplain.c | 2 +-
+ contrib/pg_surgery/expected/heap_surgery_1.out | 185 +
+ contrib/pg_surgery/heap_surgery.c | 11 +-
+ contrib/pg_visibility/pg_visibility.c | 5 +-
+ contrib/pgrowlocks/pgrowlocks.c | 2 +-
+ contrib/pgstattuple/pgstatapprox.c | 4 +
+ contrib/pgstattuple/pgstatindex.c | 2 +-
+ contrib/postgres_fdw/expected/postgres_fdw.out | 55 +-
+ contrib/postgres_fdw/postgres_fdw.c | 9 +-
+ contrib/postgres_fdw/sql/postgres_fdw.sql | 15 +-
+ src/backend/access/common/heaptuple.c | 10 +-
+ src/backend/access/common/reloptions.c | 118 +-
+ src/backend/access/heap/heapam.c | 992 +-
+ src/backend/access/heap/heapam_handler.c | 75 +-
+ src/backend/access/heap/heapam_indexscan.c | 9 +-
+ src/backend/access/heap/heapam_visibility.c | 187 +-
+ src/backend/access/heap/heapam_xlog.c | 165 +-
+ src/backend/access/heap/heaptoast.c | 3 +
+ src/backend/access/heap/hio.c | 39 +-
+ src/backend/access/heap/pruneheap.c | 83 +-
+ src/backend/access/heap/rewriteheap.c | 101 +-
+ src/backend/access/heap/vacuumlazy.c | 38 +-
+ src/backend/access/nbtree/nbtpage.c | 2 +
+ src/backend/access/nbtree/nbtsplitloc.c | 16 +-
+ src/backend/access/rmgrdesc/gistdesc.c | 4 +-
+ src/backend/access/rmgrdesc/heapdesc.c | 32 +
+ src/backend/access/rmgrdesc/nbtdesc.c | 4 +-
+ src/backend/access/rmgrdesc/xactdesc.c | 6 +-
+ src/backend/access/rmgrdesc/xlogdesc.c | 2 +-
+ src/backend/access/transam/clog.c | 19 +-
+ src/backend/access/transam/commit_ts.c | 19 -
+ src/backend/access/transam/multixact.c | 287 +-
+ src/backend/access/transam/slru.c | 10 +-
+ src/backend/access/transam/subtrans.c | 3 -
+ src/backend/access/transam/transam.c | 1 -
+ src/backend/access/transam/twophase.c | 83 +-
+ src/backend/access/transam/varsup.c | 207 +-
+ src/backend/access/transam/xact.c | 6 +-
+ src/backend/access/transam/xlog.c | 3 +-
+ src/backend/access/transam/xloginsert.c | 7 +
+ src/backend/access/transam/xlogreader.c | 3 +-
+ src/backend/catalog/heap.c | 4 +-
+ src/backend/catalog/pg_inherits.c | 2 +-
+ src/backend/commands/async.c | 4 +-
+ src/backend/commands/dbcommands.c | 5 +
+ src/backend/commands/indexcmds.c | 6 +-
+ src/backend/commands/sequence.c | 30 +-
+ src/backend/commands/vacuum.c | 22 +-
+ src/backend/commands/wait.c | 2 +-
+ src/backend/executor/execExprInterp.c | 1 +
+ src/backend/executor/execReplication.c | 2 +-
+ src/backend/executor/execTuples.c | 4 +-
+ src/backend/executor/execUtils.c | 1 +
+ src/backend/executor/nodeModifyTable.c | 1 +
+ src/backend/executor/spi.c | 1 +
+ src/backend/nodes/gen_node_support.pl | 6 +-
+ src/backend/optimizer/util/plancat.c | 2 +-
+ src/backend/postmaster/autovacuum.c | 82 +-
+ src/backend/replication/logical/decode.c | 30 +-
+ src/backend/replication/logical/launcher.c | 2 +-
+ src/backend/replication/logical/proto.c | 50 +-
+ src/backend/replication/logical/reorderbuffer.c | 17 +-
+ src/backend/replication/logical/slotsync.c | 6 +-
+ src/backend/replication/logical/snapbuild.c | 4 +-
+ src/backend/replication/logical/worker.c | 10 +-
+ src/backend/replication/walreceiver.c | 28 +-
+ src/backend/replication/walsender.c | 76 +-
+ src/backend/statistics/extended_stats.c | 1 +
+ src/backend/storage/buffer/Makefile | 3 +-
+ src/backend/storage/buffer/bufmgr.c | 94 +
+ src/backend/storage/buffer/heap_convert.c | 532 +
+ src/backend/storage/buffer/meson.build | 1 +
+ src/backend/storage/ipc/procarray.c | 181 +-
+ src/backend/storage/ipc/standby.c | 4 +-
+ src/backend/storage/lmgr/lmgr.c | 14 +-
+ src/backend/storage/lmgr/lock.c | 4 +-
+ src/backend/storage/lmgr/predicate.c | 36 +-
+ src/backend/storage/lmgr/proc.c | 12 +-
+ src/backend/storage/page/bufpage.c | 253 +-
+ src/backend/utils/adt/arrayfuncs.c | 6 +-
+ src/backend/utils/adt/enum.c | 2 +-
+ src/backend/utils/adt/jsonfuncs.c | 2 +
+ src/backend/utils/adt/lockfuncs.c | 9 +-
+ src/backend/utils/adt/pgstatfuncs.c | 1 +
+ src/backend/utils/adt/rowtypes.c | 12 +
+ src/backend/utils/adt/xid.c | 43 +-
+ src/backend/utils/adt/xid8funcs.c | 68 +-
+ src/backend/utils/cache/catcache.c | 1 +
+ src/backend/utils/cache/funccache.c | 4 +-
+ src/backend/utils/cache/relcache.c | 3 +-
+ src/backend/utils/fmgr/fmgr.c | 4 +-
+ src/backend/utils/misc/guc_parameters.dat | 36 +-
+ src/backend/utils/misc/pg_controldata.c | 2 +-
+ src/backend/utils/misc/postgresql.conf.sample | 4 +-
+ src/backend/utils/sort/tuplesortvariants.c | 14 +-
+ src/backend/utils/time/combocid.c | 32 +-
+ src/backend/utils/time/snapmgr.c | 22 +-
+ src/bin/pg_amcheck/t/004_verify_heapam.pl | 185 +-
+ src/bin/pg_controldata/pg_controldata.c | 2 +-
+ src/bin/pg_dump/pg_dump.c | 27 +-
+ src/bin/pg_dump/pg_dump.h | 8 +-
+ src/bin/pg_resetwal/pg_resetwal.c | 58 +-
+ src/bin/pg_resetwal/t/001_basic.pl | 16 +-
+ src/bin/pg_upgrade/Makefile | 1 +
+ src/bin/pg_upgrade/check.c | 70 +-
+ src/bin/pg_upgrade/controldata.c | 17 +-
+ src/bin/pg_upgrade/file.c | 99 +-
+ src/bin/pg_upgrade/meson.build | 1 +
+ src/bin/pg_upgrade/multixact_rewrite.c | 10 +-
+ src/bin/pg_upgrade/pg_upgrade.c | 143 +-
+ src/bin/pg_upgrade/pg_upgrade.h | 35 +-
+ src/bin/pg_upgrade/relfilenumber.c | 33 +-
+ src/bin/pg_upgrade/segresize.c | 582 +
+ src/bin/pg_upgrade/t/002_pg_upgrade.pl | 17 +
+ src/bin/pg_upgrade/version.c | 181 +
+ src/bin/pg_verifybackup/t/003_corruption.pl | 6 +-
+ src/bin/pg_waldump/t/001_basic.pl | 3 +-
+ src/include/access/ginblock.h | 11 +-
+ src/include/access/gist.h | 2 +-
+ src/include/access/heapam.h | 53 +-
+ src/include/access/heapam_xlog.h | 23 +-
+ src/include/access/heaptoast.h | 11 +-
+ src/include/access/htup.h | 20 +-
+ src/include/access/htup_details.h | 273 +-
+ src/include/access/multixact.h | 4 +-
+ src/include/access/multixact_internal.h | 10 +-
+ src/include/access/nbtree.h | 10 +
+ src/include/access/reloptions.h | 2 +-
+ src/include/access/rewriteheap.h | 4 +-
+ src/include/access/rmgrlist.h | 1 +
+ src/include/access/tableam.h | 2 +-
+ src/include/access/transam.h | 128 +-
+ src/include/access/tupmacs.h | 4 +-
+ src/include/access/xact.h | 13 +-
+ src/include/access/xloginsert.h | 1 +
+ src/include/access/xlogrecord.h | 4 +-
+ src/include/c.h | 20 +-
+ src/include/catalog/catversion.h | 2 +-
+ src/include/catalog/pg_class.h | 3 +
+ src/include/catalog/pg_operator.dat | 8 +-
+ src/include/catalog/pg_proc.dat | 12 +-
+ src/include/catalog/pg_type.dat | 4 +-
+ src/include/catalog/pg_type.h | 5 +
+ src/include/commands/vacuum.h | 22 +-
+ src/include/fmgr.h | 2 +
+ src/include/nodes/pg_list.h | 4 +
+ src/include/port/pg_lfind.h | 62 +
+ src/include/postgres.h | 9 +-
+ src/include/postmaster/autovacuum.h | 4 +-
+ src/include/storage/aio_types.h | 2 +
+ src/include/storage/buf_internals.h | 3 +-
+ src/include/storage/bufmgr.h | 9 +
+ src/include/storage/bufpage.h | 249 +-
+ src/include/storage/itemid.h | 2 +
+ src/include/storage/lock.h | 14 +-
+ src/include/storage/proc.h | 6 +-
+ src/include/storage/relation_extra_data.h | 31 +
+ src/include/utils/combocid.h | 2 +-
+ src/include/utils/rel.h | 12 +-
+ src/include/utils/xid8.h | 4 +-
+ src/pl/plperl/plperl.c | 4 +-
+ src/pl/plpgsql/src/pl_exec.c | 2 +
+ src/pl/plpython/plpy_procedure.c | 4 +-
+ src/pl/tcl/pltcl.c | 4 +-
+ src/test/Makefile | 3 +-
+ src/test/meson.build | 1 +
+ src/test/modules/injection_points/regress_injection.c | 3 +-
+ src/test/modules/test_lfind/test_lfind.c | 30 +-
+ src/test/modules/xid_wraparound/xid_wraparound.c | 1 -
+ src/test/perl/PostgreSQL/Test/AdjustUpgrade.pm | 4 +
+ src/test/perl/PostgreSQL/Test/Cluster.pm | 25 +-
+ src/test/recovery/t/003_recovery_targets.pl | 2 +-
+ src/test/recovery/t/035_standby_logical_decoding.pl | 2 +-
+ src/test/recovery/t/039_end_of_wal.pl | 19 +-
+ src/test/regress/expected/indirect_toast.out | 8 +
+ src/test/regress/expected/insert.out | 16 +-
+ src/test/regress/expected/opr_sanity.out | 6 +-
+ src/test/regress/expected/select_views.out | 86 +-
+ src/test/regress/expected/txid.out | 8 +-
+ src/test/regress/expected/type_sanity.out | 5 +-
+ src/test/regress/expected/xid.out | 22 +-
+ src/test/regress/expected/xid64.out | 92 +
+ src/test/regress/parallel_schedule | 2 +-
+ src/test/regress/regress.c | 307 +-
+ src/test/regress/sql/indirect_toast.sql | 11 +
+ src/test/regress/sql/insert.sql | 17 +-
+ src/test/regress/sql/select_views.sql | 2 +-
+ src/test/regress/sql/type_sanity.sql | 5 +-
+ src/test/regress/sql/xid.sql | 2 +-
+ src/test/regress/sql/xid64.sql | 84 +
+ src/test/xid-64/Makefile | 22 +
+ src/test/xid-64/README | 16 +
+ src/test/xid-64/meson.build | 16 +
+ src/test/xid-64/t/002_test_gucs.pl | 79 +
+ src/test/xid-64/t/003_test_integrity.pl | 73 +
+ src/test/xid-64/t/004_test_relminmxid.pl | 90 +
+ src/test/xid-64/t/005_stream_subxact.pl | 154 +
+ src/test/xid-64/t/006_zeropage.pl | 33 +
+ src/test/xid-64/t/007_first_multi.pl | 83 +
+ src/tools/pgindent/typedefs.list | 4 +-
+ 215 files changed, 6888 insertions(+), 2064 deletions(-)
 
 diff --git a/contrib/amcheck/verify_heapam.c b/contrib/amcheck/verify_heapam.c
 index e5ea68b801..14ce47cf80 100644
@@ -8665,39 +8665,8 @@ index 3c3d2d315c..6a6ce71cc6 100644
  
  	tup = heap_copytuple(&tmptup);
  
-diff --git a/src/backend/storage/aio/aio_callback.c b/src/backend/storage/aio/aio_callback.c
-index 03c9bba080..c8a84870ff 100644
---- a/src/backend/storage/aio/aio_callback.c
-+++ b/src/backend/storage/aio/aio_callback.c
-@@ -162,7 +162,26 @@ pgaio_io_get_handle_data(PgAioHandle *ioh, uint8 *len)
- 	return &pgaio_ctl->handle_data[ioh->iovec_off];
- }
- 
-+/*
-+ * Save custom pointer.
-+ */
-+void
-+pgaio_io_set_handle_pointer(PgAioHandle *ioh, void *ptr)
-+{
-+	pgaio_ctl->ptr = ptr;
-+}
- 
-+/*
-+ * Return data set with pgaio_io_set_handle_data_*().
-+ */
-+void *
-+pgaio_io_get_handle_pointer(PgAioHandle *ioh)
-+{
-+	void *ptr = pgaio_ctl->ptr;
-+
-+	pgaio_ctl->ptr = NULL;
-+	return ptr;
-+}
- 
- /* --------------------------------------------------------------------------------
-  * Public IO Result related functions
 diff --git a/src/backend/storage/buffer/Makefile b/src/backend/storage/buffer/Makefile
-index fd7c40dcb0..ffcc0fc290 100644
+index fd7c40dcb08..ffcc0fc290e 100644
 --- a/src/backend/storage/buffer/Makefile
 +++ b/src/backend/storage/buffer/Makefile
 @@ -17,6 +17,7 @@ OBJS = \
@@ -8710,235 +8679,137 @@ index fd7c40dcb0..ffcc0fc290 100644
  
  include $(top_srcdir)/src/backend/common.mk
 diff --git a/src/backend/storage/buffer/bufmgr.c b/src/backend/storage/buffer/bufmgr.c
-index 327ddb7adc..062e35f6a2 100644
+index 169829eb020..89564657dee 100644
 --- a/src/backend/storage/buffer/bufmgr.c
 +++ b/src/backend/storage/buffer/bufmgr.c
-@@ -1230,6 +1230,7 @@ ReadBuffer_common(Relation rel, SMgrRelation smgr, char smgr_persistence,
- 	operation.persistence = persistence;
- 	operation.forknum = forkNum;
- 	operation.strategy = strategy;
-+
- 	if (StartReadBuffer(&operation,
- 						&buffer,
- 						blockNum,
-@@ -1914,6 +1915,9 @@ AsyncReadBuffers(ReadBuffersOperation *operation, int *nblocks_progress)
- 		/* provide the list of buffers to the completion callbacks */
- 		pgaio_io_set_handle_data_32(ioh, (uint32 *) io_buffers, io_buffers_len);
+@@ -1952,6 +1952,7 @@ AsyncReadBuffers(ReadBuffersOperation *operation, int *nblocks_progress)
+ 	IOContext	io_context;
+ 	IOObject	io_object;
+ 	instr_time	io_start;
++	PgAioTargetData *sd;
+ 	StartBufferIOResult status;
  
-+		/* provide the relation */
-+		pgaio_io_set_handle_pointer(ioh, operation->rel);
+ 	if (persistence == RELPERSISTENCE_TEMP)
+@@ -2149,6 +2150,21 @@ AsyncReadBuffers(ReadBuffersOperation *operation, int *nblocks_progress)
+ 	 *   table)
+ 	 * ---
+ 	 */
++	/* Copy backend-local relation metadata before the IO can be submitted. */
++	sd = pgaio_io_get_target_data(ioh);
++	if (operation->rel)
++	{
++		sd->smgr.relextradata.relfrozenxid = operation->rel->rd_rel->relfrozenxid;
++		sd->smgr.relextradata.relminmxid = operation->rel->rd_rel->relminmxid;
++		sd->smgr.relextradata.relkind = operation->rel->rd_rel->relkind;
++	}
++	else
++	{
++		sd->smgr.relextradata.relfrozenxid = InvalidTransactionId;
++		sd->smgr.relextradata.relminmxid = InvalidMultiXactId;
++		sd->smgr.relextradata.relkind = RELKIND_UNKNOWN;
++	}
 +
- 		pgaio_io_register_callbacks(ioh,
- 									persistence == RELPERSISTENCE_TEMP ?
- 									PGAIO_HCB_LOCAL_BUFFER_READV :
-@@ -5560,6 +5564,64 @@ MarkBufferDirtyHint(Buffer buffer, bool buffer_std)
- 	}
+ 	io_start = pgstat_prepare_io_time(track_io_timing);
+ 	smgrstartreadv(ioh, operation->smgr, forknum,
+ 				   blocknum,
+@@ -5861,6 +5877,57 @@ MarkBufferDirtyHint(Buffer buffer, bool buffer_std)
+ 							  buffer_std);
  }
  
 +/*
-+ * Mark buffer as converted - ie its format is changed without logical changes.
-+ *
-+ * It will override `full_page_write` GUC setting in XLogRecordAssemble.
++ * Track a format conversion that must be covered by a full image in WAL.
++ * During read completion the AIO subsystem owns the buffer until BM_VALID
++ * is published, so the completing process need not have a private pin.
 + */
 +void
 +MarkBufferConverted(Buffer buffer, bool converted)
 +{
 +	BufferDesc *bufHdr;
-+	uint32		buf_state;
-+	bool		has_mark;
++	uint64		buf_state;
 +
-+	if (!BufferIsValid(buffer))
-+		elog(ERROR, "bad buffer ID: %d", buffer);
-+
-+	Assert(!BufferIsLocal(buffer));
-+
++	Assert(BufferIsValid(buffer) && !BufferIsLocal(buffer));
 +	bufHdr = GetBufferDescriptor(buffer - 1);
++	buf_state = pg_atomic_read_u64(&bufHdr->state);
++	Assert(!converted ||
++		   ((buf_state & BM_IO_IN_PROGRESS) && !(buf_state & BM_VALID)) ||
++		   BufferLockHeldByMe(bufHdr));
 +
-+	Assert(GetPrivateRefCount(buffer) > 0);
-+	if (converted)
-+	{
-+		/* here, either share or exclusive lock is OK */
-+		Assert(LWLockHeldByMe(BufferDescriptorGetContentLock(bufHdr)));
-+	}
-+
-+	buf_state = pg_atomic_read_u32(&bufHdr->state);
-+	has_mark = (buf_state & BM_CONVERTED) != 0;
-+	if (converted == has_mark)
++	if (((buf_state & BM_CONVERTED) != 0) == converted)
 +		return;
 +
 +	buf_state = LockBufHdr(bufHdr);
-+	buf_state &= ~BM_CONVERTED;
-+	if (converted)
-+		buf_state |= BM_CONVERTED;
-+	UnlockBufHdr(bufHdr);
++	UnlockBufHdrExt(bufHdr, buf_state,
++					converted ? BM_CONVERTED : 0,
++					converted ? 0 : BM_CONVERTED, 0);
 +}
 +
 +bool
 +IsBufferConverted(Buffer buffer)
 +{
-+
 +	BufferDesc *bufHdr;
-+	uint32		buf_state;
 +
-+	if (!BufferIsValid(buffer))
-+		elog(ERROR, "bad buffer ID: %d", buffer);
-+
-+	Assert(!BufferIsLocal(buffer));
-+
++	Assert(BufferIsValid(buffer) && !BufferIsLocal(buffer));
++	Assert(BufferIsPinned(buffer));
 +	bufHdr = GetBufferDescriptor(buffer - 1);
++	return (pg_atomic_read_u64(&bufHdr->state) & BM_CONVERTED) != 0;
++}
 +
-+	Assert(GetPrivateRefCount(buffer) > 0);
++bool
++IsBufferLocked(Buffer buffer)
++{
++	return buffer == InvalidBuffer || BufferIsLockedByMe(buffer);
++}
 +
-+	buf_state = pg_atomic_read_u32(&bufHdr->state);
-+	return (buf_state & BM_CONVERTED) != 0;
++bool
++IsBufferLockedExclusive(Buffer buffer)
++{
++	return buffer == InvalidBuffer ||
++		BufferIsLockedByMeInMode(buffer, BUFFER_LOCK_EXCLUSIVE);
 +}
 +
  /*
   * Release buffer content locks for shared buffers.
   *
-@@ -5597,6 +5659,47 @@ UnlockBuffers(void)
- 	}
- }
- 
-+/*
-+ * Is shared buffer is locked?
-+ */
-+bool
-+IsBufferLocked(Buffer buffer)
-+{
-+	BufferDesc *buf;
-+
-+	if (buffer == InvalidBuffer)
-+		return true;
-+
-+	Assert(BufferIsPinned(buffer));
-+	if (BufferIsLocal(buffer))
-+		return true;					/* local buffers need no lock */
-+
-+	buf = GetBufferDescriptor(buffer - 1);
-+
-+	return LWLockHeldByMe(BufferDescriptorGetContentLock(buf));
-+}
-+
-+/*
-+ * Is shared buffer is locked exclusive?
-+ */
-+bool
-+IsBufferLockedExclusive(Buffer buffer)
-+{
-+	BufferDesc *buf;
-+
-+	if (buffer == InvalidBuffer)
-+		return true;
-+
-+	Assert(BufferIsPinned(buffer));
-+	if (BufferIsLocal(buffer))
-+		return true;					/* local buffers need no lock */
-+
-+	buf = GetBufferDescriptor(buffer - 1);
-+
-+	return LWLockHeldByMeInMode(BufferDescriptorGetContentLock(buf),
-+								LW_EXCLUSIVE);
-+}
-+
- /*
-  * Acquire or release the content_lock for the buffer.
-  */
-@@ -7044,7 +7147,8 @@ buffer_readv_complete_one(PgAioTargetData *td, uint8 buf_off, Buffer buffer,
- 						  bool *buffer_invalid,
- 						  bool *failed_checksum,
- 						  bool *ignored_checksum,
--						  bool *zeroed_buffer)
-+						  bool *zeroed_buffer,
-+						  Relation relation)
- {
- 	BufferDesc *buf_hdr = is_temp ?
- 		GetLocalBufferDescriptor(-buffer - 1)
-@@ -7153,6 +7257,52 @@ buffer_readv_complete_one(PgAioTargetData *td, uint8 buf_off, Buffer buffer,
+@@ -8692,6 +8759,33 @@ buffer_readv_complete_one(PgAioTargetData *td, uint8 buf_off, Buffer buffer,
  		}
  	}
  
 +	/*
-+	 * Test 001_aio.pl specifically corrupt pages, including the page header.
-+	 * But we select a page for conversion based on the inequality of versions
-+	 * in the header. Therefore, the spoiled header becomes zero and does not
-+	 * equal the expected current one. This leads to test failure.
-+	 *
-+	 * XXX: consider compare for concrete page layout version, not simple
-+	 * inequality.
++	 * Convert before publishing BM_VALID.  The AIO pin and IO_IN_PROGRESS
++	 * give this read exclusive access to the invalid buffer.  A shared
++	 * completion callback cannot use the issuer's private pin or relcache.
 +	 */
-+	if (PageGetPageLayoutVersion((Page) bufdata) != 0 &&
++	if (!failed &&
++		PageGetPageLayoutVersion((Page) bufdata) != 0 &&
 +		PageGetPageLayoutVersion((Page) bufdata) != PG_PAGE_LAYOUT_VERSION &&
 +		!PageIsNew((Page) bufdata))
 +	{
-+		ForkNumber	forknum = tag.forkNum;
-+		BlockNumber	blocknum = tag.blockNum;
-+
-+		Assert(is_temp == false);	/* not on a temp relation */
-+
-+		/*
-+		 * All the forks but MAIN_FORKNUM should be converted to the
-+		 * actual page layout version in pg_upgrade.
-+		 */
-+		if (forknum != MAIN_FORKNUM)
++		Assert(!is_temp);
++		if (tag.forkNum != MAIN_FORKNUM)
 +		{
 +			RelPathStr path = relpathbackend(td->smgr.rlocator,
-+											 INVALID_PROC_NUMBER, forknum);
++												 INVALID_PROC_NUMBER, tag.forkNum);
 +
++			/* TODO: propagate conversion errors through the AIO result. */
 +			ereport(ERROR,
-+				(errcode(ERRCODE_DATA_CORRUPTED),
-+				 errmsg("invalid fork type (%d) in block %u of relation %s",
-+						forknum, blocknum, path.str)));
++					(errcode(ERRCODE_DATA_CORRUPTED),
++					 errmsg("invalid fork type (%d) in block %u of relation %s",
++							tag.forkNum, tag.blockNum, path.str)));
 +		}
 +
-+		LWLockAcquire(BufferDescriptorGetContentLock(buf_hdr), LW_EXCLUSIVE);
-+
-+		/* Check for no concurrent changes */
-+		if (PageGetPageLayoutVersion((Page) bufdata) != PG_PAGE_LAYOUT_VERSION)
-+		{
-+			Buffer buf = BufferDescriptorGetBuffer(buf_hdr);
-+
-+			convert_page(relation, bufdata, buf, blocknum);
-+		}
-+
-+		LWLockRelease(BufferDescriptorGetContentLock(buf_hdr));
++		convert_page(&td->smgr.relextradata, &td->smgr.rlocator,
++					 tag.forkNum, (Page) bufdata, buffer, tag.blockNum);
 +	}
 +
  	/* Terminate I/O and set BM_VALID. */
  	set_flag_bits = failed ? BM_IO_ERROR : BM_VALID;
  	if (is_temp)
-@@ -7197,6 +7347,7 @@ buffer_readv_complete(PgAioHandle *ioh, PgAioResult prior_result,
- 	uint8		checkfail_count = 0;
- 	uint64	   *io_data;
- 	uint8		handle_data_len;
-+	Relation	relation;
- 
- 	if (is_temp)
- 	{
-@@ -7211,6 +7362,7 @@ buffer_readv_complete(PgAioHandle *ioh, PgAioResult prior_result,
- 	 * per-buffer completion function for each buffer.
- 	 */
- 	io_data = pgaio_io_get_handle_data(ioh, &handle_data_len);
-+	relation = pgaio_io_get_handle_pointer(ioh);
- 	for (uint8 buf_off = 0; buf_off < handle_data_len; buf_off++)
- 	{
- 		Buffer		buf = io_data[buf_off];
-@@ -7235,7 +7387,8 @@ buffer_readv_complete(PgAioHandle *ioh, PgAioResult prior_result,
- 								  &failed_verification,
- 								  &failed_checksum,
- 								  &ignored_checksum,
--								  &zeroed_buffer);
-+								  &zeroed_buffer,
-+								  relation);
- 
- 		/*
- 		 * Track information about the number of different kinds of error
 diff --git a/src/backend/storage/buffer/heap_convert.c b/src/backend/storage/buffer/heap_convert.c
 new file mode 100644
-index 0000000000..843ccc9418
+index 00000000000..c5b9634ef41
 --- /dev/null
 +++ b/src/backend/storage/buffer/heap_convert.c
-@@ -0,0 +1,549 @@
+@@ -0,0 +1,532 @@
 +/*-------------------------------------------------------------------------
 + *
 + * heap_convert.c
@@ -8954,15 +8825,66 @@ index 0000000000..843ccc9418
 +
 +#include "postgres.h"
 +
-+#include "access/generic_xlog.h"
 +#include "access/heapam.h"
 +#include "access/multixact.h"
 +#include "catalog/catalog.h"
 +#include "storage/bufmgr.h"
 +#include "storage/checksum.h"
++#include "storage/relation_extra_data.h"
 +
-+static void repack_heap_tuples(Relation rel, Page page, Buffer buf,
++static void repack_heap_tuples(RelationExtraData *rel_extra,
++							   RelFileLocator *relfilelocator,
++							   ForkNumber forknumber, Page page, Buffer buf,
 +							   BlockNumber blkno, bool double_xmax);
++
++/*
++ * Convert heap/toast page into 64-xid format.
++ *
++ */
++static void
++convert_page_internal(RelationExtraData *rel_extra, RelFileLocator *relfilelocator,
++					  ForkNumber forknumber, Page page, Buffer buf,
++					  BlockNumber blkno)
++{
++	PageHeader	hdr = (PageHeader) page;
++	bool		try_double_xmax;
++
++	Assert(rel_extra != NULL);
++	Assert(rel_extra->relkind != RELKIND_UNKNOWN);
++
++	switch (rel_extra->relkind)
++	{
++		case RELKIND_TOASTVALUE:
++			try_double_xmax = hdr->pd_upper - hdr->pd_lower <
++									MAXALIGN(sizeof(ToastPageSpecialData));
++			repack_heap_tuples(rel_extra, relfilelocator, forknumber, page, buf, blkno, try_double_xmax);
++			break;
++		case RELKIND_RELATION:
++		case RELKIND_PARTITIONED_TABLE:
++		case RELKIND_MATVIEW:
++			try_double_xmax = hdr->pd_upper - hdr->pd_lower <
++									MAXALIGN(sizeof(HeapPageSpecialData));
++			repack_heap_tuples(rel_extra, relfilelocator, forknumber, page, buf, blkno, try_double_xmax);
++			break;
++		case RELKIND_INDEX:
++			/* no need to convert index */
++		case RELKIND_SEQUENCE:
++			/* no real need to convert sequences */
++			break;
++		default:
++			ereport(ERROR,
++					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
++					 errmsg("conversion for blkno %u, relation \"%s\" cannot be done",
++							blkno,
++							relpathperm(*relfilelocator, forknumber).str),
++					 errdetail_relkind_not_supported(rel_extra->relkind)));
++	}
++
++	hdr->pd_checksum = pg_checksum_page((char *) page, blkno);
++
++	PageSetPageSizeAndVersion(page, PageGetPageSize(page),
++							  PG_PAGE_LAYOUT_VERSION);
++}
 +
 +/*
 + * itemoffcompare
@@ -8980,103 +8902,25 @@ index 0000000000..843ccc9418
 + * Lazy page conversion from 32-bit to 64-bit XID at first read.
 + */
 +void
-+convert_page(Relation rel, Page page, Buffer buf, BlockNumber blkno)
++convert_page(RelationExtraData *rel_extra, RelFileLocator *relfilelocator, ForkNumber forknum,
++			 Page page, Buffer buf, BlockNumber blkno)
 +{
-+	static unsigned		logcnt = 0;
-+	bool				logit;
-+	PageHeader			hdr = (PageHeader) page;
-+	GenericXLogState   *state = NULL;
-+	uint16				checksum;
-+	bool				try_double_xmax;
-+
-+	/* Not during XLog replaying */
-+	Assert(rel != NULL);
-+
-+	/* Verify checksum */
-+	if (hdr->pd_checksum)
-+	{
-+		checksum = pg_checksum_page((char *) page, blkno);
-+		if (checksum != hdr->pd_checksum)
-+			ereport(ERROR,
-+					(errcode(ERRCODE_INDEX_CORRUPTED),
-+					 errmsg("page verification failed, calculated checksum %u but expected %u",
-+							checksum, hdr->pd_checksum)));
-+	}
-+
 +	/*
-+	 * We occasionally force logging of page conversion, so never-changed
-+	 * pages are converted in the end. FORCE_LOG_EVERY is chosen arbitrarily
-+	 * to log neither too much nor too little.
++	 * EVoro: Logging is not performed here anymore, because of the fact that this
++	 * conversion is performed on the worker side (in case of io_method=workers),
++	 * and logging on the worker side, as well as palloc or reporting in
++	 * critical sections, must be a bad idea. So that, here the converted page
++	 * goes only into a shared buffer and the buffer marked with the
++	 * BM_CONVERTED flag, which means 'converted only in memory'. The page will
++	 * be logged with full-page-write record on first actual change later.
++	 *
++	 * TODO: Also it is suggested that VACUUM, having found the BM_CONVERTED
++	 * flag on the page, considering it dirty, logging the converted page with
++	 * FPW, which eventually results in updating the page on the disk.
 +	 */
-+#define FORCE_LOG_EVERY 128
-+	logit = !RecoveryInProgress() && XLogIsNeeded() && RelationNeedsWAL(rel);
-+	logit = logit && (++logcnt % FORCE_LOG_EVERY) == 0;
-+	if (logit)
-+	{
-+		state = GenericXLogStart(rel);
-+		page = GenericXLogRegisterBuffer(state, buf,
-+										 GENERIC_XLOG_FULL_IMAGE);
-+		hdr = (PageHeader) page;
-+	}
-+#ifdef USE_ASSERT_CHECKING
-+	else
-+	{
-+		/* Not already converted */
-+		Assert(PageGetPageLayoutVersion(page) != PG_PAGE_LAYOUT_VERSION);
-+		/* Page in 32-bit xid format should not have PageSpecial. */
-+		Assert(PageGetSpecialSize(page) == 0);
-+	}
-+#endif
 +
-+	switch (rel->rd_rel->relkind)
-+	{
-+		case 't':
-+			try_double_xmax = hdr->pd_upper - hdr->pd_lower <
-+									MAXALIGN(sizeof(ToastPageSpecialData));
-+			repack_heap_tuples(rel, page, buf, blkno, try_double_xmax);
-+			break;
-+		case 'r':
-+		case 'p':
-+		case 'm':
-+			try_double_xmax = hdr->pd_upper - hdr->pd_lower <
-+									MAXALIGN(sizeof(HeapPageSpecialData));
-+			repack_heap_tuples(rel, page, buf, blkno, try_double_xmax);
-+			break;
-+		case 'i':
-+			/* no need to convert index */
-+		case 'S':
-+			/* no real need to convert sequences */
-+			break;
-+		default:
-+			ereport(ERROR,
-+					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-+					 errmsg("conversion for relation \"%s\" cannot be done",
-+							RelationGetRelationName(rel)),
-+					 errdetail_relkind_not_supported(rel->rd_rel->relkind)));
-+	}
-+
-+	hdr->pd_checksum = pg_checksum_page((char *) page, blkno);
-+
-+	PageSetPageSizeAndVersion(page, PageGetPageSize(page),
-+							  PG_PAGE_LAYOUT_VERSION);
-+
-+	if (logit)
-+	{
-+		/*
-+		 * Finish logging buffer conversion and mark buffer as dirty.
-+		 */
-+		Assert(state != NULL);
-+		MarkBufferDirty(buf);
-+		GenericXLogFinish(state);
-+	}
-+	else
-+	{
-+		/*
-+		 * Otherwise, it will be logged with full-page-write record on first
-+		 * actual change.
-+		 */
-+		MarkBufferConverted(buf, true);
-+	}
++	convert_page_internal(rel_extra, relfilelocator, forknum, page, buf, blkno);
++	MarkBufferConverted(buf, true);
 +}
 +
 +/*
@@ -9314,7 +9158,8 @@ index 0000000000..843ccc9418
 + *		Convert heap page format reusing space of dead tuples
 + */
 +static void
-+repack_heap_tuples(Relation rel, Page page, Buffer buf, BlockNumber blkno,
++repack_heap_tuples(RelationExtraData *rel_extra, RelFileLocator *relfilelocator,
++				   ForkNumber forknumber, Page page, Buffer buf, BlockNumber blkno,
 +				   bool try_double_xmax)
 +{
 +	ItemIdCompactData	items[MaxHeapTuplesPerPage];
@@ -9331,14 +9176,14 @@ index 0000000000..843ccc9418
 +						new_hdr;
 +	PGAlignedBlock		zerobuf = {0};
 +	Page				new_page;
-+	MultiXactId			multi_base = rel->rd_rel->relminmxid,
++	MultiXactId			multi_base = rel_extra->relminmxid,
 +						multi_min = MaxMultiXactId,
 +						multi_max = InvalidMultiXactId;
-+	TransactionId		xid_base = rel->rd_rel->relfrozenxid,
++	TransactionId		xid_base = rel_extra->relfrozenxid,
 +						xid_min = MaxTransactionId,
 +						xid_max = InvalidTransactionId;
 +
-+	toast = IsToastRelation(rel);
++	toast = rel_extra->relkind == RELKIND_TOASTVALUE;
 +
 +	if (TransactionIdIsNormal(hdr->pd_prune_xid))
 +		xid_min = xid_max = hdr->pd_prune_xid;
@@ -9381,10 +9226,15 @@ index 0000000000..843ccc9418
 +			if (unlikely(itemPtr->itemoff < hdr->pd_upper ||
 +						 itemPtr->itemoff >= hdr->pd_special))
 +			{
++			/*
++			 * EVoro: To-do: avoid exceptions (ereporting) on the AIO worker's
++			 * side, implement reporting using coding/encoding error approach in AIO
++			 */
 +				ereport(ERROR,
 +						(errcode(ERRCODE_DATA_CORRUPTED),
-+						 errmsg("corrupted item pointer: %u",
-+								itemPtr->itemoff)));
++						 errmsg("corrupted item pointer: %u of relation \"%s\"",
++								itemPtr->itemoff,
++								relpathperm(*relfilelocator, forknumber).str)));
 +			}
 +
 +			itemPtr->alignedlen = MAXALIGN(ItemIdGetLength(lp));
@@ -9437,7 +9287,7 @@ index 0000000000..843ccc9418
 +	{
 +		/* No space for special area, switch to "double xmax" format */
 +		elog(DEBUG2, "convert heap page %u of relation \"%s\" to double xmax format",
-+			 blkno, RelationGetRelationName(rel));
++			 blkno, relpathperm(*relfilelocator, forknumber).str);
 +
 +		if (try_double_xmax)
 +		{
@@ -9446,7 +9296,7 @@ index 0000000000..843ccc9418
 +		}
 +		else
 +		{
-+			repack_heap_tuples(rel, page, buf, blkno, true);
++			repack_heap_tuples(rel_extra, relfilelocator, forknumber, page, buf, blkno, true);
 +			return;
 +		}
 +	}
@@ -9483,13 +9333,17 @@ index 0000000000..843ccc9418
 +
 +	new_hdr->pd_upper = upper;
 +	if (new_hdr->pd_lower > new_hdr->pd_upper)
++			/*
++			 * EVoro: To-do: avoid exceptions (ereporting) on the AIO worker's
++			 * side, implement reporting using coding/encoding errors in AIO
++			 */
 +		elog(ERROR, "cannot convert block %u of relation \"%s\"",
-+			 blkno, RelationGetRelationName(rel));
++			 blkno, relpathperm(*relfilelocator, forknumber).str);
 +
 +	memcpy(page, new_page, BLCKSZ);
 +}
 diff --git a/src/backend/storage/buffer/meson.build b/src/backend/storage/buffer/meson.build
-index 448976d240..3b4d32e4dc 100644
+index ed84bf08971..800e7588c75 100644
 --- a/src/backend/storage/buffer/meson.build
 +++ b/src/backend/storage/buffer/meson.build
 @@ -5,5 +5,6 @@ backend_sources += files(
@@ -15026,6 +14880,20 @@ index c061a2ec7d..6a13fa3cdb 100644
 +#define CATALOG_VERSION_NO	999999999
  
  #endif
+diff --git a/src/include/catalog/pg_class.h b/src/include/catalog/pg_class.h
+index c4af599dc90..ec3d7f42d4f 100644
+--- a/src/include/catalog/pg_class.h
++++ b/src/include/catalog/pg_class.h
+@@ -168,6 +168,9 @@ MAKE_SYSCACHE(RELNAMENSP, pg_class_relname_nsp_index, 128);
+ 
+ #ifdef EXPOSE_TO_CLIENT_CODE
+ 
++/* Internal marker for reads without relation metadata; never a catalog value. */
++#define RELKIND_UNKNOWN 'u'
++
+ #define		  RELKIND_RELATION		  'r'	/* ordinary table */
+ #define		  RELKIND_INDEX			  'i'	/* secondary index */
+ #define		  RELKIND_SEQUENCE		  'S'	/* sequence object */
 diff --git a/src/include/catalog/pg_operator.dat b/src/include/catalog/pg_operator.dat
 index 6d9dc1528d..6b1f1fdfed 100644
 --- a/src/include/catalog/pg_operator.dat
@@ -15340,97 +15208,67 @@ index 023ac6d5fa..a4b89f696b 100644
  extern PGDLLIMPORT double autovacuum_vac_cost_delay;
  extern PGDLLIMPORT int autovacuum_vac_cost_limit;
  
-diff --git a/src/include/storage/aio.h b/src/include/storage/aio.h
-index 2933eea064..3860f320a4 100644
---- a/src/include/storage/aio.h
-+++ b/src/include/storage/aio.h
-@@ -314,7 +314,8 @@ extern void pgaio_io_set_handle_data_64(PgAioHandle *ioh, uint64 *data, uint8 le
- extern void pgaio_io_set_handle_data_32(PgAioHandle *ioh, uint32 *data, uint8 len);
- extern uint64 *pgaio_io_get_handle_data(PgAioHandle *ioh, uint8 *len);
+diff --git a/src/include/storage/aio_types.h b/src/include/storage/aio_types.h
+index 17b59aeed7c..bf6dfd82df7 100644
+--- a/src/include/storage/aio_types.h
++++ b/src/include/storage/aio_types.h
+@@ -16,6 +16,7 @@
+ #define AIO_TYPES_H
  
--
-+extern void pgaio_io_set_handle_pointer(PgAioHandle *ioh, void *ptr);
-+extern void *pgaio_io_get_handle_pointer(PgAioHandle *ioh);
- 
- /* --------------------------------------------------------------------------------
-  * IO Wait References
-diff --git a/src/include/storage/aio_internal.h b/src/include/storage/aio_internal.h
-index b4de30f2ec..be592de264 100644
---- a/src/include/storage/aio_internal.h
-+++ b/src/include/storage/aio_internal.h
-@@ -250,6 +250,8 @@ typedef struct PgAioCtl
- 
- 	uint32		io_handle_count;
- 	PgAioHandle *io_handles;
-+
-+	void	   *ptr;
- } PgAioCtl;
+ #include "storage/block.h"
++#include "storage/relation_extra_data.h"
+ #include "storage/relfilelocator.h"
  
  
+@@ -65,6 +66,7 @@ typedef union PgAioTargetData
+ 		RelFileLocator rlocator;	/* physical relation identifier */
+ 		BlockNumber blockNum;	/* blknum relative to begin of reln */
+ 		BlockNumber nblocks;
++		RelationExtraData relextradata;
+ 		ForkNumber	forkNum:8;	/* don't waste 4 byte for four values */
+ 		bool		is_temp:1;	/* proc can be inferred by owning AIO */
+ 		bool		skip_fsync:1;
 diff --git a/src/include/storage/buf_internals.h b/src/include/storage/buf_internals.h
-index 5400c56a96..b570ab20bc 100644
+index a23abf14f8f..87856c2701d 100644
 --- a/src/include/storage/buf_internals.h
 +++ b/src/include/storage/buf_internals.h
-@@ -42,18 +42,18 @@
-  * The definition of buffer state components is below.
-  */
- #define BUF_REFCOUNT_BITS 18
--#define BUF_USAGECOUNT_BITS 4
--#define BUF_FLAG_BITS 10
-+#define BUF_USAGECOUNT_BITS 3
-+#define BUF_FLAG_BITS 11
- 
- StaticAssertDecl(BUF_REFCOUNT_BITS + BUF_USAGECOUNT_BITS + BUF_FLAG_BITS == 32,
- 				 "parts of buffer state space need to equal 32");
- 
- #define BUF_REFCOUNT_ONE 1
--#define BUF_REFCOUNT_MASK ((1U << BUF_REFCOUNT_BITS) - 1)
--#define BUF_USAGECOUNT_MASK (((1U << BUF_USAGECOUNT_BITS) - 1) << (BUF_REFCOUNT_BITS))
--#define BUF_USAGECOUNT_ONE (1U << BUF_REFCOUNT_BITS)
--#define BUF_USAGECOUNT_SHIFT BUF_REFCOUNT_BITS
--#define BUF_FLAG_MASK (((1U << BUF_FLAG_BITS) - 1) << (BUF_REFCOUNT_BITS + BUF_USAGECOUNT_BITS))
-+#define BUF_REFCOUNT_MASK ((1U << 18) - 1)
-+#define BUF_USAGECOUNT_MASK 0x001C0000U
-+#define BUF_USAGECOUNT_ONE (1U << 18)
-+#define BUF_USAGECOUNT_SHIFT 18
-+#define BUF_FLAG_MASK 0xFFE00000U
- 
- /* Get refcount and usagecount from buffer state */
- #define BUF_STATE_GET_REFCOUNT(state) ((state) & BUF_REFCOUNT_MASK)
-@@ -65,6 +65,7 @@ StaticAssertDecl(BUF_REFCOUNT_BITS + BUF_USAGECOUNT_BITS + BUF_FLAG_BITS == 32,
-  * Note: BM_TAG_VALID essentially means that there is a buffer hashtable
-  * entry associated with the buffer's tag.
-  */
-+#define BM_CONVERTED			(1U << 21)	/* buffer were converted to 64xid */
- #define BM_LOCKED				(1U << 22)	/* buffer header is locked */
- #define BM_DIRTY				(1U << 23)	/* data needs writing */
- #define BM_VALID				(1U << 24)	/* data is valid */
+@@ -114,7 +114,8 @@ StaticAssertDecl(BUF_REFCOUNT_BITS + BUF_USAGECOUNT_BITS + BUF_FLAG_BITS + BUF_L
+ #define BM_IO_IN_PROGRESS			BUF_DEFINE_FLAG( 4)
+ /* previous I/O failed */
+ #define BM_IO_ERROR					BUF_DEFINE_FLAG( 5)
+-/* flag bit 6 is not used anymore */
++/* converted to xid64 in memory; force a full image on first WAL change */
++#define BM_CONVERTED				BUF_DEFINE_FLAG( 6)
+ /* have waiter for sole pin */
+ #define BM_PIN_COUNT_WAITER			BUF_DEFINE_FLAG( 7)
+ /* must write for checkpoint */
 diff --git a/src/include/storage/bufmgr.h b/src/include/storage/bufmgr.h
-index b5f8f3c5d4..b7e36aae12 100644
+index 6837b35fc6d..da2f515ff51 100644
 --- a/src/include/storage/bufmgr.h
 +++ b/src/include/storage/bufmgr.h
-@@ -297,8 +297,12 @@ extern void BufferGetTag(Buffer buffer, RelFileLocator *rlocator,
+@@ -19,6 +19,7 @@
+ #include "storage/block.h"
+ #include "storage/buf.h"
+ #include "storage/bufpage.h"
++#include "storage/relation_extra_data.h"
+ #include "storage/relfilelocator.h"
+ #include "utils/relcache.h"
+ #include "utils/snapmgr.h"
+@@ -315,6 +316,14 @@ extern void BufferGetTag(Buffer buffer, RelFileLocator *rlocator,
  						 ForkNumber *forknum, BlockNumber *blknum);
  
  extern void MarkBufferDirtyHint(Buffer buffer, bool buffer_std);
 +extern void MarkBufferConverted(Buffer buffer, bool converted);
 +extern bool IsBufferConverted(Buffer buffer);
- 
- extern void UnlockBuffers(void);
 +extern bool IsBufferLocked(Buffer buffer);
 +extern bool IsBufferLockedExclusive(Buffer buffer);
- extern void LockBuffer(Buffer buffer, int mode);
- extern bool ConditionalLockBuffer(Buffer buffer);
- extern void LockBufferForCleanup(Buffer buffer);
-@@ -341,6 +345,8 @@ extern int	GetAccessStrategyPinLimit(BufferAccessStrategy strategy);
++
++extern void convert_page(RelationExtraData *rel_extra,
++						 RelFileLocator *rlocator, ForkNumber forknum,
++						 Page page, Buffer buffer, BlockNumber blocknum);
  
- extern void FreeAccessStrategy(BufferAccessStrategy strategy);
- 
-+/* old tuple format support */
-+extern void convert_page(Relation rel, Page orig_page, Buffer buf, BlockNumber blkno);
- 
- /* inline functions */
- 
+ extern bool BufferSetHintBits16(uint16 *ptr, uint16 val, Buffer buffer);
+ extern bool BufferBeginSetHintBits(Buffer buffer);
 diff --git a/src/include/storage/bufpage.h b/src/include/storage/bufpage.h
 index abc2cf2a02..c2df78e55e 100644
 --- a/src/include/storage/bufpage.h
@@ -15818,6 +15656,43 @@ index c6f5ebceef..2cf9a53b3e 100644
  
  	/*
  	 * Array mirroring PGPROC.subxidStatus for each PGPROC currently in the
+diff --git a/src/include/storage/relation_extra_data.h b/src/include/storage/relation_extra_data.h
+new file mode 100644
+index 00000000000..365f61a7c45
+--- /dev/null
++++ b/src/include/storage/relation_extra_data.h
+@@ -0,0 +1,31 @@
++/*-------------------------------------------------------------------------
++ *
++ * relation_extra_data.h
++ *    data type for extra information which is needed for
++ *    conversion from Heap v4 to Heap v5
++ *
++ *
++ * Portions Copyright (c) 1996-2026, PostgreSQL Global
++ * Development Group Portions Copyright (c) 1994, Regents of
++ * the University of California
++ *
++ * src/include/storage/relation_extra_data.h
++ *
++ *-------------------------------------------------------------------------
++ */
++
++#ifndef RELATION_EXTRA_DATA_H
++#define RELATION_EXTRA_DATA_H
++
++/*
++ * Relation extra data needed for conversion
++ */
++
++typedef struct RelationExtraData
++{
++	TransactionId relfrozenxid;
++	MultiXactId	relminmxid;
++	char		relkind;
++} RelationExtraData;
++
++#endif /* RELATION_EXTRA_DATA_H */
 diff --git a/src/include/utils/combocid.h b/src/include/utils/combocid.h
 index 4a2069b286..4fcb899fcd 100644
 --- a/src/include/utils/combocid.h
@@ -16748,18 +16623,35 @@ index f56482fb9f..5557cfa44c 100644
  # ----------
  # Load huge amounts of data
 diff --git a/src/test/regress/regress.c b/src/test/regress/regress.c
-index a2db608087..bb571b2deb 100644
 --- a/src/test/regress/regress.c
 +++ b/src/test/regress/regress.c
-@@ -38,6 +38,7 @@
- #include "parser/parse_coerce.h"
+@@ -20,6 +20,8 @@
+ #include <signal.h>
+ 
+ #include "access/detoast.h"
++#include "access/hio.h"
++#include "access/relation.h"
+ #include "access/htup_details.h"
+ #include "catalog/catalog.h"
+ #include "catalog/namespace.h"
+@@ -42,13 +44,15 @@
  #include "port/atomics.h"
+ #include "portability/instr_time.h"
  #include "postmaster/postmaster.h"	/* for MAX_BACKENDS */
 +#include "storage/checksum.h"
++#include "storage/bufmgr.h"
  #include "storage/spin.h"
+ #include "tcop/tcopprot.h"
  #include "utils/array.h"
  #include "utils/builtins.h"
-@@ -359,6 +360,7 @@ make_tuple_indirect(PG_FUNCTION_ARGS)
++#include "utils/rel.h"
+ #include "utils/geo_decls.h"
+ #include "utils/memutils.h"
+-#include "utils/rel.h"
+ #include "utils/typcache.h"
+ 
+ /* define our text domain for translations */
+@@ -369,6 +373,7 @@
  	tuple.t_len = HeapTupleHeaderGetDatumLength(rec);
  	ItemPointerSetInvalid(&(tuple.t_self));
  	tuple.t_tableOid = InvalidOid;
@@ -16767,15 +16659,24 @@ index a2db608087..bb571b2deb 100644
  	tuple.t_data = rec;
  
  	values = (Datum *) palloc(ncolumns * sizeof(Datum));
-@@ -1028,3 +1030,294 @@ test_relpath(PG_FUNCTION_ARGS)
- 
- 	PG_RETURN_VOID();
+@@ -1498,3 +1503,303 @@
+ 	SET_VARSIZE(result, dlen + VARHDRSZ);
+ 	PG_RETURN_BYTEA_P(result);
  }
 +
-+#include "access/hio.h"
-+#include "access/relation.h"
-+#include "storage/bufmgr.h"
-+#include "utils/rel.h"
++/* Supply the same by-value metadata used by AIO conversion. */
++static void
++ConvertTestPage(Relation rel, Page page, Buffer buffer, BlockNumber blocknum)
++{
++	RelationExtraData rel_extra;
++
++	rel_extra.relfrozenxid = rel->rd_rel->relfrozenxid;
++	rel_extra.relminmxid = rel->rd_rel->relminmxid;
++	rel_extra.relkind = rel->rd_rel->relkind;
++	convert_page(&rel_extra, &rel->rd_locator, MAIN_FORKNUM,
++				 page, buffer, blocknum);
++}
++
 +
 +static void
 +CheckNewPage(char *msg, Page page)
@@ -16831,7 +16732,7 @@ index a2db608087..bb571b2deb 100644
 +	PageSetPageSizeAndVersion(page, BLCKSZ, PG_PAGE_LAYOUT_VERSION - 1);
 +	hdr->pd_checksum = pg_checksum_page((char *) page, 0);
 +
-+	convert_page(rel, page, buf, 0);
++	ConvertTestPage(rel, page, buf, 0);
 +	CheckNewPage("test 1", page);
 +
 +	UnlockReleaseBuffer(buf);
@@ -16960,12 +16861,12 @@ index a2db608087..bb571b2deb 100644
 +		hdr->pd_checksum = pg_checksum_page((char *) page, pageno);
 +
 +		before = FillRelCheckValues(rel, buf, page);
-+		convert_page(rel, page, buf, pageno);
++		ConvertTestPage(rel, page, buf, pageno);
 +		after = FillRelCheckValues(rel, buf, page);
 +
 +		/* check */
 +		if (before.ntuples != after.ntuples)
-+			elog(ERROR, "numer of tuples must be equal");
++			elog(ERROR, "number of tuples must be equal");
 +
 +		for (i = 0; i != before.ntuples; ++i)
 +		{
@@ -17040,7 +16941,7 @@ index a2db608087..bb571b2deb 100644
 +		PageSetPageSizeAndVersion(page, BLCKSZ, PG_PAGE_LAYOUT_VERSION - 1);
 +		hdr->pd_checksum = pg_checksum_page((char *) page, pageno);
 +
-+		convert_page(rel, page, buf, pageno);
++		ConvertTestPage(rel, page, buf, pageno);
 +
 +		if (HeapPageIsDoubleXmax(page))
 +		{
@@ -17891,5 +17792,6 @@ index 23bce72ae6..239d087fbf 100644
  iterator
  jmp_buf
  join_search_hook_type
+
 -- 
 2.51.0
