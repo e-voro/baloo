@@ -171,3 +171,30 @@ pages or a separate tuple-XID payload to prune WAL.
   mini0090(procarray.c). Full compile/recovery testing still awaits the rest
   of 0005. Saved affected aggregate sections were applied to 8ca324058af in a
   scratch directory and matched the intended files exactly.
+
+## IMPORTANT: apply-lock XID truncation; paused before mini0092(lmgr.c) (2026-10-19)
+
+- Source now includes mini0090(procarray.c), commit `47c4fc82545`, and
+  mini0091(standby.c), commit `f19bebb709a`. PG19 recovery-conflict atomic flags,
+  GlobalVis `allow_update`, snapshot allocation cleanup, and slot checks remain.
+  The standby change preserves the full horizon and removes stale truncation
+  wording; it retains the original half-range guard.
+- **Stop under the user's rule for new logic decisions:**
+  `SET_LOCKTAG_APPLY_TRANSACTION` still assigns a full remote XID to uint32
+  `locktag_field3`. A compiled probe using the actual PG19 `locktag.h` gives
+  identical 16-byte tags for XIDs 100 and 4294967396, with the other IDs equal.
+  Parallel logical apply uses these keys for stream/transaction waits, so this
+  can make unrelated transactions contend. No runtime deadlock/data-loss claim
+  has been established. The omission also exists in the original PG18 patch.
+- Decide the full-width apply-lock representation before implementing it;
+  account for database/subscription IDs and stream/transaction subtype, then
+  audit producers, consumers, hashing/padding, diagnostics, and pg_locks.
+  Current LOCKTAG has no spare 32-bit field while retaining those identifiers.
+  Details and related output-field omissions are in root `codex_todo.txt`.
+- PG19 moved lock tags to `storage/locktag.h`; future mini0170(lock.h) must
+  target that header. Original mini0170 does not handle apply-transaction tags.
+  mini0092(lmgr.c) and later minis remain unapplied.
+- Validation: mini0091 reverse check and source whitespace checks passed;
+  aggregate procarray.c/standby.c sections applied to `8ca324058af` in scratch
+  and reproduced the working files exactly. Full build/recovery testing still
+  awaits remaining 0005 definitions. The lock-tag probe tests encoding only.
