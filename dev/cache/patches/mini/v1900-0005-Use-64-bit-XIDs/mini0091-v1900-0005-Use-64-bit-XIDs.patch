@@ -1,0 +1,35 @@
+diff --git a/src/backend/storage/ipc/standby.c b/src/backend/storage/ipc/standby.c
+index 73607e224fa..38e0c241c0c 100644
+--- a/src/backend/storage/ipc/standby.c
++++ b/src/backend/storage/ipc/standby.c
+@@ -517,22 +517,21 @@ ResolveRecoveryConflictWithSnapshotFullXid(FullTransactionId snapshotConflictHor
+ 										   RelFileLocator locator)
+ {
+ 	/*
+-	 * ResolveRecoveryConflictWithSnapshot operates on 32-bit TransactionIds,
+-	 * so truncate the logged FullTransactionId.  If the logged value is very
+-	 * old, so that XID wrap-around already happened on it, there can't be any
+-	 * snapshots that still see it.
++	 * Only consider horizons within the half-XID-space range supported by
++	 * TransactionId comparisons.  XidFromFullTransactionId preserves all 64
++	 * bits of the logged horizon.
+ 	 */
+ 	FullTransactionId nextXid = ReadNextFullTransactionId();
+ 	uint64		diff;
+ 
+-	diff = U64FromFullTransactionId(nextXid) -
+-		U64FromFullTransactionId(snapshotConflictHorizon);
++	diff = XidFromFullTransactionId(nextXid) -
++		XidFromFullTransactionId(snapshotConflictHorizon);
+ 	if (diff < MaxTransactionId / 2)
+ 	{
+-		TransactionId truncated;
++		TransactionId horizonXid;
+ 
+-		truncated = XidFromFullTransactionId(snapshotConflictHorizon);
+-		ResolveRecoveryConflictWithSnapshot(truncated,
++		horizonXid = XidFromFullTransactionId(snapshotConflictHorizon);
++		ResolveRecoveryConflictWithSnapshot(horizonXid,
+ 											isCatalogRel,
+ 											locator);
+ 	}

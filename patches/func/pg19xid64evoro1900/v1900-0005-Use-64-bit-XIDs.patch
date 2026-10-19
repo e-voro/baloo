@@ -110,7 +110,7 @@ Discussion: https://postgr.es/m/CAJ7c6TPDOYBYrnCAeyndkBktO0WG2xSdYduTF0nxq%2Bvfk
  src/backend/storage/buffer/heap_convert.c | 532 +
  src/backend/storage/buffer/meson.build | 1 +
  src/backend/storage/ipc/procarray.c | 183 +-
- src/backend/storage/ipc/standby.c | 4 +-
+ src/backend/storage/ipc/standby.c | 17 +-
  src/backend/storage/lmgr/lmgr.c | 14 +-
  src/backend/storage/lmgr/lock.c | 4 +-
  src/backend/storage/lmgr/predicate.c | 36 +-
@@ -237,7 +237,7 @@ Discussion: https://postgr.es/m/CAJ7c6TPDOYBYrnCAeyndkBktO0WG2xSdYduTF0nxq%2Bvfk
  src/test/xid-64/t/006_zeropage.pl | 33 +
  src/test/xid-64/t/007_first_multi.pl | 83 +
  src/tools/pgindent/typedefs.list | 4 +-
- 215 files changed, 6889 insertions(+), 2065 deletions(-)
+ 215 files changed, 6895 insertions(+), 2072 deletions(-)
 
 diff --git a/contrib/amcheck/verify_heapam.c b/contrib/amcheck/verify_heapam.c
 index e5ea68b801..14ce47cf80 100644
@@ -9916,10 +9916,21 @@ index 52b7b374d4d..581fb4c7d12 100644
  /* ----------------------------------------------
   *		KnownAssignedTransactionIds sub-module
 diff --git a/src/backend/storage/ipc/standby.c b/src/backend/storage/ipc/standby.c
-index 032b31f52c..80b47ed129 100644
+index 73607e224fa..38e0c241c0c 100644
 --- a/src/backend/storage/ipc/standby.c
 +++ b/src/backend/storage/ipc/standby.c
-@@ -522,8 +522,8 @@ ResolveRecoveryConflictWithSnapshotFullXid(FullTransactionId snapshotConflictHor
+@@ -517,22 +517,21 @@ ResolveRecoveryConflictWithSnapshotFullXid(FullTransactionId snapshotConflictHor
+ 										   RelFileLocator locator)
+ {
+ 	/*
+-	 * ResolveRecoveryConflictWithSnapshot operates on 32-bit TransactionIds,
+-	 * so truncate the logged FullTransactionId.  If the logged value is very
+-	 * old, so that XID wrap-around already happened on it, there can't be any
+-	 * snapshots that still see it.
++	 * Only consider horizons within the half-XID-space range supported by
++	 * TransactionId comparisons.  XidFromFullTransactionId preserves all 64
++	 * bits of the logged horizon.
+ 	 */
  	FullTransactionId nextXid = ReadNextFullTransactionId();
  	uint64		diff;
  
@@ -9929,7 +9940,16 @@ index 032b31f52c..80b47ed129 100644
 +		XidFromFullTransactionId(snapshotConflictHorizon);
  	if (diff < MaxTransactionId / 2)
  	{
- 		TransactionId truncated;
+-		TransactionId truncated;
++		TransactionId horizonXid;
+ 
+-		truncated = XidFromFullTransactionId(snapshotConflictHorizon);
+-		ResolveRecoveryConflictWithSnapshot(truncated,
++		horizonXid = XidFromFullTransactionId(snapshotConflictHorizon);
++		ResolveRecoveryConflictWithSnapshot(horizonXid,
+ 											isCatalogRel,
+ 											locator);
+ 	}
 diff --git a/src/backend/storage/lmgr/lmgr.c b/src/backend/storage/lmgr/lmgr.c
 index 4798eb7900..a49e92e362 100644
 --- a/src/backend/storage/lmgr/lmgr.c
