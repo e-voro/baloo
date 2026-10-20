@@ -427,7 +427,7 @@ pages or a separate tuple-XID payload to prune WAL.
   file is touched by this probe; utility/TAP/full-build tests remain pending
   until remaining 0005 headers/definitions, including segresize.c, are applied.
 
-## IMPORTANT: upgrade fixes completed; stop before mini0126(pg_upgrade.c)
+## Upgrade checkpoint before mini0126(pg_upgrade.c) (superseded below)
 
 - **The supplied PG18 patch 0012 already fixes the index bug.** Its check.c
   hunk changes post-upgrade invalidation to **(&new_cluster, false)**. Ported
@@ -479,7 +479,7 @@ pages or a separate tuple-XID payload to prune WAL.
 
 ### NEW LOGIC DECISION: PG19 MultiXact conversion
 
-**mini0126(pg_upgrade.c) remains unapplied under the user's stop rule.**
+**At this checkpoint mini0126(pg_upgrade.c) was paused; it is applied below.**
 XID width alone does not identify a source MultiXact layout:
 
 | Source | Member XID bytes | Offset bytes |
@@ -547,10 +547,90 @@ XID width alone does not identify a source MultiXact layout:
     Match converted control counters to the output and preserve restored
     horizons using supplied0012. Relminmxid/page-conversion mapping must agree
     with the SLRU ID mapping, including a wrapped source range.
-- Preparation scope: the discriminator is implemented; reader/writer dispatch
-  and mini0126(pg_upgrade.c) remain unapplied. No upgrade compatibility is
+- Scope at preparation: only the discriminator was implemented; the
+  subsequent integration is recorded below. No upgrade compatibility is
   claimed until integration and cross-version tests pass.
 - Validation: the existing actual-function/UBSan probe now adds 12 offset-format
   cases: PG15–18 vanilla/xid64, PG19 before/at catalog boundary, beta3 vanilla
   and xid64. The earlier 11 index scenarios and 3 rejection cases still pass.
   These checks validate classification, not SLRU conversion or live upgrades.
+
+## IMPORTANT: MultiXact integration applied; stop before mini0128(relfilenumber.c)
+
+- User authorized applying the prepared discriminator/reader solution.
+  mini0126(pg_upgrade.c), **`cff91ec658f`**, now converts every xid32 source;
+  source offset width chooses its reader. Already-xid64 sources copy their
+  SLRUs; legacy 12-digit names are normalized to native 15-digit names after
+  copying, following supplied0006. Preserve PG19 locale/char-signedness,
+  logical-slot and conflict-detection-slot upgrade paths.
+- Native reader/rewriter and API adaptation: **`0e524c4023b`**. Source MXIDs
+  and member XIDs are explicit uint32; source member groups stay 20 bytes.
+  Decode four-/eight-byte offsets independently and use short/native long
+  source names. Legacy offsets wrap explicitly; uint64 ranges are monotonic
+  and checked before narrowing. Native invalid-entry, zero-slot and
+  multiple-updater handling is retained. Native target writer uses 72-byte
+  groups and writes the final next-MXID offset entry.
+- Source MXID iteration is uint32 even with a uint64 target typedef. Wrapped
+  source 1 follows UINT32_MAX as destination 2^32. Return the destination
+  next-MXID and next-offset counters together; keep original source control
+  values intact and update new_cluster's in-memory counters after conversion.
+  Preserve the pre-9.3 empty-MultiXact initialization path.
+- Ported supplied0012 heap-conversion fixes, **`c04865b0327`**, folded into
+  mini0088(heap_convert.c): expand source MXIDs before visibility checks,
+  separate source and destination page bases and reserve relative values
+  below 3. Its per-object horizon-preservation fix is included in
+  mini0126(pg_upgrade.c); XID resets do not overwrite restored MXID cutoffs.
+- Additional consistency requirement for a wrapped source range: normalize
+  each restored positive datminmxid/relminmxid below the source oldest MXID
+  by adding 4294967295. This preserves each cutoff and matches the SLRU/page
+  ID mapping. Already-expanded initdb horizons remain unchanged. Example:
+  source oldest=4294967294, relation horizon=1 and tuple MXID=1 map to full
+  horizon/MXID=4294967296, the SLRU's destination ID. Preserving raw horizon=1
+  would make page conversion look up destination ID 1 instead. This is an
+  additional wrapped-range correction beyond supplied0012; review it for
+  Tantor 18 backport and test with live upgrades after the series builds.
+- mini0129(segresize.c) applied early, **`38bdfc1d082`**: use native SLRU I/O
+  for CLOG only, preserving raw uint32 status addresses and stripping the
+  control XID's epoch (supplied0011). Read short source names, write native
+  long names. The original PG18 MultiXact bulk converters are superseded;
+  their prototypes are removed. **Skip mini0127(pg_upgrade.h),
+  mini0129(segresize.c) and mini0131(version.c) when reached in sequence.**
+- Saved native reader/rewriter sections in supplemental
+  `pg19-native-multixact-upgrade.patch`; refreshed minis0088/0126/0127/0129
+  and the aggregate. All five saved patches reverse-check; seven aggregate
+  sections replay on `8ca324058af` and match committed source exactly.
+  Saved artifacts/probe in Baloo `71f7124`, parent `fc6891a011e`.
+- Validation: `dev/tests/xid64_multixact_upgrade/check.py` compiles actual
+  reader, rewriter, native SLRU I/O, CLOG converter and selected upgrade
+  functions with uint64 target XIDs, warnings as errors and UBSan. **31 cases
+  pass**, including real synthetic SLRU files, offsets above 2^32, raw MXID
+  wrap and zero-next checkpoints, legacy offset wrap, invalid entries,
+  source/target page boundaries (1000 target members), nonzero CLOG epochs,
+  backend source-ID mapping, dispatch, copied-name normalization and horizon
+  SQL/control flow. SQL/pg_resetwal/copy commands use fixtures; no live SQL,
+  server upgrade, TAP or recovery validation is claimed. Full build remains
+  deferred until later 0005 declarations are applied.
+
+### NEW LOGIC TOPIC: --swap bypasses FSM/VM conversion
+
+**First unapplied mini is mini0128(relfilenumber.c); stop under the user's rule.**
+
+- transfer_single_new_db() takes the --swap branch, calls do_swap() and
+  returns before the original mini's update_version/FSM/VM rewrite loop.
+  Thus adding the normal mini0128(relfilenumber.c) hunks leaves swapped
+  xid32 FSM/VM files with old page versions. This branch also existed in the
+  PG18 base; it is not introduced by PG19 context changes.
+- The current buffer_readv_complete_one() sees an initialized old-version
+  page, then raises **invalid fork type** for every non-MAIN_FORKNUM. FSM/VM
+  cannot fall back to heap tuple conversion. This is confirmed by source
+  flow; no live --swap failure was run at this partial-build checkpoint.
+- Supplied0007 fixes zero pages and the ordinary conversion guard, but not
+  the early --swap return; no swap-path correction was found in supplied
+  fixes. Proposed fix: after do_swap(), rewrite only destination FSM/VM
+  forks for xid32-to-xid64 upgrades, before starting the new server. Preserve
+  all-zero pages, checksum/block numbering, tablespaces and fork segments;
+  use separate temporary output and replace only after a successful rewrite.
+  Do not disable --swap or send these forks to the heap converter.
+- Discuss this new adaptation before applying mini0128(relfilenumber.c).
+  Validate --swap with initialized/zero FSM/VM pages and checksums, plus
+  copy/link modes and already-xid64 sources. Audit/backport for Tantor 18.
