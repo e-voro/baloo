@@ -22,6 +22,7 @@ typedef struct { char *data; } PQExpBufferData;
 #define MAXPGPATH 1024
 #define PG_WARNING 1
 #define PG_REPORT 2
+/* OFFSET FORMAT THRESHOLD */
 static ClusterInfo old_cluster, new_cluster;
 static ClusterInfo *running;
 static unsigned selects, updates;
@@ -70,6 +71,13 @@ static const char *quote_identifier(const char *s) { return s; }
 /* FUNCTIONS */
 int main(int argc, char **argv) {
     DbInfo dbs[] = {{"fixture_db"}, {"empty_db"}};
+    if (argc == 5 && !strcmp(argv[1], "format")) {
+        old_cluster.major_version = (uint32)strtoul(argv[2], NULL, 10);
+        old_cluster.xid_sz = atoi(argv[3]);
+        old_cluster.controldata.cat_ver = (uint32)strtoul(argv[4], NULL, 10);
+        printf("%u\n", cluster_has_64bit_multixact_offsets(&old_cluster) ? 64U : 32U);
+        return 0;
+    }
     assert(argc == 4);
     old_cluster.major_version = (uint32)strtoul(argv[1], NULL, 10);
     old_cluster.xid_sz = atoi(argv[2]);

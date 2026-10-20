@@ -150,11 +150,11 @@ Discussion: https://postgr.es/m/CAJ7c6TPDOYBYrnCAeyndkBktO0WG2xSdYduTF0nxq%2Bvfk
  src/bin/pg_upgrade/meson.build                     |    1 
  src/bin/pg_upgrade/multixact_rewrite.c             |   10 
  src/bin/pg_upgrade/pg_upgrade.c                    |  143 ++-
- src/bin/pg_upgrade/pg_upgrade.h                    |   31 -
+ src/bin/pg_upgrade/pg_upgrade.h                    |   32 +
  src/bin/pg_upgrade/relfilenumber.c                 |   33 +
  src/bin/pg_upgrade/segresize.c                     |  582 ++++++++++++
  src/bin/pg_upgrade/t/002_pg_upgrade.pl             |   17 
- src/bin/pg_upgrade/version.c                       |  219 ++++
+ src/bin/pg_upgrade/version.c                       |  233 +++++
  src/bin/pg_verifybackup/t/003_corruption.pl        |    6 
  src/bin/pg_waldump/t/001_basic.pl                  |    3 
  src/include/access/ginblock.h                      |   11 
@@ -240,7 +240,7 @@ Discussion: https://postgr.es/m/CAJ7c6TPDOYBYrnCAeyndkBktO0WG2xSdYduTF0nxq%2Bvfk
  src/test/xid-64/t/006_zeropage.pl                  |   33 +
  src/test/xid-64/t/007_first_multi.pl               |   83 ++
  src/tools/pgindent/typedefs.list                   |    4 
- 218 files changed, 7136 insertions(+), 2122 deletions(-)
+ 218 files changed, 7151 insertions(+), 2122 deletions(-)
 
 diff --git a/contrib/amcheck/verify_heapam.c b/contrib/amcheck/verify_heapam.c
 index e5ea68b801..14ce47cf80 100644
@@ -13026,7 +13026,7 @@ index 899b3488fa..ee92fa130e 100644
  
  		/* Reset datallowconn flag */
 diff --git a/src/bin/pg_upgrade/pg_upgrade.h b/src/bin/pg_upgrade/pg_upgrade.h
-index ccd1ac0d013..afa1cdec4e1 100644
+index ccd1ac0d013..38155614344 100644
 --- a/src/bin/pg_upgrade/pg_upgrade.h
 +++ b/src/bin/pg_upgrade/pg_upgrade.h
 @@ -238,13 +238,13 @@ typedef struct
@@ -13077,17 +13077,18 @@ index ccd1ac0d013..afa1cdec4e1 100644
  void		check_file_clone(void);
  void		check_copy_file_range(void);
  void		check_hard_link(transferMode transfer_mode);
-@@ -500,6 +504,9 @@ unsigned int str2uint(const char *str);
+@@ -500,6 +504,10 @@ unsigned int str2uint(const char *str);
  
  /* version.c */
  
 +bool		cluster_is_xid64(const ClusterInfo *cluster);
 +bool		cluster_is_xid32(const ClusterInfo *cluster);
++bool		cluster_has_64bit_multixact_offsets(const ClusterInfo *cluster);
 +bool		xid_check_applicable(ClusterInfo *cluster);
  bool		jsonb_9_4_check_applicable(ClusterInfo *cluster);
  bool		protocol_negotiation_supported(const ClusterInfo *cluster);
  void		old_9_6_invalidate_hash_indexes(ClusterInfo *cluster,
-@@ -507,6 +514,10 @@ void		old_9_6_invalidate_hash_indexes(ClusterInfo *cluster,
+@@ -507,6 +515,10 @@ void		old_9_6_invalidate_hash_indexes(ClusterInfo *cluster,
  
  void		report_extension_updates(ClusterInfo *cluster);
  
@@ -13098,7 +13099,7 @@ index ccd1ac0d013..afa1cdec4e1 100644
  /* multixact_rewrite.c */
  MultiXactOffset rewrite_multixacts(MultiXactId from_multi, MultiXactId to_multi);
  
-@@ -538,3 +549,9 @@ typedef struct
+@@ -538,3 +550,9 @@ typedef struct
  	FILE	   *file;
  	char		path[MAXPGPATH];
  } UpgradeTaskReport;
@@ -13814,7 +13815,7 @@ index 823f41e754..dc8326172a 100644
  # retained on failure.
  my $log_path = $newnode->data_dir . "/pg_upgrade_output.d";
 diff --git a/src/bin/pg_upgrade/version.c b/src/bin/pg_upgrade/version.c
-index 047670d4acb..a5d8b5e7774 100644
+index 047670d4acb..70bdf3b2dbb 100644
 --- a/src/bin/pg_upgrade/version.c
 +++ b/src/bin/pg_upgrade/version.c
 @@ -9,6 +9,7 @@
@@ -13825,7 +13826,7 @@ index 047670d4acb..a5d8b5e7774 100644
  #include "fe_utils/string_utils.h"
  #include "pg_upgrade.h"
  
-@@ -226,3 +227,221 @@ report_extension_updates(ClusterInfo *cluster)
+@@ -226,3 +227,235 @@ report_extension_updates(ClusterInfo *cluster)
  	else
  		check_ok();
  }
@@ -14039,6 +14040,20 @@ index 047670d4acb..a5d8b5e7774 100644
 +cluster_is_xid32(const ClusterInfo *cluster)
 +{
 +	return !cluster_is_xid64(cluster);
++}
++
++/*
++ * XID and MultiXactOffset widths must be identified independently.  Vanilla
++ * PostgreSQL widened offsets in v19 without widening XIDs.  The supported
++ * xid64 builds already have eight-byte offsets, including pre-v19 builds.
++ */
++bool
++cluster_has_64bit_multixact_offsets(const ClusterInfo *cluster)
++{
++	if (cluster_is_xid64(cluster))
++		return true;
++
++	return cluster->controldata.cat_ver >= MULTIXACTOFFSET_FORMATCHANGE_CAT_VER;
 +}
 +
 +/* User xid columns cannot be copied across a change in their storage size. */
