@@ -1,0 +1,13 @@
+diff --git a/src/bin/pg_controldata/pg_controldata.c b/src/bin/pg_controldata/pg_controldata.c
+index 650a9d5309c..19505b8ef23 100644
+--- a/src/bin/pg_controldata/pg_controldata.c
++++ b/src/bin/pg_controldata/pg_controldata.c
+@@ -267,7 +267,7 @@ main(int argc, char *argv[])
+ 	printf(_("Latest checkpoint's logical decoding: %s\n"),
+ 		   ControlFile->checkPointCopy.logicalDecodingEnabled ? _("on") : _("off"));
+ 	printf(_("Latest checkpoint's NextXID:          %llu\n"),
+-		   (unsigned long long) U64FromFullTransactionId(ControlFile->checkPointCopy.nextXid));
++		   (unsigned long long) XidFromFullTransactionId(ControlFile->checkPointCopy.nextXid));
+ 	printf(_("Latest checkpoint's NextOID:          %u\n"),
+ 		   ControlFile->checkPointCopy.nextOid);
+ 	printf(_("Latest checkpoint's NextMultiXactId:  %llu\n"),

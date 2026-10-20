@@ -1,0 +1,12 @@
+diff --git a/src/bin/pg_upgrade/Makefile b/src/bin/pg_upgrade/Makefile
+index 771addb675a..0b7b2bb86bf 100644
+--- a/src/bin/pg_upgrade/Makefile
++++ b/src/bin/pg_upgrade/Makefile
+@@ -24,6 +24,7 @@ OBJS = \
+ 	parallel.o \
+ 	pg_upgrade.o \
+ 	relfilenumber.o \
++	segresize.o \
+ 	server.o \
+ 	slru_io.o \
+ 	tablespace.o \

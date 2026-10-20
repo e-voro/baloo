@@ -140,8 +140,8 @@ Discussion: https://postgr.es/m/CAJ7c6TPDOYBYrnCAeyndkBktO0WG2xSdYduTF0nxq%2Bvfk
  src/bin/pg_controldata/pg_controldata.c | 2 +-
  src/bin/pg_dump/pg_dump.c | 27 +-
  src/bin/pg_dump/pg_dump.h | 8 +-
- src/bin/pg_resetwal/pg_resetwal.c | 58 +-
- src/bin/pg_resetwal/t/001_basic.pl | 16 +-
+ src/bin/pg_resetwal/pg_resetwal.c | 52 +-
+ src/bin/pg_resetwal/t/001_basic.pl | 31 +-
  src/bin/pg_upgrade/Makefile | 1 +
  src/bin/pg_upgrade/check.c | 70 +-
  src/bin/pg_upgrade/controldata.c | 17 +-
@@ -239,7 +239,7 @@ Discussion: https://postgr.es/m/CAJ7c6TPDOYBYrnCAeyndkBktO0WG2xSdYduTF0nxq%2Bvfk
  src/test/xid-64/t/006_zeropage.pl | 33 +
  src/test/xid-64/t/007_first_multi.pl | 83 +
  src/tools/pgindent/typedefs.list | 4 +-
- 217 files changed, 7061 insertions(+), 2123 deletions(-)
+ 217 files changed, 7070 insertions(+), 2123 deletions(-)
 
 diff --git a/contrib/amcheck/verify_heapam.c b/contrib/amcheck/verify_heapam.c
 index e5ea68b801..14ce47cf80 100644
@@ -12005,12 +12005,12 @@ index 47c42b4a0e8..e71d757017e 100644
  	elsif ($offnum == 16)    # Last offnum must equal ROWCOUNT
  	{
 diff --git a/src/bin/pg_controldata/pg_controldata.c b/src/bin/pg_controldata/pg_controldata.c
-index ccec945fb9..1a2fbf94b7 100644
+index 650a9d5309c..19505b8ef23 100644
 --- a/src/bin/pg_controldata/pg_controldata.c
 +++ b/src/bin/pg_controldata/pg_controldata.c
-@@ -265,7 +265,7 @@ main(int argc, char *argv[])
- 	printf(_("Latest checkpoint's full_page_writes: %s\n"),
- 		   ControlFile->checkPointCopy.fullPageWrites ? _("on") : _("off"));
+@@ -267,7 +267,7 @@ main(int argc, char *argv[])
+ 	printf(_("Latest checkpoint's logical decoding: %s\n"),
+ 		   ControlFile->checkPointCopy.logicalDecodingEnabled ? _("on") : _("off"));
  	printf(_("Latest checkpoint's NextXID:          %llu\n"),
 -		   (unsigned long long) U64FromFullTransactionId(ControlFile->checkPointCopy.nextXid));
 +		   (unsigned long long) XidFromFullTransactionId(ControlFile->checkPointCopy.nextXid));
@@ -12018,7 +12018,7 @@ index ccec945fb9..1a2fbf94b7 100644
  		   ControlFile->checkPointCopy.nextOid);
  	printf(_("Latest checkpoint's NextMultiXactId:  %llu\n"),
 diff --git a/src/bin/pg_dump/pg_dump.c b/src/bin/pg_dump/pg_dump.c
-index 362f3470d1..073e71d6ea 100644
+index b6cdcb2794a..fb5f57ee5b2 100644
 --- a/src/bin/pg_dump/pg_dump.c
 +++ b/src/bin/pg_dump/pg_dump.c
 @@ -41,6 +41,7 @@
@@ -12029,7 +12029,7 @@ index 362f3470d1..073e71d6ea 100644
  #include "catalog/pg_aggregate_d.h"
  #include "catalog/pg_am_d.h"
  #include "catalog/pg_attribute_d.h"
-@@ -3306,7 +3307,7 @@ dumpDatabase(Archive *fout)
+@@ -3310,7 +3311,7 @@ dumpDatabase(Archive *fout)
  			   *datistemplate,
  			   *datconnlimit,
  			   *tablespace;
@@ -12038,7 +12038,7 @@ index 362f3470d1..073e71d6ea 100644
  				minmxid;
  	char	   *qdatname;
  
-@@ -3378,8 +3379,8 @@ dumpDatabase(Archive *fout)
+@@ -3382,8 +3383,8 @@ dumpDatabase(Archive *fout)
  		icurules = PQgetvalue(res, 0, i_daticurules);
  	else
  		icurules = NULL;
@@ -12049,7 +12049,7 @@ index 362f3470d1..073e71d6ea 100644
  	dbdacl.acl = PQgetvalue(res, 0, i_datacl);
  	dbdacl.acldefault = PQgetvalue(res, 0, i_acldefault);
  	datistemplate = PQgetvalue(res, 0, i_datistemplate);
-@@ -3713,10 +3714,16 @@ dumpDatabase(Archive *fout)
+@@ -3717,10 +3718,16 @@ dumpDatabase(Archive *fout)
  			}
  
  			appendPQExpBuffer(horizonQry, "UPDATE pg_catalog.pg_class\n"
@@ -12069,7 +12069,7 @@ index 362f3470d1..073e71d6ea 100644
  							  atooid(PQgetvalue(lo_res, i, ii_oid)));
  
  			if (oid == LargeObjectRelationId ||
-@@ -7504,11 +7511,11 @@ getTables(Archive *fout, int *numTables)
+@@ -7614,11 +7621,11 @@ getTables(Archive *fout, int *numTables)
  		tblinfo[i].relreplident = *(PQgetvalue(res, i, i_relreplident));
  		tblinfo[i].rowsec = (strcmp(PQgetvalue(res, i, i_relrowsec), "t") == 0);
  		tblinfo[i].forcerowsec = (strcmp(PQgetvalue(res, i, i_relforcerowsec), "t") == 0);
@@ -12086,7 +12086,7 @@ index 362f3470d1..073e71d6ea 100644
  		if (PQgetisnull(res, i, i_checkoption))
  			tblinfo[i].checkoption = NULL;
 diff --git a/src/bin/pg_dump/pg_dump.h b/src/bin/pg_dump/pg_dump.h
-index 72a00e1bc2..f6fe6b0dc4 100644
+index e6eefa98460..c5fbb004564 100644
 --- a/src/bin/pg_dump/pg_dump.h
 +++ b/src/bin/pg_dump/pg_dump.h
 @@ -322,11 +322,11 @@ typedef struct _tableInfo
@@ -12106,18 +12106,20 @@ index 72a00e1bc2..f6fe6b0dc4 100644
  	Oid			reltype;		/* OID of table's composite type, if any */
  	Oid			reloftype;		/* underlying type for typed table */
 diff --git a/src/bin/pg_resetwal/pg_resetwal.c b/src/bin/pg_resetwal/pg_resetwal.c
-index 3e1b8b1a14..5d158c17ce 100644
+index 897e9a718b2..98ad697e9df 100644
 --- a/src/bin/pg_resetwal/pg_resetwal.c
 +++ b/src/bin/pg_resetwal/pg_resetwal.c
-@@ -64,7 +64,6 @@ static ControlFileData ControlFile; /* pg_control values */
- static XLogSegNo newXlogSegNo;	/* new XLOG segment # */
- static bool guessed = false;	/* T if we had to guess at any values */
- static const char *progname;
--static uint32 set_xid_epoch = (uint32) -1;
- static TransactionId set_oldest_xid = 0;
- static TransactionId set_xid = 0;
- static TransactionId set_oldest_commit_ts_xid = 0;
-@@ -100,7 +99,6 @@ main(int argc, char *argv[])
+@@ -68,9 +68,6 @@ static const char *progname;
+ /*
+  * New values given on the command-line
+  */
+-static bool next_xid_epoch_given = false;
+-static uint32 next_xid_epoch_val;
+-
+ static bool oldest_xid_given = false;
+ static TransactionId oldest_xid_val;
+ 
+@@ -124,7 +121,6 @@ main(int argc, char *argv[])
  	static struct option long_options[] = {
  		{"commit-timestamp-ids", required_argument, NULL, 'c'},
  		{"pgdata", required_argument, NULL, 'D'},
@@ -12125,7 +12127,7 @@ index 3e1b8b1a14..5d158c17ce 100644
  		{"force", no_argument, NULL, 'f'},
  		{"next-wal-file", required_argument, NULL, 'l'},
  		{"multixact-ids", required_argument, NULL, 'm'},
-@@ -144,7 +142,7 @@ main(int argc, char *argv[])
+@@ -166,7 +162,7 @@ main(int argc, char *argv[])
  	}
  
  
@@ -12134,112 +12136,98 @@ index 3e1b8b1a14..5d158c17ce 100644
  	{
  		switch (c)
  		{
-@@ -160,24 +158,9 @@ main(int argc, char *argv[])
+@@ -182,23 +178,9 @@ main(int argc, char *argv[])
  				noupdate = true;
  				break;
  
 -			case 'e':
 -				errno = 0;
--				set_xid_epoch = strtoul(optarg, &endptr, 0);
+-				next_xid_epoch_val = strtouint32_strict(optarg, &endptr, 0);
 -				if (endptr == optarg || *endptr != '\0' || errno != 0)
 -				{
 -					/*------
--					  translator: the second %s is a command line argument (-e, etc) */
+-					  translator: %s is a command line argument (-e, etc) */
 -					pg_log_error("invalid argument for option %s", "-e");
 -					pg_log_error_hint("Try \"%s --help\" for more information.", progname);
 -					exit(1);
 -				}
--				if (set_xid_epoch == -1)
--					pg_fatal("transaction ID epoch (-e) must not be -1");
+-				next_xid_epoch_given = true;
 -				break;
 -
  			case 'u':
  				errno = 0;
--				set_oldest_xid = strtoul(optarg, &endptr, 0);
-+				set_oldest_xid = strtou64(optarg, &endptr, 0);
+-				oldest_xid_val = strtouint32_strict(optarg, &endptr, 0);
++				oldest_xid_val = strtouint64_strict(optarg, &endptr, 0);
  				if (endptr == optarg || *endptr != '\0' || errno != 0)
  				{
  					pg_log_error("invalid argument for option %s", "-u");
-@@ -191,7 +174,7 @@ main(int argc, char *argv[])
+@@ -213,7 +195,7 @@ main(int argc, char *argv[])
  
  			case 'x':
  				errno = 0;
--				set_xid = strtoul(optarg, &endptr, 0);
-+				set_xid = strtou64(optarg, &endptr, 0);
+-				next_xid_val = strtouint32_strict(optarg, &endptr, 0);
++				next_xid_val = strtouint64_strict(optarg, &endptr, 0);
  				if (endptr == optarg || *endptr != '\0' || errno != 0)
  				{
  					pg_log_error("invalid argument for option %s", "-x");
-@@ -205,14 +188,14 @@ main(int argc, char *argv[])
+@@ -228,14 +210,14 @@ main(int argc, char *argv[])
  
  			case 'c':
  				errno = 0;
--				set_oldest_commit_ts_xid = strtoul(optarg, &endptr, 0);
-+				set_oldest_commit_ts_xid = strtou64(optarg, &endptr, 0);
+-				oldest_commit_ts_xid_val = strtouint32_strict(optarg, &endptr, 0);
++				oldest_commit_ts_xid_val = strtouint64_strict(optarg, &endptr, 0);
  				if (endptr == optarg || *endptr != ',' || errno != 0)
  				{
  					pg_log_error("invalid argument for option %s", "-c");
  					pg_log_error_hint("Try \"%s --help\" for more information.", progname);
  					exit(1);
  				}
--				set_newest_commit_ts_xid = strtoul(endptr + 1, &endptr2, 0);
-+				set_newest_commit_ts_xid = strtou64(endptr + 1, &endptr2, 0);
+-				newest_commit_ts_xid_val = strtoul(endptr + 1, &endptr2, 0);
++				newest_commit_ts_xid_val = strtouint64_strict(endptr + 1, &endptr2, 0);
  				if (endptr2 == endptr + 1 || *endptr2 != '\0' || errno != 0)
  				{
  					pg_log_error("invalid argument for option %s", "-c");
-@@ -248,7 +231,7 @@ main(int argc, char *argv[])
+@@ -273,7 +255,7 @@ main(int argc, char *argv[])
  
  			case 'm':
  				errno = 0;
--				set_mxid = strtoul(optarg, &endptr, 0);
-+				set_mxid = strtou64(optarg, &endptr, 0);
+-				next_mxid_val = strtouint32_strict(optarg, &endptr, 0);
++				next_mxid_val = strtouint64_strict(optarg, &endptr, 0);
  				if (endptr == optarg || *endptr != ',' || errno != 0)
  				{
  					pg_log_error("invalid argument for option %s", "-m");
-@@ -256,7 +239,7 @@ main(int argc, char *argv[])
+@@ -281,7 +263,7 @@ main(int argc, char *argv[])
  					exit(1);
  				}
  
--				set_oldestmxid = strtoul(endptr + 1, &endptr2, 0);
-+				set_oldestmxid = strtou64(endptr + 1, &endptr2, 0);
+-				oldest_mxid_val = strtouint32_strict(endptr + 1, &endptr2, 0);
++				oldest_mxid_val = strtouint64_strict(endptr + 1, &endptr2, 0);
  				if (endptr2 == endptr + 1 || *endptr2 != '\0' || errno != 0)
  				{
  					pg_log_error("invalid argument for option %s", "-m");
-@@ -282,8 +265,9 @@ main(int argc, char *argv[])
- 					pg_log_error_hint("Try \"%s --help\" for more information.", progname);
- 					exit(1);
- 				}
--				if (tmpi64 < 0 || tmpi64 > (int64) MaxMultiXactOffset)
--					pg_fatal("multitransaction offset (-O) must be between 0 and %u", MaxMultiXactOffset);
-+				if (tmpi64 < 0)
-+					pg_fatal("multitransaction offset (-O) must be between 0 and %" PRIu64,
-+							 MaxMultiXactOffset);
- 
- 				set_mxoff = (MultiXactOffset) tmpi64;
- 				mxoff_given = true;
-@@ -441,11 +425,6 @@ main(int argc, char *argv[])
+@@ -470,11 +452,6 @@ main(int argc, char *argv[])
  	 * Adjust fields if required by switches.  (Do this now so that printout,
  	 * if any, includes these values.)
  	 */
--	if (set_xid_epoch != -1)
+-	if (next_xid_epoch_given)
 -		ControlFile.checkPointCopy.nextXid =
--			FullTransactionIdFromEpochAndXid(set_xid_epoch,
--											 XidFromFullTransactionId(ControlFile.checkPointCopy.nextXid));
+-			FullTransactionIdFromEpochAndXid(next_xid_epoch_val,
+-											 (unsigned long long) XidFromFullTransactionId(ControlFile.checkPointCopy.nextXid));
 -
- 	if (set_oldest_xid != 0)
+ 	if (oldest_xid_given)
  	{
- 		ControlFile.checkPointCopy.oldestXid = set_oldest_xid;
-@@ -453,9 +432,7 @@ main(int argc, char *argv[])
- 	}
+ 		ControlFile.checkPointCopy.oldestXid = oldest_xid_val;
+@@ -483,8 +460,7 @@ main(int argc, char *argv[])
  
- 	if (set_xid != 0)
--		ControlFile.checkPointCopy.nextXid =
+ 	if (next_xid_given)
+ 		ControlFile.checkPointCopy.nextXid =
 -			FullTransactionIdFromEpochAndXid(EpochFromFullTransactionId(ControlFile.checkPointCopy.nextXid),
--											 set_xid);
-+		ControlFile.checkPointCopy.nextXid = FullTransactionIdFromXid(set_xid);
+-											 next_xid_val);
++			FullTransactionIdFromXid(next_xid_val);
  
- 	if (set_oldest_commit_ts_xid != 0)
- 		ControlFile.checkPointCopy.oldestCommitTsXid = set_oldest_commit_ts_xid;
-@@ -677,7 +654,7 @@ GuessControlValues(void)
+ 	if (commit_ts_xids_given)
+ 	{
+@@ -707,7 +683,7 @@ GuessControlValues(void)
  	ControlFile.checkPointCopy.PrevTimeLineID = 1;
  	ControlFile.checkPointCopy.fullPageWrites = false;
  	ControlFile.checkPointCopy.nextXid =
@@ -12247,17 +12235,8 @@ index 3e1b8b1a14..5d158c17ce 100644
 +		FullTransactionIdFromXid(FirstNormalTransactionId);
  	ControlFile.checkPointCopy.nextOid = FirstGenbkiObjectId;
  	ControlFile.checkPointCopy.nextMulti = FirstMultiXactId;
- 	ControlFile.checkPointCopy.nextMultiOffset = 0;
-@@ -729,6 +706,8 @@ GuessControlValues(void)
-  *
-  * NB: this display should be just those fields that will not be
-  * reset by RewriteControlFile().
-+ *
-+ * Special macros help to make translatable strings.
-  */
- static void
- PrintControlValues(bool guessed)
-@@ -748,8 +727,7 @@ PrintControlValues(bool guessed)
+ 	ControlFile.checkPointCopy.nextMultiOffset = 1;
+@@ -778,8 +754,7 @@ PrintControlValues(bool guessed)
  		   ControlFile.checkPointCopy.ThisTimeLineID);
  	printf(_("Latest checkpoint's full_page_writes: %s\n"),
  		   ControlFile.checkPointCopy.fullPageWrites ? _("on") : _("off"));
@@ -12267,21 +12246,29 @@ index 3e1b8b1a14..5d158c17ce 100644
  		   (unsigned long long) XidFromFullTransactionId(ControlFile.checkPointCopy.nextXid));
  	printf(_("Latest checkpoint's NextOID:          %u\n"),
  		   ControlFile.checkPointCopy.nextOid);
-@@ -851,12 +829,6 @@ PrintNewControlValues(void)
+@@ -885,12 +860,6 @@ PrintNewControlValues(void)
  			   ControlFile.checkPointCopy.oldestXidDB);
  	}
  
--	if (set_xid_epoch != -1)
+-	if (next_xid_epoch_given)
 -	{
 -		printf(_("NextXID epoch:                        %u\n"),
 -			   EpochFromFullTransactionId(ControlFile.checkPointCopy.nextXid));
 -	}
 -
- 	if (set_oldest_commit_ts_xid != 0)
+ 	if (commit_ts_xids_given)
  	{
  		printf(_("oldestCommitTsXid:                    %llu\n"),
+@@ -1239,7 +1208,6 @@ usage(void)
+ 	printf(_("  -c, --commit-timestamp-ids=XID,XID\n"
+ 			 "                                   set oldest and newest transactions bearing\n"
+ 			 "                                   commit timestamp (zero means no change)\n"));
+-	printf(_("  -e, --epoch=XIDEPOCH             set next transaction ID epoch\n"));
+ 	printf(_("  -l, --next-wal-file=WALFILE      set minimum starting location for new WAL\n"));
+ 	printf(_("  -m, --multixact-ids=MXID,MXID    set next and oldest multitransaction ID\n"));
+ 	printf(_("  -o, --next-oid=OID               set next OID\n"));
 diff --git a/src/bin/pg_resetwal/t/001_basic.pl b/src/bin/pg_resetwal/t/001_basic.pl
-index 90ecb8afe1..785f68b0c9 100644
+index cff0b6423f3..2d93c7af653 100644
 --- a/src/bin/pg_resetwal/t/001_basic.pl
 +++ b/src/bin/pg_resetwal/t/001_basic.pl
 @@ -96,15 +96,6 @@ command_fails_like(
@@ -12295,21 +12282,48 @@ index 90ecb8afe1..785f68b0c9 100644
 -	'fails with incorrect -e option');
 -command_fails_like(
 -	[ 'pg_resetwal', '-e' => '-1', $node->data_dir ],
--	qr/must not be -1/,
+-	qr/error: invalid argument for option -e/,
 -	'fails with -e value -1');
  # -l
  command_fails_like(
  	[ 'pg_resetwal', '-l' => 'foo', $node->data_dir ],
-@@ -145,7 +136,7 @@ command_fails_like(
- 	'fails with incorrect -O option');
+@@ -177,8 +168,7 @@ command_fails_like(
+ 	qr/must be greater than/,
+ 	'fails with -x value too small');
+ 
+-# Check out of range values with -x. These are forbidden for all other
+-# 32-bit values too, but we use just -x to exercise the parsing.
++# Check out-of-range values with -x using the full 64-bit XID range.
  command_fails_like(
- 	[ 'pg_resetwal', '-O' => '-1', $node->data_dir ],
--	qr/must be between 0 and 4294967295/,
-+	qr/must be between 0 and 18446744073709551615/,
- 	'fails with -O value -1');
- # --wal-segsize
+ 	[ 'pg_resetwal', '-x' => '-1', $node->data_dir ],
+ 	qr/error: invalid argument for option -x/,
+@@ -188,10 +178,24 @@ command_fails_like(
+ 	qr/error: invalid argument for option -x/,
+ 	'fails with negative -x value');
  command_fails_like(
-@@ -190,7 +181,6 @@ my $blcksz = $1;
+-	[ 'pg_resetwal', '-x' => '10000000000', $node->data_dir ],
++	[ 'pg_resetwal', '-x' => '18446744073709551616', $node->data_dir ],
+ 	qr/error: invalid argument for option -x/,
+ 	'fails with -x value too large');
+ 
++# Full XIDs exceed the OID range; -o must still reject a 33-bit value.
++command_like(
++	[ 'pg_resetwal', '--dry-run', '-x' => '4294967296', $node->data_dir ],
++	qr/^NextXID: *4294967296$/m,
++	'accepts a full XID above 32 bits');
++command_fails_like(
++	[ 'pg_resetwal', '-o' => '4294967296', $node->data_dir ],
++	qr/error: invalid argument for option -o/,
++	'rejects an OID above 32 bits');
++command_fails_like(
++	[ 'pg_resetwal', '-c' => '3,-1', $node->data_dir ],
++	qr/error: invalid argument for option -c/,
++	'rejects negative newest commit timestamp XID');
++
+ # --char-signedness
+ command_fails_like(
+ 	[ 'pg_resetwal', '--char-signedness', 'foo', $node->data_dir ],
+@@ -207,7 +211,6 @@ my $blcksz = $1;
  my @cmd = ('pg_resetwal', '--pgdata' => $node->data_dir);
  
  # some not-so-critical hardcoded values
@@ -12317,16 +12331,7 @@ index 90ecb8afe1..785f68b0c9 100644
  push @cmd, '--next-wal-file' => '00000001000000320000004B';
  push @cmd, '--next-oid' => 100_000;
  push @cmd, '--wal-segsize' => 1;
-@@ -215,7 +205,7 @@ push @cmd,
-   sprintf("%d,%d", hex($files[0]) == 0 ? 3 : hex($files[0]), hex($files[-1]));
- 
- @files = get_slru_files('pg_multixact/offsets');
--$mult = 32 * $blcksz / 4;
-+$mult = 32 * $blcksz / 8;
- # --multixact-ids argument is "new,old"
- push @cmd,
-   '--multixact-ids' => sprintf("%d,%d",
-@@ -223,7 +213,7 @@ push @cmd,
+@@ -240,7 +243,7 @@ push @cmd,
  	hex($files[0]) == 0 ? 1 : hex($files[0] * $mult));
  
  @files = get_slru_files('pg_multixact/members');
@@ -12336,17 +12341,17 @@ index 90ecb8afe1..785f68b0c9 100644
  
  @files = get_slru_files('pg_xact');
 diff --git a/src/bin/pg_upgrade/Makefile b/src/bin/pg_upgrade/Makefile
-index 69fcf593ca..852efbfb1b 100644
+index 771addb675a..0b7b2bb86bf 100644
 --- a/src/bin/pg_upgrade/Makefile
 +++ b/src/bin/pg_upgrade/Makefile
-@@ -22,6 +22,7 @@ OBJS = \
+@@ -24,6 +24,7 @@ OBJS = \
  	parallel.o \
  	pg_upgrade.o \
  	relfilenumber.o \
 +	segresize.o \
  	server.o \
+ 	slru_io.o \
  	tablespace.o \
- 	task.o \
 diff --git a/src/bin/pg_upgrade/check.c b/src/bin/pg_upgrade/check.c
 index 1e17d64b3e..5d283b2b59 100644
 --- a/src/bin/pg_upgrade/check.c
