@@ -276,23 +276,105 @@ pages or a separate tuple-XID payload to prune WAL.
   mini0102(rowtypes.c), `15bb0db3afa`: initialize all 12 composite wrappers.
   PG19-only JSON, statistics, allocation and record-hashing changes were
   reviewed and preserved. Syscache XID-copy ownership remains in the final
-  call-chain audit, with mini0105(catcache.c) still forthcoming.
+  call-chain audit; mini0105(catcache.c) is applied in the checkpoint below.
 - Skipped already-applied mini0100(lockfuncs.c); its reverse check passed.
   Saved five minis and refreshed aggregate in Baloo `9feea4d`, parent
   `71d68115043`. Their aggregate sections replay on `8ca324058af` and match
   source exactly; mini reverse and source whitespace checks pass. No full
   build/runtime claim: remaining 0005 headers/typedefs are still required.
-- **Paused before mini0103(xid.c), under the user's stop-on-new-logic rule.**
+- **mini0103(xid.c): user authorized the binary receiver fix after review;
+  applied in source `f5d03ae7046`.**
   Its xidrecv() calls pq_getmsgint(buf, sizeof(TransactionId)) twice. After
   widening TransactionId, each requests 8 bytes, but pq_getmsgint() accepts
   only 1, 2 or 4 and raises "unsupported integer size 8". This defect exists
   in the original PG18 xid64 patch; PG19's xid.c changes are just copyright
-  and output-format cleanup. This finding follows directly from source;
-  no live binary-input reproduction has been run.
-- **Proposed correction, not applied:** read sizeof(lo) and sizeof(hi), both
+  and output-format cleanup. The focused fixture reproduces the original
+  failure; no live backend binary-input test has been run.
+- **Implemented correction:** read sizeof(lo) and sizeof(hi), both
   uint32, preserving the sender's low-half-first, high-half-second format.
   Each half is in network byte order. For 0x0102030405060708 the patch sends
   05 06 07 08 01 02 03 04; pq_getmsgint64() would change its interpretation.
   This concerns SQL xid binary I/O, separate from Hot Standby Feedback.
-  Resolve with the user before applying mini0103(xid.c), then check high-bit
-  round trips and short-input errors and later test binary COPY in a backend.
+  The sender already writes each uint32 half using its own four-byte size.
+  Only the receiver's size arguments need correction; the first old read
+  fails immediately, even when the input contains the correct eight bytes.
+
+  Before (original xid64 patch; TransactionId is eight bytes):
+
+  ```c
+  uint32 lo, hi;
+  lo = (uint32) pq_getmsgint(buf, sizeof(TransactionId)); /* unsupported: 8 */
+  hi = (uint32) pq_getmsgint(buf, sizeof(TransactionId)); /* unsupported: 8 */
+  PG_RETURN_TRANSACTIONID((uint64) lo + ((uint64) hi << 32));
+  ```
+
+  After (matches xidsend's four-byte low half, then four-byte high half):
+
+  ```c
+  uint32 lo, hi;
+  lo = (uint32) pq_getmsgint(buf, sizeof(lo)); /* 4 */
+  hi = (uint32) pq_getmsgint(buf, sizeof(hi)); /* 4 */
+  PG_RETURN_TRANSACTIONID((uint64) lo + ((uint64) hi << 32));
+  ```
+
+- Validation: `dev/tests/xid64_binary_io/check.py` compiles actual extracted
+  xidrecv/xidsend and pqformat routines with fixed-width/backend fixtures and
+  UBSan. Eleven round trips (including bit 63 and UINT64_MAX), independent
+  golden wire bytes, all input lengths 0..7 and the original failing reader
+  pass. Allocation, Datum/bytea and error handling use fixtures; run binary
+  xid COPY in a backend after the full series builds. Git metadata permission
+  prompts are unrelated to this defect or its correction.
+
+## Continuation checkpoint through mini0114(snapmgr.c) (2026-10-20)
+
+- Applied mini0104(xid8funcs.c), `aa71db51c77`: full-XID snapshots/CLOG checks;
+  mini0105(catcache.c), `26282a6291f`: copy cached full XIDs while preserving
+  PG19 MemoryContextAlloc/MAXALIGN allocation and detoast lifetime;
+  mini0106(funccache.c), `db15bc4acb6`, mini0107(relcache.c), `c70b5cb226d`,
+  and mini0108(fmgr.c), `4492e7112ea`: full xmin cache identity/reload.
+  Preserve PG19 argument-count validation, early parameter-ACL caches,
+  TupleDescFinalize, AM lifetime and publication-exclusion behavior.
+- mini0109(guc_parameters.dat, gen_guc_tables.pl), `0fbfcbf35fb`, registers
+  eight age GUCs as int64 and fixes PG19's required-field validator to accept
+  int64 with min/max. The earlier 0004 adapted emission but missed validation;
+  this became visible when 0005 registered built-in int64 GUCs. Reproduced
+  the generator error, then verified all eight PGC_INT64 entries are emitted.
+  Keep existing boot values and PG19 failsafe limits/behavior.
+- mini0110(pg_controldata.c), `9b74e14998e`: nextXid accessor at PG19 output
+  column 7, preserving logicalDecodingEnabled and all 19 columns.
+  **Skip mini0111(postgresql.conf.sample):** its sole change documented a
+  10000000000 default, but the original and adapted GUC boot value is
+  200000000. Keep the sample accurate; no runtime default was changed.
+  Skip note saved; sample section removed from the adapted aggregate.
+- mini0112(tuplesortvariants.c), `8a9d5f0830d`: preserve full xmin/xmax across
+  CLUSTER tape writes/reads and update the field-preservation comment;
+  mini0113(combocid.c), `97c369d3249`: full-XID tuple access;
+  mini0114(snapmgr.c), `920d5a7d16b`: xmin atomics, 64-bit snapshot search and
+  exported local-XID filenames. Preserve PG19 GIN comparator behavior,
+  snapshot invalidation injection point, zeroed serialization and typed
+  restore API. Snapshot array sizing already uses sizeof(TransactionId).
+- Saved patches/probe: Baloo `300f228`, parent `44c2ea8be36`. All eleven saved
+  minis reverse-check; twelve aggregate sections replay on `8ca324058af`
+  and match source exactly. Binary I/O fixture/UBSan and GUC generation pass.
+  Full backend, binary COPY and recovery validation remain deferred until
+  the remaining 0005 declarations/typedefs are applied.
+
+## IMPORTANT: paused before mini0115(004_verify_heapam.pl)
+
+- New logic topic under the user's stop rule: the original patch's corruption
+  test helpers mishandle reserved XIDs and page selection. PG19 changes to
+  this test are copyright only; these defects are inherited from the patch.
+- `read_tuple()` adds the page base unconditionally. With base 1000, raw
+  xmin=2/xmax=0 becomes 1002/1000; production ShortTransactionIdToNormal()
+  preserves values below FirstNormalTransactionId. `fixup_page()` likewise
+  changes reserved 2/0 to 102/100 when shifting the base down by 100.
+- Its filter `off < page_start && off > page_end` can never be true. A
+  synthetic two-page file showed fixup_page(page 0) also changing page 1's
+  tuple from raw xmin/xmax 10/20 to 110/120. The existing test passes only
+  page-0 offsets, so this particular selection defect is latent there.
+- Reproduced both with the original patch's actual Perl helpers in scratch
+  files, not a server. **mini0115(004_verify_heapam.pl) remains unapplied.**
+  Proposed fix: preserve reserved IDs while decoding/rebasing, and skip an
+  offset when it is below page_start OR at/above page_end. Also audit the
+  manually shifted page's pruning hint using the earlier approved hint rules.
+  Obtain the user's decision before changing these test-helper semantics.
