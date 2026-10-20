@@ -136,7 +136,7 @@ Discussion: https://postgr.es/m/CAJ7c6TPDOYBYrnCAeyndkBktO0WG2xSdYduTF0nxq%2Bvfk
  src/backend/utils/sort/tuplesortvariants.c | 16 +-
  src/backend/utils/time/combocid.c | 32 +-
  src/backend/utils/time/snapmgr.c | 22 +-
- src/bin/pg_amcheck/t/004_verify_heapam.pl | 185 +-
+ src/bin/pg_amcheck/t/004_verify_heapam.pl | 226 +-
  src/bin/pg_controldata/pg_controldata.c | 2 +-
  src/bin/pg_dump/pg_dump.c | 27 +-
  src/bin/pg_dump/pg_dump.h | 8 +-
@@ -239,7 +239,7 @@ Discussion: https://postgr.es/m/CAJ7c6TPDOYBYrnCAeyndkBktO0WG2xSdYduTF0nxq%2Bvfk
  src/test/xid-64/t/006_zeropage.pl | 33 +
  src/test/xid-64/t/007_first_multi.pl | 83 +
  src/tools/pgindent/typedefs.list | 4 +-
- 217 files changed, 7020 insertions(+), 2123 deletions(-)
+ 217 files changed, 7061 insertions(+), 2123 deletions(-)
 
 diff --git a/contrib/amcheck/verify_heapam.c b/contrib/amcheck/verify_heapam.c
 index e5ea68b801..14ce47cf80 100644
@@ -11678,18 +11678,10 @@ index 4d959f254fe..ff9e5b720b9 100644
  	}
  
 diff --git a/src/bin/pg_amcheck/t/004_verify_heapam.pl b/src/bin/pg_amcheck/t/004_verify_heapam.pl
-index 5cdab044b9..d9b2f387e8 100644
+index 47c42b4a0e8..e71d757017e 100644
 --- a/src/bin/pg_amcheck/t/004_verify_heapam.pl
 +++ b/src/bin/pg_amcheck/t/004_verify_heapam.pl
-@@ -8,6 +8,7 @@ use PostgreSQL::Test::Cluster;
- use PostgreSQL::Test::Utils;
- 
- use Test::More;
-+use Data::Dumper;
- 
- # This regression test demonstrates that the pg_amcheck binary correctly
- # identifies specific kinds of corruption within pages.  To test this, we need
-@@ -85,6 +86,65 @@ use Test::More;
+@@ -85,6 +85,69 @@ use Test::More;
  
  use constant HEAPTUPLE_PACK_CODE => 'LLLSSSSSCCLLCCCCCCCCCCllLL';
  use constant HEAPTUPLE_PACK_LENGTH => 58;    # Total size
@@ -11712,6 +11704,10 @@ index 5cdab044b9..d9b2f387e8 100644
 +use constant HEAP_UPDATED => 0x2000;
 +
 +use constant FIRST_NORMAL_TRANSACTION_ID => 3;
++use constant FROZEN_TRANSACTION_ID => 2;
++use constant MAX_SHORT_TRANSACTION_ID => 0x7FFFFFFF;
++# Offset of the uint32 pd_prune_xid in PageHeaderData.
++use constant HEAPPAGE_PRUNE_XID_OFFSET => 20;
 +
 +# Read page special data
 +sub read_special_data
@@ -11755,7 +11751,7 @@ index 5cdab044b9..d9b2f387e8 100644
  
  # Read a tuple of our table from a heap page.
  #
-@@ -96,8 +156,9 @@ use constant HEAPTUPLE_PACK_LENGTH => 58;    # Total size
+@@ -96,8 +159,9 @@ use constant HEAPTUPLE_PACK_LENGTH => 58;    # Total size
  #
  sub read_tuple
  {
@@ -11766,7 +11762,7 @@ index 5cdab044b9..d9b2f387e8 100644
  	sysseek($fh, $offset, 0)
  	  or BAIL_OUT("sysseek failed: $!");
  	defined(sysread($fh, $buffer, HEAPTUPLE_PACK_LENGTH))
-@@ -133,6 +194,18 @@ sub read_tuple
+@@ -133,6 +197,19 @@ sub read_tuple
  		c_va_toastrelid => shift);
  	# Stitch together the text for column 'b'
  	$tup{b} = join('', map { chr($tup{"b_body$_"}) } (1 .. 7));
@@ -11775,49 +11771,52 @@ index 5cdab044b9..d9b2f387e8 100644
 +	{
 +		my $special = read_special_data($fh, $offset);
 +
-+		$tup{t_xmin} += $special->{pd_xid_base};
++		$tup{t_xmin} += $special->{pd_xid_base}
++		  if $tup{t_xmin} >= FIRST_NORMAL_TRANSACTION_ID;
 +		my $is_multi = $tup{t_infomask} & HEAP_XMAX_IS_MULTI;
-+		$tup{t_xmax} += !$is_multi ?
-+			$special->{pd_xid_base} :
-+			$special->{pd_multi_base};
++		$tup{t_xmax} += $is_multi ?
++			$special->{pd_multi_base} : $special->{pd_xid_base}
++		  if $tup{t_xmax} >= FIRST_NORMAL_TRANSACTION_ID;
 +	}
 +
  	return \%tup;
  }
  
-@@ -148,7 +221,39 @@ sub read_tuple
+@@ -148,7 +225,41 @@ sub read_tuple
  #
  sub write_tuple
  {
 -	my ($fh, $offset, $tup) = @_;
 +	my ($fh, $offset, $tup, $raw) = @_;
++	# Encoding must not replace the caller's full XIDs with short values.
++	$tup = { %$tup };
 +
 +	if (!$raw)
 +	{
 +		my $special = read_special_data($fh, $offset);
 +
-+		if ($tup->{t_xmin} >= 3)
++		if ($tup->{t_xmin} >= FIRST_NORMAL_TRANSACTION_ID)
 +		{
 +			my $xmin = $tup->{t_xmin} - $special->{pd_xid_base};
-+			die "tuple x_min $tup->{t_xmin} is too smal for pd_xid_base $special->{pd_xid_base}"
-+				if $xmin < 3;
++			die "tuple xmin $tup->{t_xmin} is too small for pd_xid_base $special->{pd_xid_base}"
++				if $xmin < FIRST_NORMAL_TRANSACTION_ID;
 +			$tup->{t_xmin} = $xmin;
 +		}
 +
-+		if ($tup->{t_xmax} >= 3)
++		if ($tup->{t_xmax} >= FIRST_NORMAL_TRANSACTION_ID)
 +		{
 +			if (($tup->{t_infomask} & HEAP_XMAX_IS_MULTI) == 0)
 +			{
 +				my $xmax = $tup->{t_xmax} - $special->{pd_xid_base};
-+				die "tuple x_max $tup->{t_xmax} is too smal for pd_xid_base $special->{pd_xid_base}"
-+					if $xmax < 3;
++				die "tuple xmax $tup->{t_xmax} is too small for pd_xid_base $special->{pd_xid_base}"
++					if $xmax < FIRST_NORMAL_TRANSACTION_ID;
 +				$tup->{t_xmax} = $xmax;
 +			}
 +			else
 +			{
 +				my $xmax = $tup->{t_xmax} - $special->{pd_multi_base};
-+				die "tuple multi x_max $tup->{t_xmax} is too smal for pd_multi_base $special->{pd_multi_base}"
-+					if $xmax < 3;
++				die "tuple multi xmax $tup->{t_xmax} is too small for pd_multi_base $special->{pd_multi_base}"
++					if $xmax < FIRST_NORMAL_TRANSACTION_ID;
 +				$tup->{t_xmax} = $xmax;
 +			}
 +		}
@@ -11826,11 +11825,23 @@ index 5cdab044b9..d9b2f387e8 100644
  	my $buffer = pack(
  		HEAPTUPLE_PACK_CODE,
  		$tup->{t_xmin}, $tup->{t_xmax},
-@@ -171,6 +276,42 @@ sub write_tuple
+@@ -171,6 +282,77 @@ sub write_tuple
  	return;
  }
  
-+# move pd_xid_base and pd_multi_base to more suitable position for tests.
++# Shift a normal short XID without turning it into a reserved ID or overflowing.
++sub shift_short_xid
++{
++	my ($xid, $delta) = @_;
++	return $xid if $xid < FIRST_NORMAL_TRANSACTION_ID;
++	my $shifted = $xid + $delta;
++	die "rebased tuple XID $shifted does not fit"
++	  if ($shifted < FIRST_NORMAL_TRANSACTION_ID ||
++		$shifted > MAX_SHORT_TRANSACTION_ID);
++	return $shifted;
++}
++
++# Move pd_xid_base and pd_multi_base to more suitable positions for tests.
 +sub fixup_page
 +{
 +	my ($fh, $page, $xid_base, $multi_base, $lp_off) = @_;
@@ -11849,16 +11860,39 @@ index 5cdab044b9..d9b2f387e8 100644
 +
 +	for my $off (@$lp_off)
 +	{
-+		# change only tuples on this page.
-+		next if ($off < $offset && $off > $offset + HEAPPAGE_SIZE);
-+		next if ($off == -1);
++		# Only offsets in this page; this also excludes redirect markers (-1).
++		next if ($off < $offset || $off >= $offset + HEAPPAGE_SIZE);
++		die "tuple at offset $off overlaps page special data"
++		  if $off + HEAPTUPLE_PACK_LENGTH >
++		  $offset + HEAPPAGE_SIZE - HEAPPAGE_SPECIAL_PACK_LENGTH;
 +
 +		my $tup = read_tuple($fh, $off, 1);
-+		$tup->{t_xmin} += $xid_delta;
++		$tup->{t_xmin} = shift_short_xid($tup->{t_xmin}, $xid_delta);
 +		my $is_multi = $tup->{t_infomask} & HEAP_XMAX_IS_MULTI;
-+		$tup->{t_xmax} += !$is_multi ? $xid_delta : $multi_delta;
++		$tup->{t_xmax} = shift_short_xid($tup->{t_xmax},
++			$is_multi ? $multi_delta : $xid_delta);
 +		write_tuple($fh, $off, $tup, 1);
 +	}
++
++	# A normal pruning hint is relative to pd_xid_base, just like tuple XIDs.
++	# Match HeapPageSetPruneXid's conservative hint if the exact value won't fit.
++	my $hint_offset = $offset + HEAPPAGE_PRUNE_XID_OFFSET;
++	sysseek($fh, $hint_offset, 0)
++	  or BAIL_OUT("sysseek failed: $!");
++	my $hint_buffer;
++	my $read = sysread($fh, $hint_buffer, 4);
++	defined($read) && $read == 4 or BAIL_OUT("could not read pruning hint: $!");
++	my $hint = unpack('L', $hint_buffer);
++	if ($hint >= FIRST_NORMAL_TRANSACTION_ID)
++	{
++		$hint += $xid_delta;
++		$hint = FROZEN_TRANSACTION_ID if $hint > MAX_SHORT_TRANSACTION_ID;
++	}
++	sysseek($fh, $hint_offset, 0)
++	  or BAIL_OUT("sysseek failed: $!");
++	my $written = syswrite($fh, pack('L', $hint), 4);
++	defined($written) && $written == 4
++	  or BAIL_OUT("could not write pruning hint: $!");
 +
 +	$special->{pd_xid_base} = $xid_base;
 +	$special->{pd_multi_base} = $multi_base;
@@ -11869,7 +11903,7 @@ index 5cdab044b9..d9b2f387e8 100644
  # Set umask so test directories and files are created with default permissions
  umask(0077);
  
-@@ -320,6 +461,8 @@ my $relfrozenxid = $node->safe_psql('postgres',
+@@ -320,6 +502,8 @@ my $relfrozenxid = $node->safe_psql('postgres',
  	q(select relfrozenxid from pg_class where relname = 'test'));
  my $datfrozenxid = $node->safe_psql('postgres',
  	q(select datfrozenxid from pg_database where datname = 'postgres'));
@@ -11878,7 +11912,7 @@ index 5cdab044b9..d9b2f387e8 100644
  
  # Sanity check that our 'test' table has a relfrozenxid newer than the
  # datfrozenxid for the database, and that the datfrozenxid is greater than the
-@@ -378,6 +521,11 @@ for (my $tupidx = 0; $tupidx < $ROWCOUNT; $tupidx++)
+@@ -378,6 +562,11 @@ for (my $tupidx = 0; $tupidx < $ROWCOUNT; $tupidx++)
  	# Determine endianness of current platform from the 1-byte varlena header
  	$ENDIANNESS = $tup->{b_header} == 0x11 ? "little" : "big";
  }
@@ -11890,7 +11924,7 @@ index 5cdab044b9..d9b2f387e8 100644
  close($file)
    or BAIL_OUT("close failed: $!");
  $node->start;
-@@ -396,20 +544,6 @@ $node->command_ok(
+@@ -396,20 +585,6 @@ $node->command_ok(
  
  $node->stop;
  
@@ -11911,7 +11945,7 @@ index 5cdab044b9..d9b2f387e8 100644
  # Helper function to generate a regular expression matching the header we
  # expect verify_heapam() to return given which fields we expect to be non-null.
  sub header
-@@ -444,6 +578,8 @@ for (my $tupidx = 0; $tupidx < $ROWCOUNT; $tupidx++)
+@@ -444,6 +619,8 @@ for (my $tupidx = 0; $tupidx < $ROWCOUNT; $tupidx++)
  
  	# Read tuple, if there is one.
  	my $tup = $offset == -1 ? undef : read_tuple($file, $offset);
@@ -11920,7 +11954,7 @@ index 5cdab044b9..d9b2f387e8 100644
  
  	if ($offnum == 1)
  	{
-@@ -460,7 +596,7 @@ for (my $tupidx = 0; $tupidx < $ROWCOUNT; $tupidx++)
+@@ -460,7 +637,7 @@ for (my $tupidx = 0; $tupidx < $ROWCOUNT; $tupidx++)
  	elsif ($offnum == 2)
  	{
  		# Corruptly set xmin < datfrozenxid
@@ -11929,7 +11963,7 @@ index 5cdab044b9..d9b2f387e8 100644
  		$tup->{t_xmin} = $xmin;
  		$tup->{t_infomask} &= ~HEAP_XMIN_COMMITTED;
  		$tup->{t_infomask} &= ~HEAP_XMIN_INVALID;
-@@ -470,25 +606,24 @@ for (my $tupidx = 0; $tupidx < $ROWCOUNT; $tupidx++)
+@@ -470,25 +647,24 @@ for (my $tupidx = 0; $tupidx < $ROWCOUNT; $tupidx++)
  	}
  	elsif ($offnum == 3)
  	{
@@ -11961,7 +11995,7 @@ index 5cdab044b9..d9b2f387e8 100644
  	}
  	elsif ($offnum == 5)
  	{
-@@ -604,7 +739,7 @@ for (my $tupidx = 0; $tupidx < $ROWCOUNT; $tupidx++)
+@@ -604,7 +780,7 @@ for (my $tupidx = 0; $tupidx < $ROWCOUNT; $tupidx++)
  		$tup->{t_xmax} = 4000000000;
  
  		push @expected,
