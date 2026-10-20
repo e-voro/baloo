@@ -108,7 +108,7 @@ Discussion: https://postgr.es/m/CAJ7c6TPDOYBYrnCAeyndkBktO0WG2xSdYduTF0nxq%2Bvfk
  src/backend/statistics/extended_stats.c            |    1 
  src/backend/storage/buffer/Makefile                |    3 
  src/backend/storage/buffer/bufmgr.c                |   94 ++
- src/backend/storage/buffer/heap_convert.c          |  532 +++++++++++
+ src/backend/storage/buffer/heap_convert.c          |  545 +++++++++++
  src/backend/storage/buffer/meson.build             |    1 
  src/backend/storage/ipc/procarray.c                |  183 +---
  src/backend/storage/ipc/standby.c                  |   17 
@@ -148,11 +148,13 @@ Discussion: https://postgr.es/m/CAJ7c6TPDOYBYrnCAeyndkBktO0WG2xSdYduTF0nxq%2Bvfk
  src/bin/pg_upgrade/file.c                          |  117 ++
  src/bin/pg_upgrade/info.c                          |   14 
  src/bin/pg_upgrade/meson.build                     |    1 
- src/bin/pg_upgrade/multixact_rewrite.c             |   10 
- src/bin/pg_upgrade/pg_upgrade.c                    |  143 ++-
- src/bin/pg_upgrade/pg_upgrade.h                    |   32 +
+ src/bin/pg_upgrade/multixact_read_v18.c            |  148 +--
+ src/bin/pg_upgrade/multixact_read_v18.h            |   19 
+ src/bin/pg_upgrade/multixact_rewrite.c             |   45 +
+ src/bin/pg_upgrade/pg_upgrade.c                    |  288 ++++--
+ src/bin/pg_upgrade/pg_upgrade.h                    |   32 -
  src/bin/pg_upgrade/relfilenumber.c                 |   33 +
- src/bin/pg_upgrade/segresize.c                     |  582 ++++++++++++
+ src/bin/pg_upgrade/segresize.c                     |   48 +
  src/bin/pg_upgrade/t/002_pg_upgrade.pl             |   17 
  src/bin/pg_upgrade/version.c                       |  233 +++++
  src/bin/pg_verifybackup/t/003_corruption.pl        |    6 
@@ -240,7 +242,7 @@ Discussion: https://postgr.es/m/CAJ7c6TPDOYBYrnCAeyndkBktO0WG2xSdYduTF0nxq%2Bvfk
  src/test/xid-64/t/006_zeropage.pl                  |   33 +
  src/test/xid-64/t/007_first_multi.pl               |   83 ++
  src/tools/pgindent/typedefs.list                   |    4 
- 218 files changed, 7151 insertions(+), 2122 deletions(-)
+ 220 files changed, 6789 insertions(+), 2310 deletions(-)
 
 diff --git a/contrib/amcheck/verify_heapam.c b/contrib/amcheck/verify_heapam.c
 index e5ea68b801..14ce47cf80 100644
@@ -8882,10 +8884,10 @@ index 169829eb020..89564657dee 100644
  	if (is_temp)
 diff --git a/src/backend/storage/buffer/heap_convert.c b/src/backend/storage/buffer/heap_convert.c
 new file mode 100644
-index 00000000000..c5b9634ef41
+index 00000000000..97024d84a4c
 --- /dev/null
 +++ b/src/backend/storage/buffer/heap_convert.c
-@@ -0,0 +1,532 @@
+@@ -0,0 +1,545 @@
 +/*-------------------------------------------------------------------------
 + *
 + * heap_convert.c
@@ -8999,6 +9001,17 @@ index 00000000000..c5b9634ef41
 +	MarkBufferConverted(buf, true);
 +}
 +
++/* Expand a source 32-bit MultiXactId using the relation's source horizon. */
++static inline MultiXactId
++full_source_multixact(MultiXactId mxid, MultiXactId source_multi_base)
++{
++	if (mxid < source_multi_base)
++		mxid += ((MultiXactId) 1 << 32) - FirstMultiXactId;
++
++	Assert(mxid >= source_multi_base);
++	return mxid;
++}
++
 +/*
 + * Convert xmin and xmax in a tuple.
 + * This also considers special cases: "double xmax" page format and multixact
@@ -9006,7 +9019,8 @@ index 00000000000..c5b9634ef41
 + */
 +static void
 +convert_heap_tuple_xids(HeapTupleHeader tuple, TransactionId xid_base,
-+						MultiXactId multi_base, bool double_xmax)
++						MultiXactId source_multi_base,
++						MultiXactId page_multi_base, bool double_xmax)
 +{
 +	/* Convert xmin */
 +	if (double_xmax)
@@ -9038,14 +9052,8 @@ index 00000000000..c5b9634ef41
 +	if ((tuple->t_infomask & HEAP_XMAX_IS_MULTI) &&
 +		!(tuple->t_infomask & HEAP_XMAX_INVALID))
 +	{
-+		MultiXactId mxid = tuple->t_choice.t_heap.t_xmax;
-+
-+		/* Handle mxid wraparound */
-+		if (mxid < multi_base)
-+		{
-+			mxid += ((MultiXactId) 1 << 32) - FirstMultiXactId;
-+			Assert(mxid >= multi_base);
-+		}
++		MultiXactId mxid = full_source_multixact(
++			tuple->t_choice.t_heap.t_xmax, source_multi_base);
 +
 +		if (double_xmax)
 +		{
@@ -9055,12 +9063,16 @@ index 00000000000..c5b9634ef41
 +		else
 +		{
 +			/*
-+			 * Save converted mxid offset relative to (minmxid - 1), which
-+			 * will be page's mxid base.
++			 * The short field is relative to the destination page's MultiXact
++			 * base.  As with short XIDs, relative values begin at 3; values 1
++			 * and 2 are read as absolute special values.
 +			 */
-+			Assert(mxid - multi_base + FirstMultiXactId <= PG_UINT32_MAX);
++			Assert(mxid >= page_multi_base);
++			Assert(mxid - page_multi_base <= PG_UINT32_MAX);
++			Assert(page_multi_base == InvalidMultiXactId ||
++				   mxid - page_multi_base >= FirstNormalTransactionId);
 +			tuple->t_choice.t_heap.t_xmax =
-+				(uint32) (mxid - multi_base + FirstMultiXactId);
++				(uint32) (mxid - page_multi_base);
 +		}
 +	}
 +	/* Convert xmax */
@@ -9121,12 +9133,7 @@ index 00000000000..c5b9634ef41
 +
 +			Assert(MultiXactIdIsValid(mxid));
 +
-+			/* Handle mxid wraparound */
-+			if (mxid < multi_base)
-+			{
-+				mxid += ((MultiXactId) 1 << 32) - FirstMultiXactId;
-+				Assert(mxid >= multi_base);
-+			}
++			mxid = full_source_multixact(mxid, multi_base);
 +
 +			*multi_max = Max(*multi_max, mxid);
 +			*multi_min = Min(*multi_min, mxid);
@@ -9179,7 +9186,7 @@ index 00000000000..c5b9634ef41
 +	if (multi_max == InvalidMultiXactId)
 +		multi_max_fits = true;
 +
-+	if (multi_max - multi_min <= MaxShortTransactionId - FirstMultiXactId)
++	if (multi_max - multi_min <= MaxShortTransactionId - FirstNormalTransactionId)
 +		multi_max_fits = true;
 +
 +	return xid_max_fits && multi_max_fits;
@@ -9206,7 +9213,8 @@ index 00000000000..c5b9634ef41
 +		*xid_base = InvalidTransactionId;
 +
 +	if (multi_max != InvalidMultiXactId)
-+		*multi_base = multi_min - FirstMultiXactId;
++		*multi_base = multi_min >= FirstNormalTransactionId ?
++			multi_min - FirstNormalTransactionId : InvalidMultiXactId;
 +	else
 +		*multi_base = InvalidMultiXactId;
 +
@@ -9252,7 +9260,8 @@ index 00000000000..c5b9634ef41
 +						new_hdr;
 +	PGAlignedBlock		zerobuf = {0};
 +	Page				new_page;
-+	MultiXactId			multi_base = rel_extra->relminmxid,
++	MultiXactId			source_multi_base = rel_extra->relminmxid,
++						page_multi_base = InvalidMultiXactId,
 +						multi_min = MaxMultiXactId,
 +						multi_max = InvalidMultiXactId;
 +	TransactionId		xid_base = rel_extra->relfrozenxid,
@@ -9279,6 +9288,11 @@ index 00000000000..c5b9634ef41
 +		tuple.t_tableOid = 1;	/* doesn't matter in this case */
 +		tuple.t_data = (HeapTupleHeader) PageGetItem(page, lp);
 +		HeapTupleCopyHeaderXids(&tuple);
++		/* A wrapped source MXID must be valid before visibility checks. */
++		if ((tuple.t_data->t_infomask & HEAP_XMAX_IS_MULTI) &&
++			!(tuple.t_data->t_infomask & HEAP_XMAX_INVALID))
++			tuple.t_xmax = full_source_multixact(tuple.t_xmax,
++												 source_multi_base);
 +		tuple.t_len = ItemIdGetLength(lp);
 +		ItemPointerSet(&(tuple.t_self), blkno, ItemIdGetOffset(lp));
 +
@@ -9323,7 +9337,7 @@ index 00000000000..c5b9634ef41
 +				HeapTupleHeaderStoreXminFrozen(tuple.t_data);
 +			}
 +
-+			compute_xid_min_max(&tuple, multi_base,
++			compute_xid_min_max(&tuple, source_multi_base,
 +								&xid_min, &xid_max,
 +								&multi_min, &multi_max);
 +		}
@@ -9354,7 +9368,7 @@ index 00000000000..c5b9634ef41
 +		heap_page_set_base(new_page,
 +						   xid_min, xid_max,
 +						   multi_min, multi_max,
-+						   &xid_base, &multi_base,
++						   &xid_base, &page_multi_base,
 +						   toast);
 +
 +		HeapPageSetPruneXid(new_page, new_hdr->pd_prune_xid);
@@ -9368,7 +9382,7 @@ index 00000000000..c5b9634ef41
 +		if (try_double_xmax)
 +		{
 +			xid_base = InvalidTransactionId;
-+			multi_base = InvalidMultiXactId;
++			page_multi_base = InvalidMultiXactId;
 +		}
 +		else
 +		{
@@ -9400,7 +9414,8 @@ index 00000000000..c5b9634ef41
 +
 +		tuple = (HeapTupleHeader) (((char *) new_page) + upper);
 +
-+		convert_heap_tuple_xids(tuple, xid_base, multi_base, double_xmax);
++		convert_heap_tuple_xids(tuple, xid_base, source_multi_base,
++								page_multi_base, double_xmax);
 +
 +		lp->lp_off = upper;
 +	}
@@ -12721,11 +12736,446 @@ index ffbf6ae8d75..33207219014 100644
    'server.c',
    'slru_io.c',
    'tablespace.c',
+diff --git a/src/bin/pg_upgrade/multixact_read_v18.c b/src/bin/pg_upgrade/multixact_read_v18.c
+index c92b977530a..b878bdbbe2b 100644
+--- a/src/bin/pg_upgrade/multixact_read_v18.c
++++ b/src/bin/pg_upgrade/multixact_read_v18.c
+@@ -1,9 +1,8 @@
+ /*
+  * multixact_read_v18.c
+  *
+- * Functions to read multixact SLRUs from clusters of PostgreSQL version 18
+- * and older.  In version 19, the multixid offsets were expanded from 32 to 64
+- * bits.
++ * Functions to read multixact SLRUs with 32-bit member XIDs.  Offsets are
++ * four bytes before PostgreSQL 19 and eight bytes starting with that version.
+  *
+  * Copyright (c) 2025-2026, PostgreSQL Global Development Group
+  * src/bin/pg_upgrade/multixact_read_v18.c
+@@ -15,33 +14,37 @@
+ #include "pg_upgrade.h"
+ 
+ /*
+- * NOTE: below are a bunch of definitions that are copy-pasted from
+- * multixact.c from version 18.  It's important that this file doesn't
+- * #include the new definitions with same names from "multixact_internal.h"!
+- *
+- * To further avoid confusion in the functions exposed outside this source
+- * file, we use MultiXactOffset32 to represent the old-style 32-bit multixid
+- * offsets.  The new 64-bit MultiXactOffset should not be used anywhere in
+- * this file.
++ * Source member groups must use explicit 32-bit XIDs even when pg_upgrade
++ * itself is built with 64-bit TransactionId.  Do not include the target
++ * multixact_internal.h definitions here.
+  */
+ #ifdef MULTIXACT_INTERNAL_H
+ #error multixact_internal.h should not be included in multixact_read_v18.c
+ #endif
+-#define MultiXactOffset should_not_be_used
+-
+-/* We need four bytes per offset and 8 bytes per base for each page. */
+-#define MULTIXACT_OFFSETS_PER_PAGE (BLCKSZ / sizeof(MultiXactOffset32))
+ 
+-static inline int64
+-MultiXactIdToOffsetPage(MultiXactId multi)
++/* Decode the source offset layout independently of the member XID layout. */
++static uint64
++ReadOldMultiXactOffset(OldMultiXactReader *state, uint32 multi)
+ {
+-	return multi / MULTIXACT_OFFSETS_PER_PAGE;
+-}
++	int			width = state->offsets64 ? sizeof(uint64) : sizeof(uint32);
++	int			per_page = BLCKSZ / width;
++	char	   *buf = SlruReadSwitchPage(state->offset, multi / per_page);
++	int			entry = multi % per_page;
+ 
+-static inline int
+-MultiXactIdToOffsetEntry(MultiXactId multi)
+-{
+-	return multi % MULTIXACT_OFFSETS_PER_PAGE;
++	if (state->offsets64)
++	{
++		uint64		value;
++
++		memcpy(&value, buf + entry * width, sizeof(value));
++		return value;
++	}
++	else
++	{
++		uint32		value;
++
++		memcpy(&value, buf + entry * width, sizeof(value));
++		return value;
++	}
+ }
+ 
+ /*
+@@ -67,23 +70,23 @@ MultiXactIdToOffsetEntry(MultiXactId multi)
+ 	(MULTIXACT_FLAGBYTES_PER_GROUP * MXACT_MEMBER_FLAGS_PER_BYTE)
+ /* size in bytes of a complete group */
+ #define MULTIXACT_MEMBERGROUP_SIZE \
+-	(sizeof(TransactionId) * MULTIXACT_MEMBERS_PER_MEMBERGROUP + MULTIXACT_FLAGBYTES_PER_GROUP)
++	(sizeof(uint32) * MULTIXACT_MEMBERS_PER_MEMBERGROUP + MULTIXACT_FLAGBYTES_PER_GROUP)
+ #define MULTIXACT_MEMBERGROUPS_PER_PAGE (BLCKSZ / MULTIXACT_MEMBERGROUP_SIZE)
+ #define MULTIXACT_MEMBERS_PER_PAGE	\
+ 	(MULTIXACT_MEMBERGROUPS_PER_PAGE * MULTIXACT_MEMBERS_PER_MEMBERGROUP)
+ 
+ /* page in which a member is to be found */
+ static inline int64
+-MXOffsetToMemberPage(MultiXactOffset32 offset)
++MXOffsetToMemberPage(uint64 offset)
+ {
+ 	return offset / MULTIXACT_MEMBERS_PER_PAGE;
+ }
+ 
+ /* Location (byte offset within page) of flag word for a given member */
+ static inline int
+-MXOffsetToFlagsOffset(MultiXactOffset32 offset)
++MXOffsetToFlagsOffset(uint64 offset)
+ {
+-	MultiXactOffset32 group = offset / MULTIXACT_MEMBERS_PER_MEMBERGROUP;
++	uint64 group = offset / MULTIXACT_MEMBERS_PER_MEMBERGROUP;
+ 	int			grouponpg = group % MULTIXACT_MEMBERGROUPS_PER_PAGE;
+ 	int			byteoff = grouponpg * MULTIXACT_MEMBERGROUP_SIZE;
+ 
+@@ -92,17 +95,17 @@ MXOffsetToFlagsOffset(MultiXactOffset32 offset)
+ 
+ /* Location (byte offset within page) of TransactionId of given member */
+ static inline int
+-MXOffsetToMemberOffset(MultiXactOffset32 offset)
++MXOffsetToMemberOffset(uint64 offset)
+ {
+ 	int			member_in_group = offset % MULTIXACT_MEMBERS_PER_MEMBERGROUP;
+ 
+ 	return MXOffsetToFlagsOffset(offset) +
+ 		MULTIXACT_FLAGBYTES_PER_GROUP +
+-		member_in_group * sizeof(TransactionId);
++		member_in_group * sizeof(uint32);
+ }
+ 
+ static inline int
+-MXOffsetToFlagsBitShift(MultiXactOffset32 offset)
++MXOffsetToFlagsBitShift(uint64 offset)
+ {
+ 	int			member_in_group = offset % MULTIXACT_MEMBERS_PER_MEMBERGROUP;
+ 	int			bshift = member_in_group * MXACT_MEMBER_BITS_PER_XACT;
+@@ -116,20 +119,24 @@ MXOffsetToFlagsBitShift(MultiXactOffset32 offset)
+  * Returns the malloced memory used by the all other calls in this module.
+  */
+ OldMultiXactReader *
+-AllocOldMultiXactRead(char *pgdata, MultiXactId nextMulti,
+-					  MultiXactOffset32 nextOffset)
++AllocOldMultiXactRead(char *pgdata, uint32 nextMulti,
++					  uint64 nextOffset, bool offsets64)
+ {
+ 	OldMultiXactReader *state = pg_malloc_object(OldMultiXactReader);
+ 	char		dir[MAXPGPATH] = {0};
+ 
++	if (!offsets64 && nextOffset > PG_UINT32_MAX)
++		pg_fatal("member offset exceeds the source 32-bit range");
++
+ 	state->nextMXact = nextMulti;
+ 	state->nextOffset = nextOffset;
++	state->offsets64 = offsets64;
+ 
+ 	pg_sprintf(dir, "%s/pg_multixact/offsets", pgdata);
+-	state->offset = AllocSlruRead(dir, false);
++	state->offset = AllocSlruRead(dir, offsets64);
+ 
+ 	pg_sprintf(dir, "%s/pg_multixact/members", pgdata);
+-	state->members = AllocSlruRead(dir, false);
++	state->members = AllocSlruRead(dir, offsets64);
+ 
+ 	return state;
+ }
+@@ -158,21 +165,19 @@ AllocOldMultiXactRead(char *pgdata, MultiXactId nextMulti,
+  * Returns true on success, false if the multixact was invalid.
+  */
+ bool
+-GetOldMultiXactIdSingleMember(OldMultiXactReader *state, MultiXactId multi,
++GetOldMultiXactIdSingleMember(OldMultiXactReader *state, uint32 multi,
+ 							  MultiXactMember *member)
+ {
+-	MultiXactId nextMXact,
+-				nextOffset,
++	uint32		nextMXact,
+ 				tmpMXact;
++	uint64		nextOffset,
++				offset,
++				nextMXOffset,
++				length;
+ 	int64		pageno,
+ 				prev_pageno;
+-	int			entryno,
+-				length;
+-	char	   *buf;
+-	MultiXactOffset32 *offptr,
+-				offset;
+-	MultiXactOffset32 nextMXOffset;
+-	TransactionId result_xid = InvalidTransactionId;
++	char	   *buf = NULL;
++	uint32		result_xid = 0;
+ 	MultiXactStatus result_status = 0;
+ 
+ 	nextMXact = state->nextMXact;
+@@ -204,13 +209,7 @@ GetOldMultiXactIdSingleMember(OldMultiXactReader *state, MultiXactId multi,
+ 	 * read a zero from the members array, just ignore it.
+ 	 */
+ 
+-	pageno = MultiXactIdToOffsetPage(multi);
+-	entryno = MultiXactIdToOffsetEntry(multi);
+-
+-	buf = SlruReadSwitchPage(state->offset, pageno);
+-	offptr = (MultiXactOffset32 *) buf;
+-	offptr += entryno;
+-	offset = *offptr;
++	offset = ReadOldMultiXactOffset(state, multi);
+ 
+ 	if (offset == 0)
+ 	{
+@@ -235,17 +234,7 @@ GetOldMultiXactIdSingleMember(OldMultiXactReader *state, MultiXactId multi,
+ 		if (tmpMXact < FirstMultiXactId)
+ 			tmpMXact = FirstMultiXactId;
+ 
+-		prev_pageno = pageno;
+-
+-		pageno = MultiXactIdToOffsetPage(tmpMXact);
+-		entryno = MultiXactIdToOffsetEntry(tmpMXact);
+-
+-		if (pageno != prev_pageno)
+-			buf = SlruReadSwitchPage(state->offset, pageno);
+-
+-		offptr = (MultiXactOffset32 *) buf;
+-		offptr += entryno;
+-		nextMXOffset = *offptr;
++		nextMXOffset = ReadOldMultiXactOffset(state, tmpMXact);
+ 	}
+ 
+ 	if (nextMXOffset == 0)
+@@ -253,16 +242,18 @@ GetOldMultiXactIdSingleMember(OldMultiXactReader *state, MultiXactId multi,
+ 		/* Invalid entry.  These can be left behind on a server crash. */
+ 		return false;
+ 	}
+-	length = nextMXOffset - offset;
+-
+-	if (length < 0)
++	/* Only the four-byte source offset format can wrap. */
++	if (state->offsets64)
+ 	{
+-		/*
+-		 * This entry is corrupt.  We should not see these even after a server
+-		 * crash.
+-		 */
+-		pg_fatal("multixact %u has an invalid length (%d)", multi, length);
++		if (nextMXOffset < offset)
++			pg_fatal("multixact %u has a decreasing member offset", multi);
++		length = nextMXOffset - offset;
+ 	}
++	else
++		length = (uint32) (nextMXOffset - offset);
++
++	if (length > PG_INT32_MAX)
++		pg_fatal("multixact %u has an invalid length (%" PRIu64 ")", multi, length);
+ 	if (length == 0)
+ 	{
+ 		/*
+@@ -275,9 +266,9 @@ GetOldMultiXactIdSingleMember(OldMultiXactReader *state, MultiXactId multi,
+ 
+ 	/* read the members */
+ 	prev_pageno = -1;
+-	for (int i = 0; i < length; i++, offset++)
++	for (uint64 i = 0; i < length; i++)
+ 	{
+-		TransactionId *xactptr;
++		uint32	   *xactptr;
+ 		uint32	   *flagsptr;
+ 		int			flagsoff;
+ 		int			bshift;
+@@ -287,21 +278,24 @@ GetOldMultiXactIdSingleMember(OldMultiXactReader *state, MultiXactId multi,
+ 		pageno = MXOffsetToMemberPage(offset);
+ 		memberoff = MXOffsetToMemberOffset(offset);
+ 
+-		if (pageno != prev_pageno)
++		if (buf == NULL || pageno != prev_pageno)
+ 		{
+ 			buf = SlruReadSwitchPage(state->members, pageno);
+ 			prev_pageno = pageno;
+ 		}
+ 
+-		xactptr = (TransactionId *) (buf + memberoff);
++		xactptr = (uint32 *) (buf + memberoff);
+ 		if (!TransactionIdIsValid(*xactptr))
+ 		{
+ 			/*
+ 			 * Corner case 2: offset must have wrapped around to unused slot
+ 			 * zero.
+ 			 */
+-			if (offset == 0)
++			if (!state->offsets64 && offset == 0)
++			{
++				offset++;
+ 				continue;
++			}
+ 
+ 			/*
+ 			 * Otherwise this is an invalid entry that should not be
+@@ -343,6 +337,10 @@ GetOldMultiXactIdSingleMember(OldMultiXactReader *state, MultiXactId multi,
+ 			result_xid = *xactptr;
+ 			result_status = status;
+ 		}
++		if (state->offsets64)
++			offset++;
++		else
++			offset = (uint32) (offset + 1);
+ 	}
+ 
+ 	member->xid = result_xid;
+diff --git a/src/bin/pg_upgrade/multixact_read_v18.h b/src/bin/pg_upgrade/multixact_read_v18.h
+index 88b52b9d2e8..c4b1f4bdb06 100644
+--- a/src/bin/pg_upgrade/multixact_read_v18.h
++++ b/src/bin/pg_upgrade/multixact_read_v18.h
+@@ -10,27 +10,22 @@
+ #include "access/multixact.h"
+ #include "slru_io.h"
+ 
+-/*
+- * MultiXactOffset changed from uint32 to uint64 between versions 18 and 19.
+- * MultiXactOffset32 is used to represent a 32-bit offset from the old
+- * cluster.
+- */
+-typedef uint32 MultiXactOffset32;
+-
++/* Source MXIDs/member XIDs stay 32-bit; offsets may be four or eight bytes. */
+ typedef struct OldMultiXactReader
+ {
+-	MultiXactId nextMXact;
+-	MultiXactOffset32 nextOffset;
++	uint32		nextMXact;
++	uint64		nextOffset;
++	bool		offsets64;
+ 
+ 	SlruSegState *offset;
+ 	SlruSegState *members;
+ } OldMultiXactReader;
+ 
+ extern OldMultiXactReader *AllocOldMultiXactRead(char *pgdata,
+-												 MultiXactId nextMulti,
+-												 MultiXactOffset32 nextOffset);
++												 uint32 nextMulti,
++												 uint64 nextOffset, bool offsets64);
+ extern bool GetOldMultiXactIdSingleMember(OldMultiXactReader *state,
+-										  MultiXactId multi,
++										  uint32 multi,
+ 										  MultiXactMember *member);
+ extern void FreeOldMultiXactReader(OldMultiXactReader *state);
+ 
 diff --git a/src/bin/pg_upgrade/multixact_rewrite.c b/src/bin/pg_upgrade/multixact_rewrite.c
-index 35cfe29c5e3..49645195988 100644
+index 35cfe29c5e3..9efe3baea76 100644
 --- a/src/bin/pg_upgrade/multixact_rewrite.c
 +++ b/src/bin/pg_upgrade/multixact_rewrite.c
-@@ -162,8 +162,8 @@ RecordMultiXactMembers(SlruSegState *members_writer,
+@@ -1,8 +1,8 @@
+ /*
+  * multixact_rewrite.c
+  *
+- * Functions to convert multixact SLRUs from the pre-v19 format to the current
+- * format with 64-bit MultiXactOffsets.
++ * Functions to convert multixact SLRUs with 32-bit member XIDs to the
++ * current format.  Source offsets may be either four or eight bytes.
+  *
+  * Copyright (c) 2025-2026, PostgreSQL Global Development Group
+  * src/bin/pg_upgrade/multixact_rewrite.c
+@@ -21,8 +21,8 @@ static void RecordMultiXactMembers(SlruSegState *members_writer,
+ 								   int nmembers, MultiXactMember *members);
+ 
+ /*
+- * Convert pg_multixact/offset and /members from the old pre-v19 format with
+- * 32-bit offsets to the current format.
++ * Convert pg_multixact/offsets and /members from a 32-bit-XID source.
++ * Source MXIDs wrap at 32 bits independently of the source offset width.
+  *
+  * Multixids in the range [from_multi, to_multi) are read from the old
+  * cluster, and written in the new format.  An important edge case is that if
+@@ -30,23 +30,27 @@ static void RecordMultiXactMembers(SlruSegState *members_writer,
+  * new format without trying to open any old files.  (We rely on that when
+  * upgrading from PostgreSQL version 9.2 or below.)
+  *
+- * Returns the new nextOffset value; the caller should set it in the new
+- * control file.  The new members always start from offset 1, regardless of
++ * Returns the new nextOffset value and sets *next_multi; the caller should
++ * save both counters in the new control file.  The new members always start from offset 1, regardless of
+  * the offset range used in the old cluster.
+  */
+ MultiXactOffset
+-rewrite_multixacts(MultiXactId from_multi, MultiXactId to_multi)
++rewrite_multixacts(uint32 from_multi, uint32 to_multi,
++				   MultiXactId *next_multi)
+ {
+ 	MultiXactOffset next_offset;
+ 	SlruSegState *offsets_writer;
+ 	SlruSegState *members_writer;
+ 	char		dir[MAXPGPATH] = {0};
+ 	bool		prev_multixid_valid = false;
++	MultiXactId destination_multi = from_multi;
++
++	Assert(from_multi >= FirstMultiXactId && to_multi >= FirstMultiXactId);
+ 
+ 	/*
+-	 * The range of valid multi XIDs is unchanged by the conversion (they are
+-	 * referenced from the heap tables), but the members SLRU is rewritten to
+-	 * start from offset 1.
++	 * The destination IDs are contiguous, starting at the source oldest MXID.
++	 * A wrapped source MXID 1 follows UINT32_MAX as destination 2^32.
++	 * The members SLRU is rewritten to start from offset 1.
+ 	 */
+ 	next_offset = 1;
+ 
+@@ -69,9 +73,10 @@ rewrite_multixacts(MultiXactId from_multi, MultiXactId to_multi)
+ 
+ 		old_reader = AllocOldMultiXactRead(old_cluster.pgdata,
+ 										   old_cluster.controldata.chkpnt_nxtmulti,
+-										   old_cluster.controldata.chkpnt_nxtmxoff);
++										   old_cluster.controldata.chkpnt_nxtmxoff,
++										   cluster_has_64bit_multixact_offsets(&old_cluster));
+ 
+-		for (MultiXactId multi = from_multi; multi != to_multi;)
++		for (uint32 multi = from_multi; multi != to_multi;)
+ 		{
+ 			MultiXactMember member;
+ 			bool		multixid_valid;
+@@ -95,7 +100,7 @@ rewrite_multixacts(MultiXactId from_multi, MultiXactId to_multi)
+ 			 * when reading a multixid, the number of members is calculated
+ 			 * from the difference between the two offsets.
+ 			 */
+-			RecordMultiXactOffset(offsets_writer, multi,
++			RecordMultiXactOffset(offsets_writer, destination_multi,
+ 								  (multixid_valid || prev_multixid_valid) ? next_offset : 0);
+ 
+ 			/* Write the members */
+@@ -109,6 +114,7 @@ rewrite_multixacts(MultiXactId from_multi, MultiXactId to_multi)
+ 			multi++;
+ 			if (multi < FirstMultiXactId)
+ 				multi = FirstMultiXactId;
++			destination_multi++;
+ 			prev_multixid_valid = multixid_valid;
+ 		}
+ 
+@@ -116,13 +122,14 @@ rewrite_multixacts(MultiXactId from_multi, MultiXactId to_multi)
+ 	}
+ 
+ 	/* Write the final 'next' offset to the last SLRU page */
+-	RecordMultiXactOffset(offsets_writer, to_multi,
++	RecordMultiXactOffset(offsets_writer, destination_multi,
+ 						  prev_multixid_valid ? next_offset : 0);
+ 
+ 	/* Flush the last SLRU pages */
+ 	FreeSlruWrite(offsets_writer);
+ 	FreeSlruWrite(members_writer);
+ 
++	*next_multi = destination_multi;
+ 	return next_offset;
+ }
+ 
+@@ -162,8 +169,8 @@ RecordMultiXactMembers(SlruSegState *members_writer,
  		int64		pageno;
  		char	   *buf;
  		TransactionId *memberptr;
@@ -12736,7 +13186,7 @@ index 35cfe29c5e3..49645195988 100644
  		int			bshift;
  		int			flagsoff;
  		int			memberoff;
-@@ -181,11 +181,11 @@ RecordMultiXactMembers(SlruSegState *members_writer,
+@@ -181,11 +188,11 @@ RecordMultiXactMembers(SlruSegState *members_writer,
  
  		*memberptr = members[i].xid;
  
@@ -12752,28 +13202,35 @@ index 35cfe29c5e3..49645195988 100644
  	}
  }
 diff --git a/src/bin/pg_upgrade/pg_upgrade.c b/src/bin/pg_upgrade/pg_upgrade.c
-index 899b3488fa..ee92fa130e 100644
+index c02e2df9406..93e6ea1741c 100644
 --- a/src/bin/pg_upgrade/pg_upgrade.c
 +++ b/src/bin/pg_upgrade/pg_upgrade.c
-@@ -43,6 +43,8 @@
+@@ -41,9 +41,11 @@
  
+ #include "postgres_fe.h"
+ 
++#include <dirent.h>
  #include <time.h>
  
-+#include "access/multixact.h"
+ #include "access/multixact.h"
 +#include "access/transam.h"
  #include "catalog/pg_class_d.h"
  #include "common/file_perm.h"
  #include "common/logging.h"
-@@ -61,7 +63,7 @@ static void set_new_cluster_char_signedness(void);
+@@ -62,9 +64,10 @@ static void set_new_cluster_char_signedness(void);
  static void set_locale_and_encoding(void);
  static void prepare_new_cluster(void);
  static void prepare_new_globals(void);
 -static void create_new_objects(void);
 +static void create_new_objects(bool is_wraparound);
  static void copy_xact_xlog_xid(void);
- static void set_frozenxids(bool minmxid_only);
+-static void set_frozenxids(bool minmxid_only);
++static void set_frozenxids(bool minmxid_only, bool preserve_multixact_horizons);
++static void adjust_multixact_horizons(void);
  static void make_outputdirs(char *pgdata);
-@@ -90,6 +92,7 @@ main(int argc, char **argv)
+ static void setup(char *argv0);
+ static void create_logical_replication_slots(void);
+@@ -91,6 +94,7 @@ main(int argc, char **argv)
  {
  	char	   *deletion_script_file_name = NULL;
  	bool		migrate_logical_slots;
@@ -12781,7 +13238,7 @@ index 899b3488fa..ee92fa130e 100644
  
  	/*
  	 * pg_upgrade doesn't currently use common/logging.c, but initialize it
-@@ -135,7 +138,7 @@ main(int argc, char **argv)
+@@ -136,7 +140,7 @@ main(int argc, char **argv)
  
  	check_cluster_compatibility();
  
@@ -12790,7 +13247,7 @@ index 899b3488fa..ee92fa130e 100644
  
  
  	/* -- NEW -- */
-@@ -169,7 +172,7 @@ main(int argc, char **argv)
+@@ -170,7 +174,7 @@ main(int argc, char **argv)
  
  	prepare_new_globals();
  
@@ -12799,7 +13256,16 @@ index 899b3488fa..ee92fa130e 100644
  
  	stop_postmaster(false);
  
-@@ -592,7 +595,7 @@ prepare_new_globals(void)
+@@ -576,7 +580,7 @@ prepare_new_globals(void)
+ 	/*
+ 	 * Before we restore anything, set frozenxids of initdb-created tables.
+ 	 */
+-	set_frozenxids(false);
++	set_frozenxids(false, false);
+ 
+ 	/*
+ 	 * Now restore global objects (roles and tablespaces).
+@@ -593,7 +597,7 @@ prepare_new_globals(void)
  
  
  static void
@@ -12808,33 +13274,63 @@ index 899b3488fa..ee92fa130e 100644
  {
  	int			dbnum;
  	PGconn	   *conn_new_template1;
-@@ -714,11 +717,23 @@ create_new_objects(void)
- 	check_ok();
- 
- 	/*
--	 * We don't have minmxids for databases or relations in pre-9.3 clusters,
--	 * so set those after we have restored the schema.
-+	 * Refix datfrozenxid and datminmxid
+@@ -719,7 +723,14 @@ create_new_objects(void)
+ 	 * so set those after we have restored the schema.
  	 */
  	if (GET_MAJOR_VERSION(old_cluster.major_version) <= 902)
- 		set_frozenxids(true);
-+	else if (old_cluster.controldata.cat_ver < XID_FORMATCHANGE_CAT_VER &&
-+			 new_cluster.controldata.cat_ver >= XID_FORMATCHANGE_CAT_VER)
+-		set_frozenxids(true);
++		set_frozenxids(true, false);
++	else if (cluster_is_xid32(&old_cluster) && cluster_is_xid64(&new_cluster))
 +	{
-+		/*
-+		 * During upgrade from 32-bit to 64-bit xids save relfrozenxids if
-+		 * there was no wraparound in old cluster. Otherwise, reset them to
-+		 * FirstNormalTransactionId value.
-+		 */
++		/* Keep the individual MultiXact horizons restored by pg_dump. */
 +		if (is_wraparound)
-+			set_frozenxids(false);
-+		else
-+			set_frozenxids(true);
++			set_frozenxids(false, true);
++		adjust_multixact_horizons();
 +	}
  
  	/* update new_cluster info now that we have objects in the databases */
  	get_db_rel_and_slot_infos(&new_cluster);
-@@ -772,14 +787,37 @@ copy_subdir_files(const char *old_subdir, const char *new_subdir)
+@@ -770,17 +781,62 @@ copy_subdir_files(const char *old_subdir, const char *new_subdir)
+ 	check_ok();
+ }
+ 
++/* Copy xid64 SLRUs, normalizing the supported legacy 12-digit names. */
++static void
++copy_slru_subdir(const char *subdir)
++{
++	char	   *path;
++	DIR		   *dir;
++	struct dirent *entry;
++
++	copy_subdir_files(subdir, subdir);
++	if (GET_MAJOR_VERSION(old_cluster.major_version) >= 1800)
++		return;
++
++	path = psprintf("%s/%s", new_cluster.pgdata, subdir);
++	dir = opendir(path);
++	if (dir == NULL)
++		pg_fatal("could not open directory \"%s\": %m", path);
++	while ((entry = readdir(dir)) != NULL)
++	{
++		char	   *oldpath,
++			   *newpath;
++		uint64		segment;
++
++		if (strlen(entry->d_name) != 12 ||
++			strspn(entry->d_name, "0123456789ABCDEFabcdef") != 12)
++			continue;
++		segment = strtou64(entry->d_name, NULL, 16);
++		oldpath = psprintf("%s/%s", path, entry->d_name);
++		newpath = psprintf("%s/%015" PRIX64, path, segment);
++		if (rename(oldpath, newpath) != 0)
++			pg_fatal("could not rename file \"%s\" to \"%s\": %m", oldpath, newpath);
++		pg_free(oldpath);
++		pg_free(newpath);
++	}
++	closedir(dir);
++	pg_free(path);
++}
++
  static void
  copy_xact_xlog_xid(void)
  {
@@ -12846,187 +13342,309 @@ index 899b3488fa..ee92fa130e 100644
 -					  "pg_clog" : "pg_xact",
 -					  GET_MAJOR_VERSION(new_cluster.major_version) <= 906 ?
 -					  "pg_clog" : "pg_xact");
-+	TransactionId next_xid;
++	bool		xid32 = cluster_is_xid32(&old_cluster);
++	TransactionId next_xid = xid32 ? (UINT64CONST(1) << 32) :
++		old_cluster.controldata.chkpnt_nxtxid;
++	const char *old_clog = GET_MAJOR_VERSION(old_cluster.major_version) <= 906 ?
++		"pg_clog" : "pg_xact";
 +
-+#define GetClogDirName(cluster) \
-+	GET_MAJOR_VERSION(cluster.major_version) <= 906 ? "pg_clog" : "pg_xact"
-+
-+	/* Set next xid to 2^32 if we're upgrading from 32 bit postgres */
-+	if (old_cluster.controldata.cat_ver < XID_FORMATCHANGE_CAT_VER &&
-+		new_cluster.controldata.cat_ver >= XID_FORMATCHANGE_CAT_VER)
-+		next_xid = ((TransactionId) 1 << 32);
-+	else
-+		next_xid = old_cluster.controldata.chkpnt_nxtxid;
-+
-+	if (old_cluster.controldata.cat_ver < XID_FORMATCHANGE_CAT_VER &&
-+		new_cluster.controldata.cat_ver >= XID_FORMATCHANGE_CAT_VER)
++	if (xid32)
 +	{
-+		/* Convert commit logs and copy to the new data dir */
-+		prep_status("Transforming commit log segments");
-+		convert_xact(psprintf("%s/%s", old_cluster.pgdata, GetClogDirName(old_cluster)),
-+					 psprintf("%s/%s", new_cluster.pgdata, GetClogDirName(new_cluster)));
++		remove_new_subdir("pg_xact", false);
++		prep_status("Converting transaction status segments");
++		convert_xact(psprintf("%s/%s", old_cluster.pgdata, old_clog),
++					 psprintf("%s/pg_xact", new_cluster.pgdata));
 +		check_ok();
 +	}
 +	else
-+	{
-+		/*
-+		 * Copy old commit logs to new data dir. pg_clog has been renamed to
-+		 * pg_xact in post-10 clusters.
-+		 */
-+		prep_status("Copying commit log segments");
-+		copy_subdir_files(GetClogDirName(old_cluster), GetClogDirName(new_cluster));
-+		check_ok();
-+	}
++		copy_slru_subdir(old_clog);
  
  	prep_status("Setting oldest XID for new cluster");
  	exec_prog(UTILITY_LOG_FILE, NULL, true, true,
-@@ -793,19 +831,20 @@ copy_xact_xlog_xid(void)
- 	prep_status("Setting next transaction ID and epoch for new cluster");
+@@ -790,112 +846,59 @@ copy_xact_xlog_xid(void)
+ 			  new_cluster.pgdata);
+ 	check_ok();
+ 
+-	/* set the next transaction id and epoch of the new cluster */
+-	prep_status("Setting next transaction ID and epoch for new cluster");
++	prep_status("Setting next transaction ID for new cluster");
  	exec_prog(UTILITY_LOG_FILE, NULL, true, true,
  			  "\"%s/pg_resetwal\" -f -x %llu \"%s\"",
 -			  new_cluster.bindir,
 -			  (unsigned long long) old_cluster.controldata.chkpnt_nxtxid,
 +			  new_cluster.bindir, (unsigned long long) next_xid,
  			  new_cluster.pgdata);
-+#ifdef NOT_USED
- 	exec_prog(UTILITY_LOG_FILE, NULL, true, true,
- 			  "\"%s/pg_resetwal\" -f -e %u \"%s\"",
- 			  new_cluster.bindir, old_cluster.controldata.chkpnt_nxtepoch,
- 			  new_cluster.pgdata);
-+#endif
- 	/* must reset commit timestamp limits also */
+-	exec_prog(UTILITY_LOG_FILE, NULL, true, true,
+-			  "\"%s/pg_resetwal\" -f -e %u \"%s\"",
+-			  new_cluster.bindir, old_cluster.controldata.chkpnt_nxtepoch,
+-			  new_cluster.pgdata);
+-	/* must reset commit timestamp limits also */
  	exec_prog(UTILITY_LOG_FILE, NULL, true, true,
  			  "\"%s/pg_resetwal\" -f -c %llu,%llu \"%s\"",
- 			  new_cluster.bindir,
+-			  new_cluster.bindir,
 -			  (unsigned long long) old_cluster.controldata.chkpnt_nxtxid,
 -			  (unsigned long long) old_cluster.controldata.chkpnt_nxtxid,
-+			  (unsigned long long) next_xid,
-+			  (unsigned long long) next_xid,
- 			  new_cluster.pgdata);
+-			  new_cluster.pgdata);
++			  new_cluster.bindir, (unsigned long long) next_xid,
++			  (unsigned long long) next_xid, new_cluster.pgdata);
++	new_cluster.controldata.chkpnt_nxtxid = next_xid;
  	check_ok();
  
-@@ -818,8 +857,48 @@ copy_xact_xlog_xid(void)
- 	if (old_cluster.controldata.cat_ver >= MULTIXACT_FORMATCHANGE_CAT_VER &&
- 		new_cluster.controldata.cat_ver >= MULTIXACT_FORMATCHANGE_CAT_VER)
+-	/* Copy or convert pg_multixact files */
+-	Assert(new_cluster.controldata.cat_ver >= MULTIXACT_FORMATCHANGE_CAT_VER);
+-	Assert(new_cluster.controldata.cat_ver >= MULTIXACTOFFSET_FORMATCHANGE_CAT_VER);
+-	if (old_cluster.controldata.cat_ver >= MULTIXACTOFFSET_FORMATCHANGE_CAT_VER)
++	if (!xid32)
  	{
+-		/* No change in multixact format, just copy the files */
+-		MultiXactId new_nxtmulti = old_cluster.controldata.chkpnt_nxtmulti;
+-		MultiXactOffset new_nxtmxoff = old_cluster.controldata.chkpnt_nxtmxoff;
+-
 -		copy_subdir_files("pg_multixact/offsets", "pg_multixact/offsets");
 -		copy_subdir_files("pg_multixact/members", "pg_multixact/members");
-+		uint64		oldest_mxid = old_cluster.controldata.chkpnt_oldstMulti;
-+		uint64		next_mxid = old_cluster.controldata.chkpnt_nxtmulti;
-+		uint64		next_mxoff = old_cluster.controldata.chkpnt_nxtmxoff;
-+
-+		if (old_cluster.controldata.cat_ver >= XID_FORMATCHANGE_CAT_VER)
-+		{
-+			copy_subdir_files("pg_multixact/offsets", "pg_multixact/offsets");
-+			copy_subdir_files("pg_multixact/members", "pg_multixact/members");
-+		}
-+		else
-+		{
-+			MultiXactOffset oldest_mxoff;
-+
-+			remove_new_subdir("pg_multixact/offsets", false);
-+			oldest_mxoff = convert_multixact_offsets("pg_multixact/offsets", "pg_multixact/offsets");
-+
-+			remove_new_subdir("pg_multixact/members", false);
-+			convert_multixact_members("pg_multixact/members", "pg_multixact/members", oldest_mxoff);
-+
-+			/*
-+			 * Handle wraparound if we're upgrading from 32 bit postgres.
-+			 * Invalid 0 mxids/offsets are skipped, so 1 becomes 2^32.
-+			 */
-+			if (oldest_mxoff)
-+			{
-+				if (next_mxid < oldest_mxid)
-+					next_mxid += ((MultiXactId) 1 << 32) - FirstMultiXactId;
-+
-+				if (next_mxoff < oldest_mxoff)
-+					next_mxoff += ((MultiXactOffset) 1 << 32) - 1;
-+
-+				/* Offsets and members were rewritten, oldest_mxoff = 1 */
-+				next_mxoff -= oldest_mxoff - 1;
-+				oldest_mxoff = 1;
-+
-+				/*
-+				 * Save converted next_mxid for possible usage in
-+				 * set_frozenxids()
-+				 */
-+				old_cluster.controldata.chkpnt_nxtmulti = next_mxid;
-+			}
-+		}
- 
- 		prep_status("Setting next multixact ID and offset for new cluster");
- 
-@@ -830,9 +909,9 @@ copy_xact_xlog_xid(void)
- 		exec_prog(UTILITY_LOG_FILE, NULL, true, true,
- 				  "\"%s/pg_resetwal\" -O %llu -m %llu,%llu \"%s\"",
- 				  new_cluster.bindir,
--				  (unsigned long long) old_cluster.controldata.chkpnt_nxtmxoff,
--				  (unsigned long long) old_cluster.controldata.chkpnt_nxtmulti,
+-
+-		prep_status("Setting next multixact ID and offset for new cluster");
+-
+-		/*
+-		 * we preserve all files and contents, so we must preserve both "next"
+-		 * counters here and the oldest multi present on system.
+-		 */
+-		exec_prog(UTILITY_LOG_FILE, NULL, true, true,
+-				  "\"%s/pg_resetwal\" -O %" PRIu64 " -m %llu,%llu \"%s\"",
+-				  new_cluster.bindir, new_nxtmxoff,
+-				  (unsigned long long) new_nxtmulti,
 -				  (unsigned long long) old_cluster.controldata.chkpnt_oldstMulti,
-+				  (unsigned long long) next_mxoff,
-+				  (unsigned long long) next_mxid,
-+				  (unsigned long long) oldest_mxid,
- 				  new_cluster.pgdata);
+-				  new_cluster.pgdata);
+-		check_ok();
++		copy_slru_subdir("pg_multixact/offsets");
++		copy_slru_subdir("pg_multixact/members");
++		new_cluster.controldata.chkpnt_nxtmulti = old_cluster.controldata.chkpnt_nxtmulti;
++		new_cluster.controldata.chkpnt_oldstMulti = old_cluster.controldata.chkpnt_oldstMulti;
++		new_cluster.controldata.chkpnt_nxtmxoff = old_cluster.controldata.chkpnt_nxtmxoff;
+ 	}
+ 	else
+ 	{
+-		/* Conversion is needed */
+-		MultiXactId nxtmulti;
+-		MultiXactId oldstMulti;
+-		MultiXactOffset nxtmxoff;
++		uint32		next_multi,
++					oldest_multi;
++		MultiXactId destination_next;
++
++		if (old_cluster.controldata.chkpnt_nxtmulti > PG_UINT32_MAX ||
++			old_cluster.controldata.chkpnt_oldstMulti > PG_UINT32_MAX)
++			pg_fatal("MultiXact ID exceeds the source 32-bit range");
++		next_multi = Max(old_cluster.controldata.chkpnt_nxtmulti, FirstMultiXactId);
++		/* Pre-9.3 locking-only multis need not survive an upgrade. */
++		oldest_multi = old_cluster.controldata.cat_ver >= MULTIXACT_FORMATCHANGE_CAT_VER ?
++			Max(old_cluster.controldata.chkpnt_oldstMulti, FirstMultiXactId) : next_multi;
+ 
+-		/*
+-		 * Determine the range of multixacts to convert.
+-		 */
+-		nxtmulti = old_cluster.controldata.chkpnt_nxtmulti;
+-		if (old_cluster.controldata.cat_ver >= MULTIXACT_FORMATCHANGE_CAT_VER)
+-		{
+-			/* Versions 9.3 - 18: convert all multixids  */
+-			oldstMulti = old_cluster.controldata.chkpnt_oldstMulti;
+-		}
+-		else
+-		{
+-			/*
+-			 * In PostgreSQL 9.2 and below, multitransactions were only used
+-			 * for row locking, and as such don't need to be preserved during
+-			 * upgrade.  In that case, we utilize rewrite_multixacts() just to
+-			 * initialize new, empty files in the new format.
+-			 *
+-			 * It's important that the oldest multi is set to the latest value
+-			 * used by the old system, so that multixact.c returns the empty
+-			 * set for multis that might be present on disk.
+-			 */
+-			oldstMulti = nxtmulti;
+-		}
+-		/* handle wraparound */
+-		if (nxtmulti < FirstMultiXactId)
+-			nxtmulti = FirstMultiXactId;
+-		if (oldstMulti < FirstMultiXactId)
+-			oldstMulti = FirstMultiXactId;
+-
+-		/*
+-		 * Remove the files created by initdb in the new cluster.
+-		 * rewrite_multixacts() will create new ones.
+-		 */
+ 		remove_new_subdir("pg_multixact/members", false);
+ 		remove_new_subdir("pg_multixact/offsets", false);
+-
+-		/*
+-		 * Create new pg_multixact files, converting old ones if needed.
+-		 */
+ 		prep_status("Converting pg_multixact files");
+-		nxtmxoff = rewrite_multixacts(oldstMulti, nxtmulti);
+-		check_ok();
+-
+-		prep_status("Setting next multixact ID and offset for new cluster");
+-		exec_prog(UTILITY_LOG_FILE, NULL, true, true,
+-				  "\"%s/pg_resetwal\" -O %" PRIu64 " -m %llu,%llu \"%s\"",
+-				  new_cluster.bindir,
+-				  nxtmxoff, (unsigned long long) nxtmulti,
+-				  (unsigned long long) oldstMulti,
+-				  new_cluster.pgdata);
++		new_cluster.controldata.chkpnt_nxtmxoff =
++			rewrite_multixacts(oldest_multi, next_multi, &destination_next);
++		new_cluster.controldata.chkpnt_nxtmulti = destination_next;
++		new_cluster.controldata.chkpnt_oldstMulti = oldest_multi;
  		check_ok();
  	}
-@@ -906,6 +985,8 @@ set_frozenxids(bool minmxid_only)
+ 
++	prep_status("Setting MultiXact counters for new cluster");
++	exec_prog(UTILITY_LOG_FILE, NULL, true, true,
++			  "\"%s/pg_resetwal\" -O %" PRIu64 " -m %llu,%llu \"%s\"",
++			  new_cluster.bindir, new_cluster.controldata.chkpnt_nxtmxoff,
++			  (unsigned long long) new_cluster.controldata.chkpnt_nxtmulti,
++			  (unsigned long long) new_cluster.controldata.chkpnt_oldstMulti,
++			  new_cluster.pgdata);
++	check_ok();
++
+ 	/* now reset the wal archives in the new cluster */
+ 	prep_status("Resetting WAL archives");
+ 	exec_prog(UTILITY_LOG_FILE, NULL, true, true,
+@@ -911,7 +914,7 @@ copy_xact_xlog_xid(void)
+  *	set_frozenxids()
+  *
+  * This is called on the new cluster before we restore anything, with
+- * minmxid_only = false.  Its purpose is to ensure that all initdb-created
++ * minmxid_only = false and preserve_multixact_horizons = false.  Its purpose is to ensure that all initdb-created
+  * vacuumable tables have relfrozenxid/relminmxid matching the old cluster's
+  * xid/mxid counters.  We also initialize the datfrozenxid/datminmxid of the
+  * built-in databases to match.
+@@ -927,9 +930,11 @@ copy_xact_xlog_xid(void)
+  * everything is restored, with minmxid_only = true.  This pass will
+  * initialize all tables and databases, both those made by initdb and user
+  * objects, with the desired minmxid value.  frozenxid values are left alone.
++ * A post-restore XID reset preserves these individual MultiXact horizons;
++ * adjust_multixact_horizons() maps wrapped values without replacing them.
+  */
+ static void
+-set_frozenxids(bool minmxid_only)
++set_frozenxids(bool minmxid_only, bool preserve_multixact_horizons)
+ {
+ 	int			dbnum;
+ 	PGconn	   *conn,
+@@ -938,6 +943,8 @@ set_frozenxids(bool minmxid_only)
  	int			ntups;
  	int			i_datname;
  	int			i_datallowconn;
-+	TransactionId frozen_xid;
-+	MultiXactId minmxid;
++	TransactionId frozen_xid = cluster_is_xid32(&old_cluster) ?
++		FirstNormalTransactionId : old_cluster.controldata.chkpnt_nxtxid;
  
  	if (!minmxid_only)
  		prep_status("Setting frozenxid and minmxid counters in new cluster");
-@@ -914,18 +995,26 @@ set_frozenxids(bool minmxid_only)
- 
- 	conn_template1 = connectToServer(&new_cluster, "template1");
- 
-+	if (old_cluster.controldata.cat_ver < XID_FORMATCHANGE_CAT_VER &&
-+		new_cluster.controldata.cat_ver >= XID_FORMATCHANGE_CAT_VER)
-+		frozen_xid = FirstNormalTransactionId;
-+	else
-+		frozen_xid = old_cluster.controldata.chkpnt_nxtxid;
-+
-+	minmxid = old_cluster.controldata.chkpnt_nxtmulti;
-+
- 	if (!minmxid_only)
- 		/* set pg_database.datfrozenxid */
+@@ -951,13 +958,14 @@ set_frozenxids(bool minmxid_only)
  		PQclear(executeQueryOrDie(conn_template1,
  								  "UPDATE pg_catalog.pg_database "
  								  "SET	datfrozenxid = '%llu'",
 -								  (unsigned long long) old_cluster.controldata.chkpnt_nxtxid));
 +								  (unsigned long long) frozen_xid));
  
- 	/* set pg_database.datminmxid */
- 	PQclear(executeQueryOrDie(conn_template1,
+-	/* set pg_database.datminmxid */
+-	PQclear(executeQueryOrDie(conn_template1,
++	/* Preserve restored per-database horizons when only XIDs need resetting. */
++	if (!preserve_multixact_horizons)
++		PQclear(executeQueryOrDie(conn_template1,
  							  "UPDATE pg_catalog.pg_database "
  							  "SET	datminmxid = '%llu'",
 -							  (unsigned long long) old_cluster.controldata.chkpnt_nxtmulti));
-+							  (unsigned long long) minmxid));
++							  (unsigned long long) new_cluster.controldata.chkpnt_nxtmulti));
  
  	/* get database names */
  	dbres = executeQueryOrDie(conn_template1,
-@@ -965,7 +1054,7 @@ set_frozenxids(bool minmxid_only)
+@@ -997,10 +1005,11 @@ set_frozenxids(bool minmxid_only)
  									  CppAsString2(RELKIND_RELATION) ", "
  									  CppAsString2(RELKIND_MATVIEW) ", "
  									  CppAsString2(RELKIND_TOASTVALUE) ")",
 -									  (unsigned long long) old_cluster.controldata.chkpnt_nxtxid));
 +									  (unsigned long long) frozen_xid));
  
- 		/* set pg_class.relminmxid */
- 		PQclear(executeQueryOrDie(conn,
-@@ -976,7 +1065,7 @@ set_frozenxids(bool minmxid_only)
+-		/* set pg_class.relminmxid */
+-		PQclear(executeQueryOrDie(conn,
++		/* Preserve restored per-relation horizons. */
++		if (!preserve_multixact_horizons)
++			PQclear(executeQueryOrDie(conn,
+ 								  "UPDATE	pg_catalog.pg_class "
+ 								  "SET	relminmxid = '%llu' "
+ 		/* only heap, materialized view, and TOAST are vacuumed */
+@@ -1008,7 +1017,7 @@ set_frozenxids(bool minmxid_only)
  								  CppAsString2(RELKIND_RELATION) ", "
  								  CppAsString2(RELKIND_MATVIEW) ", "
  								  CppAsString2(RELKIND_TOASTVALUE) ")",
 -								  (unsigned long long) old_cluster.controldata.chkpnt_nxtmulti));
-+								  (unsigned long long) minmxid));
++								  (unsigned long long) new_cluster.controldata.chkpnt_nxtmulti));
  		PQfinish(conn);
  
  		/* Reset datallowconn flag */
+@@ -1025,6 +1034,59 @@ set_frozenxids(bool minmxid_only)
+ 	check_ok();
+ }
+ 
++/*
++ * Preserve each restored source horizon while mapping a wrapped MXID range
++ * to the same full IDs written by rewrite_multixacts().  Initdb horizons
++ * already contain destination IDs and are excluded by the range predicate.
++ */
++static void
++adjust_multixact_horizons(void)
++{
++	PGconn	   *template_conn;
++	PGresult   *databases;
++	uint64		oldest = old_cluster.controldata.chkpnt_oldstMulti;
++
++	if (new_cluster.controldata.chkpnt_nxtmulti <= PG_UINT32_MAX)
++		return;
++
++	prep_status("Expanding wrapped MultiXact horizons");
++	template_conn = connectToServer(&new_cluster, "template1");
++	PQclear(executeQueryOrDie(template_conn,
++							  "UPDATE pg_catalog.pg_database "
++							  "SET datminmxid = ((datminmxid::text::bigint + 4294967295)::text)::pg_catalog.xid "
++							  "WHERE datminmxid::text::bigint > 0 "
++							  "AND datminmxid::text::bigint < %llu",
++							  (unsigned long long) oldest));
++	databases = executeQueryOrDie(template_conn,
++								 "SELECT datname, datallowconn FROM pg_catalog.pg_database");
++	for (int i = 0; i < PQntuples(databases); i++)
++	{
++		char	   *name = PQgetvalue(databases, i, 0);
++		bool		allow = strcmp(PQgetvalue(databases, i, 1), "t") == 0;
++		PGconn	   *conn;
++
++		if (!allow)
++			PQclear(executeQueryOrDie(template_conn,
++									  "ALTER DATABASE %s ALLOW_CONNECTIONS = true",
++									  quote_identifier(name)));
++		conn = connectToServer(&new_cluster, name);
++		PQclear(executeQueryOrDie(conn,
++								  "UPDATE pg_catalog.pg_class "
++								  "SET relminmxid = ((relminmxid::text::bigint + 4294967295)::text)::pg_catalog.xid "
++								  "WHERE relminmxid::text::bigint > 0 "
++								  "AND relminmxid::text::bigint < %llu",
++								  (unsigned long long) oldest));
++		PQfinish(conn);
++		if (!allow)
++			PQclear(executeQueryOrDie(template_conn,
++									  "ALTER DATABASE %s ALLOW_CONNECTIONS = false",
++									  quote_identifier(name)));
++	}
++	PQclear(databases);
++	PQfinish(template_conn);
++	check_ok();
++}
++
+ /*
+  * create_logical_replication_slots()
+  *
 diff --git a/src/bin/pg_upgrade/pg_upgrade.h b/src/bin/pg_upgrade/pg_upgrade.h
-index ccd1ac0d013..38155614344 100644
+index ccd1ac0d013..f709f623513 100644
 --- a/src/bin/pg_upgrade/pg_upgrade.h
 +++ b/src/bin/pg_upgrade/pg_upgrade.h
 @@ -238,13 +238,13 @@ typedef struct
@@ -13088,7 +13706,7 @@ index ccd1ac0d013..38155614344 100644
  bool		jsonb_9_4_check_applicable(ClusterInfo *cluster);
  bool		protocol_negotiation_supported(const ClusterInfo *cluster);
  void		old_9_6_invalidate_hash_indexes(ClusterInfo *cluster,
-@@ -507,6 +515,10 @@ void		old_9_6_invalidate_hash_indexes(ClusterInfo *cluster,
+@@ -507,8 +515,13 @@ void		old_9_6_invalidate_hash_indexes(ClusterInfo *cluster,
  
  void		report_extension_updates(ClusterInfo *cluster);
  
@@ -13097,18 +13715,19 @@ index ccd1ac0d013..38155614344 100644
 +void		invalidate_external_indexes(ClusterInfo *cluster, bool check_mode);
 +
  /* multixact_rewrite.c */
- MultiXactOffset rewrite_multixacts(MultiXactId from_multi, MultiXactId to_multi);
+-MultiXactOffset rewrite_multixacts(MultiXactId from_multi, MultiXactId to_multi);
++MultiXactOffset rewrite_multixacts(uint32 from_multi, uint32 to_multi,
++									 MultiXactId *next_multi);
  
-@@ -538,3 +550,9 @@ typedef struct
+ /* parallel.c */
+ void		parallel_exec_prog(const char *log_file, const char *opt_log_file,
+@@ -538,3 +551,6 @@ typedef struct
  	FILE	   *file;
  	char		path[MAXPGPATH];
  } UpgradeTaskReport;
 +
 +/* segresize.c */
 +void		convert_xact(const char *olddir, const char *newdir);
-+MultiXactOffset convert_multixact_offsets(const char *olddir, const char *newdir);
-+void		convert_multixact_members(const char *olddir, const char *newdir,
-+									  MultiXactOffset oldest_mxoff);
 diff --git a/src/bin/pg_upgrade/relfilenumber.c b/src/bin/pg_upgrade/relfilenumber.c
 index 38c17ceabf..41605eb949 100644
 --- a/src/bin/pg_upgrade/relfilenumber.c
@@ -13193,591 +13812,57 @@ index 38c17ceabf..41605eb949 100644
  			switch (user_opts.transfer_mode)
 diff --git a/src/bin/pg_upgrade/segresize.c b/src/bin/pg_upgrade/segresize.c
 new file mode 100644
-index 0000000000..a933befed9
+index 00000000000..51743a09339
 --- /dev/null
 +++ b/src/bin/pg_upgrade/segresize.c
-@@ -0,0 +1,582 @@
-+/*-------------------------------------------------------------------------
-+ *
+@@ -0,0 +1,48 @@
++/*
 + * segresize.c
-+ *	  SLRU segment resize utility from 32bit to 64bit xid format
 + *
-+ * Copyright (c) 2015-2022, Postgres Professional
-+ *
-+ * IDENTIFICATION
-+ *	  src/bin/pg_upgrade/segresize.c
-+ *
-+ *-------------------------------------------------------------------------
++ * Copy the retained 32-bit transaction-status range into long-named SLRUs.
++ * MultiXacts are converted by multixact_rewrite.c using the source layout.
 + */
-+
 +#include "postgres_fe.h"
 +
 +#include "pg_upgrade.h"
-+#include "access/multixact.h"
-+#include "access/transam.h"
++#include "slru_io.h"
 +
-+#define SLRU_PAGES_PER_SEGMENT_OLD	32
-+#define SLRU_PAGES_PER_SEGMENT		32 /* Should be equal to value from slru.h */
++#define OLD_CLOG_XACTS_PER_PAGE (BLCKSZ * 4)
++#define OLD_CLOG_PAGES ((UINT64CONST(1) << 32) / OLD_CLOG_XACTS_PER_PAGE)
 +
-+#define CLOG_BITS_PER_XACT		2
-+#define CLOG_XACTS_PER_BYTE		4
-+#define CLOG_XACTS_PER_PAGE		(BLCKSZ * CLOG_XACTS_PER_BYTE)
-+
-+typedef uint32 MultiXactId32;
-+typedef uint32 MultiXactOffset32;
-+typedef uint32 TransactionId32;
-+
-+#define MaxTransactionId32					((TransactionId32) 0xFFFFFFFF)
-+#define MaxMultiXactId32					((MultiXactId32) 0xFFFFFFFF)
-+#define MaxMultiXactOffset32				((MultiXactOffset32) 0xFFFFFFFF)
-+
-+#define MULTIXACT_OFFSETS_PER_PAGE_OLD		(BLCKSZ / sizeof(MultiXactOffset32))
-+#define MULTIXACT_OFFSETS_PER_PAGE			(BLCKSZ / sizeof(MultiXactOffset))
-+
-+#define MXACT_MEMBER_FLAGS_PER_BYTE			1
-+
-+/* 64xid */
-+#define MULTIXACT_FLAGBYTES_PER_GROUP		8
-+#define MULTIXACT_MEMBERS_PER_MEMBERGROUP	\
-+	(MULTIXACT_FLAGBYTES_PER_GROUP * MXACT_MEMBER_FLAGS_PER_BYTE)
-+/* size in bytes of a complete group */
-+#define MULTIXACT_MEMBERGROUP_SIZE \
-+	(sizeof(TransactionId) * MULTIXACT_MEMBERS_PER_MEMBERGROUP + MULTIXACT_FLAGBYTES_PER_GROUP)
-+#define MULTIXACT_MEMBERGROUPS_PER_PAGE (BLCKSZ / MULTIXACT_MEMBERGROUP_SIZE)
-+
-+/* 32xid */
-+#define MULTIXACT_FLAGBYTES_PER_GROUP_OLD	4
-+#define MULTIXACT_MEMBERS_PER_MEMBERGROUP_OLD	\
-+	(MULTIXACT_FLAGBYTES_PER_GROUP_OLD * MXACT_MEMBER_FLAGS_PER_BYTE)
-+/* size in bytes of a complete group */
-+#define MULTIXACT_MEMBERGROUP_SIZE_OLD \
-+	(sizeof(TransactionId32) * MULTIXACT_MEMBERS_PER_MEMBERGROUP_OLD + MULTIXACT_FLAGBYTES_PER_GROUP_OLD)
-+#define MULTIXACT_MEMBERGROUPS_PER_PAGE_OLD (BLCKSZ / MULTIXACT_MEMBERGROUP_SIZE_OLD)
-+#define MULTIXACT_MEMBERS_PER_PAGE_OLD	\
-+	(MULTIXACT_MEMBERGROUPS_PER_PAGE_OLD * MULTIXACT_MEMBERS_PER_MEMBERGROUP_OLD)
-+
-+typedef struct SLRUSegmentState
-+{
-+	const char	   *dir;
-+	FILE		   *file;
-+	int64			segno;
-+	int64			pageno;
-+	bool			is_empty_segment;
-+}			SLRUSegmentState;
-+
-+static char *
-+slru_filename_old(const char *path, int64 segno)
-+{
-+	Assert(segno <= PG_INT32_MAX);
-+	return psprintf("%s/%04X", path, (int) segno);
-+}
-+
-+static char *
-+slru_filename_new(const char *path, int64 segno)
-+{
-+	return psprintf("%s/%012llX", path, (long long) segno);
-+}
-+
-+static inline FILE *
-+open_file(SLRUSegmentState *state,
-+		  char * (filename_fn)(const char *path, int64 segno),
-+		  char *mode, char *fatal_msg)
-+{
-+	char	*filename = filename_fn(state->dir, state->segno);
-+	FILE	*fd = fopen(filename, mode);
-+
-+	if (!fd)
-+		pg_fatal(fatal_msg, filename);
-+
-+	pfree(filename);
-+
-+	return fd;
-+}
-+
-+static void
-+close_file(SLRUSegmentState *state,
-+		   char * (filename_fn)(const char *path, int64 segno))
-+{
-+	if (state->file != NULL)
-+	{
-+		if (fclose(state->file) != 0)
-+			pg_fatal("could not close file \"%s\": %m",
-+					 filename_fn(state->dir, state->segno));
-+		state->file = NULL;
-+	}
-+}
-+
-+static inline int
-+read_file(SLRUSegmentState *state, void *buf)
-+{
-+	size_t		n = fread(buf, sizeof(char), BLCKSZ, state->file);
-+
-+	if (n != 0)
-+		return n;
-+
-+	if (ferror(state->file))
-+		pg_fatal("could not read file \"%s\": %m",
-+				 slru_filename_old(state->dir, state->segno));
-+
-+	if (!feof(state->file))
-+		pg_fatal("unknown file read state \"%s\": %m",
-+				 slru_filename_old(state->dir, state->segno));
-+
-+	close_file(state, slru_filename_old);
-+
-+	return 0;
-+}
-+
-+static int
-+read_old_segment_page(SLRUSegmentState *state, void *buf, bool *is_empty)
-+{
-+	int		n;
-+
-+	/* Open next segment file, if needed */
-+	if (!state->file)
-+	{
-+		state->file = open_file(state, slru_filename_old, "rb",
-+								"could not open source file \"%s\": %m");
-+
-+		/* Set position to the needed page */
-+		if (fseek(state->file, state->pageno * BLCKSZ, SEEK_SET))
-+			close_file(state, slru_filename_old);
-+
-+		/*
-+		 * Skip segment conversion if segment file doesn't exist.
-+		 * First segment file should exist in any case.
-+		 */
-+		if (state->segno != 0)
-+			state->is_empty_segment = true;
-+	}
-+
-+	if (state->file)
-+	{
-+		/* Segment file does exist, read page from it */
-+		state->is_empty_segment = false;
-+
-+		/* Try to read BLCKSZ bytes */
-+		n = read_file(state, buf);
-+		*is_empty = (n == 0);
-+
-+		/* Zeroing buf tail if needed */
-+		if (n)
-+			memset((char *) buf + n, 0, BLCKSZ - n);
-+	}
-+	else
-+	{
-+		n = state->is_empty_segment ?
-+				BLCKSZ :	/* Skip empty block at the end of segment */
-+				0;			/* We reached the last segment */
-+		*is_empty = true;
-+
-+		if (n)
-+			memset((char *) buf, 0, BLCKSZ);
-+	}
-+
-+	state->pageno++;
-+
-+	if (state->pageno >= SLRU_PAGES_PER_SEGMENT_OLD)
-+	{
-+		/* Start new segment */
-+		state->segno++;
-+		state->pageno = 0;
-+		close_file(state, slru_filename_old);
-+	}
-+
-+	return n;
-+}
-+
-+static void
-+write_new_segment_page(SLRUSegmentState *state, void *buf, bool is_empty)
-+{
-+	/*
-+	 * Create a new segment file if we still didn't.  Creation is postponed
-+	 * until the first non-empty page is found.  This helps not to create
-+	 * completely empty segments.
-+	 */
-+	if (!state->file && !is_empty)
-+	{
-+		state->file = open_file(state, slru_filename_new, "wb",
-+								"could not open target file \"%s\": %m");
-+
-+		/* Write zeroes to the previously skipped prefix */
-+		if (state->pageno > 0)
-+		{
-+			char	zerobuf[BLCKSZ] = {0};
-+
-+			for (int64 i = 0; i < state->pageno; i++)
-+			{
-+				if (fwrite(zerobuf, sizeof(char), BLCKSZ, state->file) != BLCKSZ)
-+					pg_fatal("could not write file \"%s\": %m",
-+							 slru_filename_new(state->dir, state->segno));
-+			}
-+		}
-+
-+	}
-+
-+	/* Write page to the new segment (if it was created) */
-+	if (state->file)
-+	{
-+		if (fwrite(buf, sizeof(char), BLCKSZ, state->file) != BLCKSZ)
-+			pg_fatal("could not write file \"%s\": %m",
-+					 slru_filename_new(state->dir, state->segno));
-+	}
-+
-+	state->pageno++;
-+
-+	/*
-+	 * Did we reach the maximum page number? Then close segment file and
-+	 * create a new one on the next iteration
-+	 */
-+	if (state->pageno >= SLRU_PAGES_PER_SEGMENT)
-+	{
-+		state->segno++;
-+		state->pageno = 0;
-+		close_file(state, slru_filename_new);
-+	}
-+}
-+
-+/*
-+ * Convert pg_xact segments.
-+ */
 +void
-+convert_xact(const char *old_subdir, const char *new_subdir)
++convert_xact(const char *olddir, const char *newdir)
 +{
-+	SLRUSegmentState	oldseg = {0};
-+	SLRUSegmentState	newseg = {0};
-+	TransactionId		oldest_xid = old_cluster.controldata.chkpnt_oldstxid;
-+	TransactionId		next_xid = old_cluster.controldata.chkpnt_nxtxid;
-+	TransactionId		xid;
-+	int64				pageno;
-+	char				buf[BLCKSZ] = {0};
++	SlruSegState *reader;
++	SlruSegState *writer;
++	uint32		oldest_xid;
++	uint32		next_xid;
++	uint64		page,
++				last_page;
 +
-+	oldseg.dir = old_subdir;
-+	newseg.dir = new_subdir;
++	if (old_cluster.controldata.chkpnt_oldstxid > PG_UINT32_MAX)
++		pg_fatal("oldest XID exceeds the source 32-bit XID range");
++	oldest_xid = (uint32) old_cluster.controldata.chkpnt_oldstxid;
++	/* pg_controldata's NextXID contains the epoch, not a CLOG address. */
++	next_xid = (uint32) old_cluster.controldata.chkpnt_nxtxid;
++	page = oldest_xid / OLD_CLOG_XACTS_PER_PAGE;
++	last_page = next_xid == oldest_xid ? page :
++		((uint32) (next_xid - 1)) / OLD_CLOG_XACTS_PER_PAGE;
 +
-+	pageno = oldest_xid / CLOG_XACTS_PER_PAGE;
-+
-+	oldseg.segno = pageno / SLRU_PAGES_PER_SEGMENT_OLD;
-+	oldseg.pageno = pageno % SLRU_PAGES_PER_SEGMENT_OLD;
-+
-+	newseg.segno = pageno / SLRU_PAGES_PER_SEGMENT;
-+	newseg.pageno = pageno % SLRU_PAGES_PER_SEGMENT;
-+
-+	if (next_xid < oldest_xid)
-+		next_xid += (TransactionId) 1 << 32; /* wraparound */
-+
-+	/* Copy xid flags reading only needed segment pages */
-+	for (xid = oldest_xid & ~(CLOG_XACTS_PER_PAGE - 1);
-+		 xid <= ((next_xid - 1) & ~(CLOG_XACTS_PER_PAGE - 1));
-+		 xid += CLOG_XACTS_PER_PAGE)
++	reader = AllocSlruRead(olddir, false);
++	writer = AllocSlruWrite(newdir, true);
++	for (;;)
 +	{
-+		bool		is_empty;
++		char	   *source = SlruReadSwitchPage(reader, page);
++		char	   *destination = SlruWriteSwitchPage(writer, page);
 +
-+		/* Handle possible segment wraparound */
-+		if (oldseg.segno > MaxTransactionId32 / CLOG_XACTS_PER_PAGE / SLRU_PAGES_PER_SEGMENT_OLD)
-+		{
-+			pageno = (MaxTransactionId32 + 1) / CLOG_XACTS_PER_PAGE;
-+
-+			Assert(oldseg.segno == pageno / SLRU_PAGES_PER_SEGMENT_OLD);
-+			Assert(!oldseg.pageno);
-+			Assert(!oldseg.file);
-+			oldseg.segno = 0;
-+
-+			Assert(newseg.segno == pageno / SLRU_PAGES_PER_SEGMENT);
-+			Assert(!newseg.pageno);
-+			Assert(!newseg.file);
-+			newseg.segno = 0;
-+		}
-+
-+		read_old_segment_page(&oldseg, buf, &is_empty);
-+		write_new_segment_page(&newseg, buf, is_empty);
++		memcpy(destination, source, BLCKSZ);
++		if (page == last_page)
++			break;
++		page = (page + 1) % OLD_CLOG_PAGES;
 +	}
-+
-+	/* Release resources */
-+	close_file(&oldseg, slru_filename_old);
-+	close_file(&newseg, slru_filename_new);
-+}
-+
-+static inline SLRUSegmentState
-+create_slru_segment_state(MultiXactId mxid,
-+						  int offsets_per_page,
-+						  int pages_per_segment,
-+						  char *dir)
-+{
-+	SLRUSegmentState	seg = {0};
-+	int64				n;
-+
-+	n = mxid / offsets_per_page;
-+	seg.pageno = n % pages_per_segment;
-+	seg.segno = n / pages_per_segment;
-+	seg.dir = dir;
-+
-+	return seg;
-+}
-+
-+/*
-+ * Convert pg_multixact/offsets segments and return oldest mxid offset.
-+ */
-+MultiXactOffset
-+convert_multixact_offsets(const char *old_subdir, const char *new_subdir)
-+{
-+	SLRUSegmentState		oldseg,
-+							newseg;
-+	MultiXactOffset32		oldbuf[MULTIXACT_OFFSETS_PER_PAGE_OLD] = {0};
-+	MultiXactOffset			newbuf[MULTIXACT_OFFSETS_PER_PAGE] = {0};
-+	MultiXactOffset32		oldest_mxoff = 0;
-+	MultiXactId				oldest_mxid,
-+							next_mxid,
-+							mxid;
-+	uint64					old_entry,
-+							new_entry;
-+	bool					oldest_mxoff_known = false;
-+
-+	StaticAssertStmt((sizeof(oldbuf) == BLCKSZ && sizeof(newbuf) == BLCKSZ),
-+					 "buf should be BLCKSZ");
-+
-+	oldest_mxid = old_cluster.controldata.chkpnt_oldstMulti;
-+
-+	oldseg = create_slru_segment_state(oldest_mxid,
-+									   MULTIXACT_OFFSETS_PER_PAGE_OLD,
-+									   SLRU_PAGES_PER_SEGMENT_OLD,
-+									   psprintf("%s/%s", old_cluster.pgdata,
-+												old_subdir));
-+
-+	newseg = create_slru_segment_state(oldest_mxid,
-+									   MULTIXACT_OFFSETS_PER_PAGE,
-+									   SLRU_PAGES_PER_SEGMENT,
-+									   psprintf("%s/%s", new_cluster.pgdata,
-+												new_subdir));
-+
-+	old_entry = oldest_mxid % MULTIXACT_OFFSETS_PER_PAGE_OLD;
-+	new_entry = oldest_mxid % MULTIXACT_OFFSETS_PER_PAGE;
-+
-+	next_mxid = old_cluster.controldata.chkpnt_nxtmulti;
-+	if (next_mxid < oldest_mxid)
-+		next_mxid += (MultiXactId) 1 << 32;	/* wraparound */
-+
-+	prep_status("Converting old %s to new format", old_subdir);
-+
-+	/* Copy mxid offsets reading only needed segment pages */
-+	for (mxid = oldest_mxid; mxid < next_mxid; old_entry = 0)
-+	{
-+		int			oldlen;
-+		bool		is_empty;
-+
-+		/* Handle possible segment wraparound */
-+		if (oldseg.segno > MaxMultiXactId32 / MULTIXACT_OFFSETS_PER_PAGE_OLD / SLRU_PAGES_PER_SEGMENT_OLD)	/* 0xFFFF */
-+			oldseg.segno = 0;
-+
-+		oldlen = read_old_segment_page(&oldseg, oldbuf, &is_empty);
-+
-+		if (oldlen == 0 || is_empty)
-+			pg_fatal("cannot read page %lld from segment: %s\n",
-+					 (long long) oldseg.pageno,
-+					 slru_filename_old(oldseg.dir, oldseg.segno));
-+
-+		/* Save oldest mxid offset */
-+		if (!oldest_mxoff_known)
-+		{
-+			oldest_mxoff = oldbuf[old_entry];
-+			oldest_mxoff_known = true;
-+		}
-+
-+		/* Skip wrapped-around invalid MultiXactIds */
-+		if (mxid == (MultiXactId) 1 << 32)
-+		{
-+			Assert(oldseg.segno == 0);
-+			Assert(oldseg.pageno == 1);
-+			Assert(old_entry == 0);
-+			mxid += FirstMultiXactId;
-+			old_entry = FirstMultiXactId;
-+		}
-+
-+		/* Copy entries to the new page */
-+		for (; mxid < next_mxid && old_entry < MULTIXACT_OFFSETS_PER_PAGE_OLD;
-+			 mxid++, old_entry++)
-+		{
-+			MultiXactOffset mxoff = oldbuf[old_entry];
-+
-+			/* Handle possible offset wraparound (1 becomes 2^32) */
-+			if (mxoff < oldest_mxoff)
-+				mxoff += ((MultiXactOffset) 1 << 32) - 1;
-+
-+			/* Subtract oldest_mxoff, so new offsets will start from 1 */
-+			newbuf[new_entry++] = mxoff - oldest_mxoff + 1;
-+
-+			if (new_entry >= MULTIXACT_OFFSETS_PER_PAGE)
-+			{
-+				/* Write new page */
-+				write_new_segment_page(&newseg, newbuf, false);
-+				new_entry = 0;
-+			}
-+		}
-+	}
-+
-+	/* Write the last incomplete page */
-+	if (new_entry > 0 || oldest_mxid == next_mxid)
-+	{
-+		memset(&newbuf[new_entry], 0,
-+			   sizeof(newbuf[0]) * (MULTIXACT_OFFSETS_PER_PAGE - new_entry));
-+		write_new_segment_page(&newseg, newbuf, false);
-+	}
-+
-+	/* Use next_mxoff as oldest_mxoff, if oldest_mxid == next_mxid */
-+	if (!oldest_mxoff_known)
-+	{
-+		Assert(oldest_mxid == next_mxid);
-+		oldest_mxoff = (MultiXactOffset) old_cluster.controldata.chkpnt_nxtmxoff;
-+	}
-+
-+	/* Release resources */
-+	close_file(&oldseg, slru_filename_old);
-+	close_file(&newseg, slru_filename_new);
-+
-+	pfree((char *) oldseg.dir);
-+	pfree((char *) newseg.dir);
-+
-+	check_ok();
-+
-+	return oldest_mxoff;
-+}
-+
-+/*
-+ * Convert pg_multixact/members segments, offsets will start from 1.
-+ */
-+void
-+convert_multixact_members(const char *old_subdir, const char *new_subdir,
-+						  MultiXactOffset oldest_mxoff)
-+{
-+	MultiXactOffset		next_mxoff,
-+						mxoff;
-+	SLRUSegmentState	oldseg,
-+						newseg;
-+	char				oldbuf[BLCKSZ] = {0},
-+						newbuf[BLCKSZ] = {0};
-+	int					newgroup,
-+						newmember;
-+	char			   *newflag = newbuf;
-+	TransactionId	   *newxid;
-+	int					oldidx;
-+
-+	prep_status("Converting old %s to new format", old_subdir);
-+
-+	next_mxoff = (MultiXactOffset) old_cluster.controldata.chkpnt_nxtmxoff;
-+	if (next_mxoff < oldest_mxoff)
-+		next_mxoff += (MultiXactOffset) 1 << 32;
-+
-+	newxid = (TransactionId *) (newflag + MXACT_MEMBER_FLAGS_PER_BYTE * MULTIXACT_MEMBERS_PER_MEMBERGROUP);
-+
-+	/* Initialize old starting position */
-+	oldidx = oldest_mxoff % MULTIXACT_MEMBERS_PER_PAGE_OLD;
-+	oldseg = create_slru_segment_state(oldest_mxoff,
-+									   MULTIXACT_MEMBERS_PER_PAGE_OLD,
-+									   SLRU_PAGES_PER_SEGMENT_OLD,
-+									   psprintf("%s/%s", old_cluster.pgdata,
-+												old_subdir));
-+
-+	/* Initialize empty new segment */
-+	newseg = create_slru_segment_state(0, 1, 1,
-+									   psprintf("%s/%s", new_cluster.pgdata,
-+									   new_subdir));
-+
-+	/* Initialize new starting position (skip invalid zero offset) */
-+	newgroup = 0;
-+	newmember = 1;
-+	newflag++;
-+	newxid++;
-+
-+	/* Iterate through the original directory */
-+	for (mxoff = oldest_mxoff; mxoff < next_mxoff; oldidx = 0)
-+	{
-+		bool		old_is_empty;
-+		int			oldlen;
-+		int			ngroups;
-+		int			oldgroup;
-+		int			oldmember;
-+
-+		oldlen = read_old_segment_page(&oldseg, oldbuf, &old_is_empty);
-+
-+		if (oldlen == 0 || old_is_empty)
-+			pg_fatal("cannot read page %lld from segment: %s\n",
-+					 (long long) oldseg.pageno,
-+					 slru_filename_old(oldseg.dir, oldseg.segno));
-+
-+		ngroups = oldlen / MULTIXACT_MEMBERGROUP_SIZE_OLD;
-+
-+		/* Iterate through old member groups */
-+		for (oldgroup = oldidx / MULTIXACT_MEMBERS_PER_MEMBERGROUP_OLD,
-+			 oldmember = oldidx % MULTIXACT_MEMBERS_PER_MEMBERGROUP_OLD;
-+			 oldgroup < ngroups && mxoff < next_mxoff;
-+			 oldgroup++, oldmember = 0)
-+		{
-+			char	   *oldflag = (char *) oldbuf + oldgroup * MULTIXACT_MEMBERGROUP_SIZE_OLD;
-+			TransactionId32 *oldxid = (TransactionId32 *) (oldflag + MULTIXACT_FLAGBYTES_PER_GROUP_OLD);
-+
-+			oldxid += oldmember;
-+			oldflag += oldmember;
-+
-+			/* Iterate through old members */
-+			for (int i = oldidx % MULTIXACT_MEMBERS_PER_MEMBERGROUP_OLD;
-+				 i < MULTIXACT_MEMBERS_PER_MEMBERGROUP_OLD && mxoff < next_mxoff;
-+				 i++)
-+			{
-+				/* Copy member's xid and flags to the new page */
-+				*newflag++ = *oldflag++;
-+				*newxid++ = (TransactionId) * oldxid++;
-+
-+				oldidx++;
-+				mxoff++;
-+
-+				if (++newmember >= MULTIXACT_MEMBERS_PER_MEMBERGROUP)
-+				{
-+					/* Start next member group */
-+					newmember = 0;
-+
-+					if (++newgroup >= MULTIXACT_MEMBERGROUPS_PER_PAGE)
-+					{
-+						/* Write current page and start new */
-+						newgroup = 0;
-+						write_new_segment_page(&newseg, newbuf, false);
-+						memset(newbuf, 0, BLCKSZ);
-+					}
-+
-+					newflag = (char *) newbuf + newgroup * MULTIXACT_MEMBERGROUP_SIZE;
-+					newxid = (TransactionId *) (newflag + MXACT_MEMBER_FLAGS_PER_BYTE * MULTIXACT_MEMBERS_PER_MEMBERGROUP);
-+				}
-+
-+				/* Handle offset wraparound */
-+				if (mxoff > MaxMultiXactOffset32)
-+				{
-+					Assert(mxoff == (MultiXactOffset) 1 << 32);
-+					Assert(oldseg.segno == MaxMultiXactOffset32 / MULTIXACT_MEMBERS_PER_PAGE_OLD / SLRU_PAGES_PER_SEGMENT_OLD);
-+					Assert(oldseg.pageno == MaxMultiXactOffset32 / MULTIXACT_MEMBERS_PER_PAGE_OLD % SLRU_PAGES_PER_SEGMENT_OLD);
-+					Assert(oldmember == MaxMultiXactOffset32 % MULTIXACT_MEMBERS_PER_PAGE_OLD);
-+
-+					/* Switch to segment 0000 */
-+					close_file(&oldseg, slru_filename_old);
-+					oldseg.segno = 0;
-+					oldseg.pageno = 0;
-+
-+					oldidx = 1; /* skip invalid zero mxid offset */
-+				}
-+			}
-+		}
-+	}
-+
-+	/* Write last page, unless it is empty */
-+	if (newflag > (char *) newbuf || oldest_mxoff == next_mxoff)
-+		write_new_segment_page(&newseg, newbuf, false);
-+
-+	/* Release resources */
-+	close_file(&oldseg, slru_filename_old);
-+	close_file(&newseg, slru_filename_new);
-+
-+	pfree((char *) oldseg.dir);
-+	pfree((char *) newseg.dir);
-+
-+	check_ok();
++	FreeSlruRead(reader);
++	FreeSlruWrite(writer);
 +}
 diff --git a/src/bin/pg_upgrade/t/002_pg_upgrade.pl b/src/bin/pg_upgrade/t/002_pg_upgrade.pl
 index 823f41e754..dc8326172a 100644

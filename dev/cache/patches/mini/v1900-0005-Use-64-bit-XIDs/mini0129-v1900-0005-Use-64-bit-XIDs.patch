@@ -1,0 +1,54 @@
+diff --git a/src/bin/pg_upgrade/segresize.c b/src/bin/pg_upgrade/segresize.c
+new file mode 100644
+index 00000000000..51743a09339
+--- /dev/null
++++ b/src/bin/pg_upgrade/segresize.c
+@@ -0,0 +1,48 @@
++/*
++ * segresize.c
++ *
++ * Copy the retained 32-bit transaction-status range into long-named SLRUs.
++ * MultiXacts are converted by multixact_rewrite.c using the source layout.
++ */
++#include "postgres_fe.h"
++
++#include "pg_upgrade.h"
++#include "slru_io.h"
++
++#define OLD_CLOG_XACTS_PER_PAGE (BLCKSZ * 4)
++#define OLD_CLOG_PAGES ((UINT64CONST(1) << 32) / OLD_CLOG_XACTS_PER_PAGE)
++
++void
++convert_xact(const char *olddir, const char *newdir)
++{
++	SlruSegState *reader;
++	SlruSegState *writer;
++	uint32		oldest_xid;
++	uint32		next_xid;
++	uint64		page,
++				last_page;
++
++	if (old_cluster.controldata.chkpnt_oldstxid > PG_UINT32_MAX)
++		pg_fatal("oldest XID exceeds the source 32-bit XID range");
++	oldest_xid = (uint32) old_cluster.controldata.chkpnt_oldstxid;
++	/* pg_controldata's NextXID contains the epoch, not a CLOG address. */
++	next_xid = (uint32) old_cluster.controldata.chkpnt_nxtxid;
++	page = oldest_xid / OLD_CLOG_XACTS_PER_PAGE;
++	last_page = next_xid == oldest_xid ? page :
++		((uint32) (next_xid - 1)) / OLD_CLOG_XACTS_PER_PAGE;
++
++	reader = AllocSlruRead(olddir, false);
++	writer = AllocSlruWrite(newdir, true);
++	for (;;)
++	{
++		char	   *source = SlruReadSwitchPage(reader, page);
++		char	   *destination = SlruWriteSwitchPage(writer, page);
++
++		memcpy(destination, source, BLCKSZ);
++		if (page == last_page)
++			break;
++		page = (page + 1) % OLD_CLOG_PAGES;
++	}
++	FreeSlruRead(reader);
++	FreeSlruWrite(writer);
++}

@@ -1,0 +1,465 @@
+diff --git a/src/bin/pg_upgrade/multixact_read_v18.c b/src/bin/pg_upgrade/multixact_read_v18.c
+index c92b977530a..b878bdbbe2b 100644
+--- a/src/bin/pg_upgrade/multixact_read_v18.c
++++ b/src/bin/pg_upgrade/multixact_read_v18.c
+@@ -1,9 +1,8 @@
+ /*
+  * multixact_read_v18.c
+  *
+- * Functions to read multixact SLRUs from clusters of PostgreSQL version 18
+- * and older.  In version 19, the multixid offsets were expanded from 32 to 64
+- * bits.
++ * Functions to read multixact SLRUs with 32-bit member XIDs.  Offsets are
++ * four bytes before PostgreSQL 19 and eight bytes starting with that version.
+  *
+  * Copyright (c) 2025-2026, PostgreSQL Global Development Group
+  * src/bin/pg_upgrade/multixact_read_v18.c
+@@ -15,33 +14,37 @@
+ #include "pg_upgrade.h"
+ 
+ /*
+- * NOTE: below are a bunch of definitions that are copy-pasted from
+- * multixact.c from version 18.  It's important that this file doesn't
+- * #include the new definitions with same names from "multixact_internal.h"!
+- *
+- * To further avoid confusion in the functions exposed outside this source
+- * file, we use MultiXactOffset32 to represent the old-style 32-bit multixid
+- * offsets.  The new 64-bit MultiXactOffset should not be used anywhere in
+- * this file.
++ * Source member groups must use explicit 32-bit XIDs even when pg_upgrade
++ * itself is built with 64-bit TransactionId.  Do not include the target
++ * multixact_internal.h definitions here.
+  */
+ #ifdef MULTIXACT_INTERNAL_H
+ #error multixact_internal.h should not be included in multixact_read_v18.c
+ #endif
+-#define MultiXactOffset should_not_be_used
+-
+-/* We need four bytes per offset and 8 bytes per base for each page. */
+-#define MULTIXACT_OFFSETS_PER_PAGE (BLCKSZ / sizeof(MultiXactOffset32))
+ 
+-static inline int64
+-MultiXactIdToOffsetPage(MultiXactId multi)
++/* Decode the source offset layout independently of the member XID layout. */
++static uint64
++ReadOldMultiXactOffset(OldMultiXactReader *state, uint32 multi)
+ {
+-	return multi / MULTIXACT_OFFSETS_PER_PAGE;
+-}
++	int			width = state->offsets64 ? sizeof(uint64) : sizeof(uint32);
++	int			per_page = BLCKSZ / width;
++	char	   *buf = SlruReadSwitchPage(state->offset, multi / per_page);
++	int			entry = multi % per_page;
+ 
+-static inline int
+-MultiXactIdToOffsetEntry(MultiXactId multi)
+-{
+-	return multi % MULTIXACT_OFFSETS_PER_PAGE;
++	if (state->offsets64)
++	{
++		uint64		value;
++
++		memcpy(&value, buf + entry * width, sizeof(value));
++		return value;
++	}
++	else
++	{
++		uint32		value;
++
++		memcpy(&value, buf + entry * width, sizeof(value));
++		return value;
++	}
+ }
+ 
+ /*
+@@ -67,23 +70,23 @@ MultiXactIdToOffsetEntry(MultiXactId multi)
+ 	(MULTIXACT_FLAGBYTES_PER_GROUP * MXACT_MEMBER_FLAGS_PER_BYTE)
+ /* size in bytes of a complete group */
+ #define MULTIXACT_MEMBERGROUP_SIZE \
+-	(sizeof(TransactionId) * MULTIXACT_MEMBERS_PER_MEMBERGROUP + MULTIXACT_FLAGBYTES_PER_GROUP)
++	(sizeof(uint32) * MULTIXACT_MEMBERS_PER_MEMBERGROUP + MULTIXACT_FLAGBYTES_PER_GROUP)
+ #define MULTIXACT_MEMBERGROUPS_PER_PAGE (BLCKSZ / MULTIXACT_MEMBERGROUP_SIZE)
+ #define MULTIXACT_MEMBERS_PER_PAGE	\
+ 	(MULTIXACT_MEMBERGROUPS_PER_PAGE * MULTIXACT_MEMBERS_PER_MEMBERGROUP)
+ 
+ /* page in which a member is to be found */
+ static inline int64
+-MXOffsetToMemberPage(MultiXactOffset32 offset)
++MXOffsetToMemberPage(uint64 offset)
+ {
+ 	return offset / MULTIXACT_MEMBERS_PER_PAGE;
+ }
+ 
+ /* Location (byte offset within page) of flag word for a given member */
+ static inline int
+-MXOffsetToFlagsOffset(MultiXactOffset32 offset)
++MXOffsetToFlagsOffset(uint64 offset)
+ {
+-	MultiXactOffset32 group = offset / MULTIXACT_MEMBERS_PER_MEMBERGROUP;
++	uint64 group = offset / MULTIXACT_MEMBERS_PER_MEMBERGROUP;
+ 	int			grouponpg = group % MULTIXACT_MEMBERGROUPS_PER_PAGE;
+ 	int			byteoff = grouponpg * MULTIXACT_MEMBERGROUP_SIZE;
+ 
+@@ -92,17 +95,17 @@ MXOffsetToFlagsOffset(MultiXactOffset32 offset)
+ 
+ /* Location (byte offset within page) of TransactionId of given member */
+ static inline int
+-MXOffsetToMemberOffset(MultiXactOffset32 offset)
++MXOffsetToMemberOffset(uint64 offset)
+ {
+ 	int			member_in_group = offset % MULTIXACT_MEMBERS_PER_MEMBERGROUP;
+ 
+ 	return MXOffsetToFlagsOffset(offset) +
+ 		MULTIXACT_FLAGBYTES_PER_GROUP +
+-		member_in_group * sizeof(TransactionId);
++		member_in_group * sizeof(uint32);
+ }
+ 
+ static inline int
+-MXOffsetToFlagsBitShift(MultiXactOffset32 offset)
++MXOffsetToFlagsBitShift(uint64 offset)
+ {
+ 	int			member_in_group = offset % MULTIXACT_MEMBERS_PER_MEMBERGROUP;
+ 	int			bshift = member_in_group * MXACT_MEMBER_BITS_PER_XACT;
+@@ -116,20 +119,24 @@ MXOffsetToFlagsBitShift(MultiXactOffset32 offset)
+  * Returns the malloced memory used by the all other calls in this module.
+  */
+ OldMultiXactReader *
+-AllocOldMultiXactRead(char *pgdata, MultiXactId nextMulti,
+-					  MultiXactOffset32 nextOffset)
++AllocOldMultiXactRead(char *pgdata, uint32 nextMulti,
++					  uint64 nextOffset, bool offsets64)
+ {
+ 	OldMultiXactReader *state = pg_malloc_object(OldMultiXactReader);
+ 	char		dir[MAXPGPATH] = {0};
+ 
++	if (!offsets64 && nextOffset > PG_UINT32_MAX)
++		pg_fatal("member offset exceeds the source 32-bit range");
++
+ 	state->nextMXact = nextMulti;
+ 	state->nextOffset = nextOffset;
++	state->offsets64 = offsets64;
+ 
+ 	pg_sprintf(dir, "%s/pg_multixact/offsets", pgdata);
+-	state->offset = AllocSlruRead(dir, false);
++	state->offset = AllocSlruRead(dir, offsets64);
+ 
+ 	pg_sprintf(dir, "%s/pg_multixact/members", pgdata);
+-	state->members = AllocSlruRead(dir, false);
++	state->members = AllocSlruRead(dir, offsets64);
+ 
+ 	return state;
+ }
+@@ -158,21 +165,19 @@ AllocOldMultiXactRead(char *pgdata, MultiXactId nextMulti,
+  * Returns true on success, false if the multixact was invalid.
+  */
+ bool
+-GetOldMultiXactIdSingleMember(OldMultiXactReader *state, MultiXactId multi,
++GetOldMultiXactIdSingleMember(OldMultiXactReader *state, uint32 multi,
+ 							  MultiXactMember *member)
+ {
+-	MultiXactId nextMXact,
+-				nextOffset,
++	uint32		nextMXact,
+ 				tmpMXact;
++	uint64		nextOffset,
++				offset,
++				nextMXOffset,
++				length;
+ 	int64		pageno,
+ 				prev_pageno;
+-	int			entryno,
+-				length;
+-	char	   *buf;
+-	MultiXactOffset32 *offptr,
+-				offset;
+-	MultiXactOffset32 nextMXOffset;
+-	TransactionId result_xid = InvalidTransactionId;
++	char	   *buf = NULL;
++	uint32		result_xid = 0;
+ 	MultiXactStatus result_status = 0;
+ 
+ 	nextMXact = state->nextMXact;
+@@ -204,13 +209,7 @@ GetOldMultiXactIdSingleMember(OldMultiXactReader *state, MultiXactId multi,
+ 	 * read a zero from the members array, just ignore it.
+ 	 */
+ 
+-	pageno = MultiXactIdToOffsetPage(multi);
+-	entryno = MultiXactIdToOffsetEntry(multi);
+-
+-	buf = SlruReadSwitchPage(state->offset, pageno);
+-	offptr = (MultiXactOffset32 *) buf;
+-	offptr += entryno;
+-	offset = *offptr;
++	offset = ReadOldMultiXactOffset(state, multi);
+ 
+ 	if (offset == 0)
+ 	{
+@@ -235,17 +234,7 @@ GetOldMultiXactIdSingleMember(OldMultiXactReader *state, MultiXactId multi,
+ 		if (tmpMXact < FirstMultiXactId)
+ 			tmpMXact = FirstMultiXactId;
+ 
+-		prev_pageno = pageno;
+-
+-		pageno = MultiXactIdToOffsetPage(tmpMXact);
+-		entryno = MultiXactIdToOffsetEntry(tmpMXact);
+-
+-		if (pageno != prev_pageno)
+-			buf = SlruReadSwitchPage(state->offset, pageno);
+-
+-		offptr = (MultiXactOffset32 *) buf;
+-		offptr += entryno;
+-		nextMXOffset = *offptr;
++		nextMXOffset = ReadOldMultiXactOffset(state, tmpMXact);
+ 	}
+ 
+ 	if (nextMXOffset == 0)
+@@ -253,16 +242,18 @@ GetOldMultiXactIdSingleMember(OldMultiXactReader *state, MultiXactId multi,
+ 		/* Invalid entry.  These can be left behind on a server crash. */
+ 		return false;
+ 	}
+-	length = nextMXOffset - offset;
+-
+-	if (length < 0)
++	/* Only the four-byte source offset format can wrap. */
++	if (state->offsets64)
+ 	{
+-		/*
+-		 * This entry is corrupt.  We should not see these even after a server
+-		 * crash.
+-		 */
+-		pg_fatal("multixact %u has an invalid length (%d)", multi, length);
++		if (nextMXOffset < offset)
++			pg_fatal("multixact %u has a decreasing member offset", multi);
++		length = nextMXOffset - offset;
+ 	}
++	else
++		length = (uint32) (nextMXOffset - offset);
++
++	if (length > PG_INT32_MAX)
++		pg_fatal("multixact %u has an invalid length (%" PRIu64 ")", multi, length);
+ 	if (length == 0)
+ 	{
+ 		/*
+@@ -275,9 +266,9 @@ GetOldMultiXactIdSingleMember(OldMultiXactReader *state, MultiXactId multi,
+ 
+ 	/* read the members */
+ 	prev_pageno = -1;
+-	for (int i = 0; i < length; i++, offset++)
++	for (uint64 i = 0; i < length; i++)
+ 	{
+-		TransactionId *xactptr;
++		uint32	   *xactptr;
+ 		uint32	   *flagsptr;
+ 		int			flagsoff;
+ 		int			bshift;
+@@ -287,21 +278,24 @@ GetOldMultiXactIdSingleMember(OldMultiXactReader *state, MultiXactId multi,
+ 		pageno = MXOffsetToMemberPage(offset);
+ 		memberoff = MXOffsetToMemberOffset(offset);
+ 
+-		if (pageno != prev_pageno)
++		if (buf == NULL || pageno != prev_pageno)
+ 		{
+ 			buf = SlruReadSwitchPage(state->members, pageno);
+ 			prev_pageno = pageno;
+ 		}
+ 
+-		xactptr = (TransactionId *) (buf + memberoff);
++		xactptr = (uint32 *) (buf + memberoff);
+ 		if (!TransactionIdIsValid(*xactptr))
+ 		{
+ 			/*
+ 			 * Corner case 2: offset must have wrapped around to unused slot
+ 			 * zero.
+ 			 */
+-			if (offset == 0)
++			if (!state->offsets64 && offset == 0)
++			{
++				offset++;
+ 				continue;
++			}
+ 
+ 			/*
+ 			 * Otherwise this is an invalid entry that should not be
+@@ -343,6 +337,10 @@ GetOldMultiXactIdSingleMember(OldMultiXactReader *state, MultiXactId multi,
+ 			result_xid = *xactptr;
+ 			result_status = status;
+ 		}
++		if (state->offsets64)
++			offset++;
++		else
++			offset = (uint32) (offset + 1);
+ 	}
+ 
+ 	member->xid = result_xid;
+diff --git a/src/bin/pg_upgrade/multixact_read_v18.h b/src/bin/pg_upgrade/multixact_read_v18.h
+index 88b52b9d2e8..c4b1f4bdb06 100644
+--- a/src/bin/pg_upgrade/multixact_read_v18.h
++++ b/src/bin/pg_upgrade/multixact_read_v18.h
+@@ -10,27 +10,22 @@
+ #include "access/multixact.h"
+ #include "slru_io.h"
+ 
+-/*
+- * MultiXactOffset changed from uint32 to uint64 between versions 18 and 19.
+- * MultiXactOffset32 is used to represent a 32-bit offset from the old
+- * cluster.
+- */
+-typedef uint32 MultiXactOffset32;
+-
++/* Source MXIDs/member XIDs stay 32-bit; offsets may be four or eight bytes. */
+ typedef struct OldMultiXactReader
+ {
+-	MultiXactId nextMXact;
+-	MultiXactOffset32 nextOffset;
++	uint32		nextMXact;
++	uint64		nextOffset;
++	bool		offsets64;
+ 
+ 	SlruSegState *offset;
+ 	SlruSegState *members;
+ } OldMultiXactReader;
+ 
+ extern OldMultiXactReader *AllocOldMultiXactRead(char *pgdata,
+-												 MultiXactId nextMulti,
+-												 MultiXactOffset32 nextOffset);
++												 uint32 nextMulti,
++												 uint64 nextOffset, bool offsets64);
+ extern bool GetOldMultiXactIdSingleMember(OldMultiXactReader *state,
+-										  MultiXactId multi,
++										  uint32 multi,
+ 										  MultiXactMember *member);
+ extern void FreeOldMultiXactReader(OldMultiXactReader *state);
+ 
+diff --git a/src/bin/pg_upgrade/multixact_rewrite.c b/src/bin/pg_upgrade/multixact_rewrite.c
+index 35cfe29c5e3..9efe3baea76 100644
+--- a/src/bin/pg_upgrade/multixact_rewrite.c
++++ b/src/bin/pg_upgrade/multixact_rewrite.c
+@@ -1,8 +1,8 @@
+ /*
+  * multixact_rewrite.c
+  *
+- * Functions to convert multixact SLRUs from the pre-v19 format to the current
+- * format with 64-bit MultiXactOffsets.
++ * Functions to convert multixact SLRUs with 32-bit member XIDs to the
++ * current format.  Source offsets may be either four or eight bytes.
+  *
+  * Copyright (c) 2025-2026, PostgreSQL Global Development Group
+  * src/bin/pg_upgrade/multixact_rewrite.c
+@@ -21,8 +21,8 @@ static void RecordMultiXactMembers(SlruSegState *members_writer,
+ 								   int nmembers, MultiXactMember *members);
+ 
+ /*
+- * Convert pg_multixact/offset and /members from the old pre-v19 format with
+- * 32-bit offsets to the current format.
++ * Convert pg_multixact/offsets and /members from a 32-bit-XID source.
++ * Source MXIDs wrap at 32 bits independently of the source offset width.
+  *
+  * Multixids in the range [from_multi, to_multi) are read from the old
+  * cluster, and written in the new format.  An important edge case is that if
+@@ -30,23 +30,27 @@ static void RecordMultiXactMembers(SlruSegState *members_writer,
+  * new format without trying to open any old files.  (We rely on that when
+  * upgrading from PostgreSQL version 9.2 or below.)
+  *
+- * Returns the new nextOffset value; the caller should set it in the new
+- * control file.  The new members always start from offset 1, regardless of
++ * Returns the new nextOffset value and sets *next_multi; the caller should
++ * save both counters in the new control file.  The new members always start from offset 1, regardless of
+  * the offset range used in the old cluster.
+  */
+ MultiXactOffset
+-rewrite_multixacts(MultiXactId from_multi, MultiXactId to_multi)
++rewrite_multixacts(uint32 from_multi, uint32 to_multi,
++				   MultiXactId *next_multi)
+ {
+ 	MultiXactOffset next_offset;
+ 	SlruSegState *offsets_writer;
+ 	SlruSegState *members_writer;
+ 	char		dir[MAXPGPATH] = {0};
+ 	bool		prev_multixid_valid = false;
++	MultiXactId destination_multi = from_multi;
++
++	Assert(from_multi >= FirstMultiXactId && to_multi >= FirstMultiXactId);
+ 
+ 	/*
+-	 * The range of valid multi XIDs is unchanged by the conversion (they are
+-	 * referenced from the heap tables), but the members SLRU is rewritten to
+-	 * start from offset 1.
++	 * The destination IDs are contiguous, starting at the source oldest MXID.
++	 * A wrapped source MXID 1 follows UINT32_MAX as destination 2^32.
++	 * The members SLRU is rewritten to start from offset 1.
+ 	 */
+ 	next_offset = 1;
+ 
+@@ -69,9 +73,10 @@ rewrite_multixacts(MultiXactId from_multi, MultiXactId to_multi)
+ 
+ 		old_reader = AllocOldMultiXactRead(old_cluster.pgdata,
+ 										   old_cluster.controldata.chkpnt_nxtmulti,
+-										   old_cluster.controldata.chkpnt_nxtmxoff);
++										   old_cluster.controldata.chkpnt_nxtmxoff,
++										   cluster_has_64bit_multixact_offsets(&old_cluster));
+ 
+-		for (MultiXactId multi = from_multi; multi != to_multi;)
++		for (uint32 multi = from_multi; multi != to_multi;)
+ 		{
+ 			MultiXactMember member;
+ 			bool		multixid_valid;
+@@ -95,7 +100,7 @@ rewrite_multixacts(MultiXactId from_multi, MultiXactId to_multi)
+ 			 * when reading a multixid, the number of members is calculated
+ 			 * from the difference between the two offsets.
+ 			 */
+-			RecordMultiXactOffset(offsets_writer, multi,
++			RecordMultiXactOffset(offsets_writer, destination_multi,
+ 								  (multixid_valid || prev_multixid_valid) ? next_offset : 0);
+ 
+ 			/* Write the members */
+@@ -109,6 +114,7 @@ rewrite_multixacts(MultiXactId from_multi, MultiXactId to_multi)
+ 			multi++;
+ 			if (multi < FirstMultiXactId)
+ 				multi = FirstMultiXactId;
++			destination_multi++;
+ 			prev_multixid_valid = multixid_valid;
+ 		}
+ 
+@@ -116,13 +122,14 @@ rewrite_multixacts(MultiXactId from_multi, MultiXactId to_multi)
+ 	}
+ 
+ 	/* Write the final 'next' offset to the last SLRU page */
+-	RecordMultiXactOffset(offsets_writer, to_multi,
++	RecordMultiXactOffset(offsets_writer, destination_multi,
+ 						  prev_multixid_valid ? next_offset : 0);
+ 
+ 	/* Flush the last SLRU pages */
+ 	FreeSlruWrite(offsets_writer);
+ 	FreeSlruWrite(members_writer);
+ 
++	*next_multi = destination_multi;
+ 	return next_offset;
+ }
+ 
+@@ -162,8 +169,8 @@ RecordMultiXactMembers(SlruSegState *members_writer,
+ 		int64		pageno;
+ 		char	   *buf;
+ 		TransactionId *memberptr;
+-		uint32	   *flagsptr;
+-		uint32		flagsval;
++		uint64	   *flagsptr;
++		uint64		flagsval;
+ 		int			bshift;
+ 		int			flagsoff;
+ 		int			memberoff;
+@@ -181,11 +188,11 @@ RecordMultiXactMembers(SlruSegState *members_writer,
+ 
+ 		*memberptr = members[i].xid;
+ 
+-		flagsptr = (uint32 *) (buf + flagsoff);
++		flagsptr = (uint64 *) (buf + flagsoff);
+ 
+ 		flagsval = *flagsptr;
+-		flagsval &= ~(((1 << MXACT_MEMBER_BITS_PER_XACT) - 1) << bshift);
+-		flagsval |= (members[i].status << bshift);
++		flagsval &= ~((uint64) ((1ULL << MXACT_MEMBER_BITS_PER_XACT) - 1) << bshift);
++		flagsval |= ((uint64) members[i].status << bshift);
+ 		*flagsptr = flagsval;
+ 	}
+ }

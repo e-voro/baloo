@@ -1,9 +1,9 @@
 diff --git a/src/backend/storage/buffer/heap_convert.c b/src/backend/storage/buffer/heap_convert.c
 new file mode 100644
-index 00000000000..c5b9634ef41
+index 00000000000..97024d84a4c
 --- /dev/null
 +++ b/src/backend/storage/buffer/heap_convert.c
-@@ -0,0 +1,532 @@
+@@ -0,0 +1,545 @@
 +/*-------------------------------------------------------------------------
 + *
 + * heap_convert.c
@@ -117,6 +117,17 @@ index 00000000000..c5b9634ef41
 +	MarkBufferConverted(buf, true);
 +}
 +
++/* Expand a source 32-bit MultiXactId using the relation's source horizon. */
++static inline MultiXactId
++full_source_multixact(MultiXactId mxid, MultiXactId source_multi_base)
++{
++	if (mxid < source_multi_base)
++		mxid += ((MultiXactId) 1 << 32) - FirstMultiXactId;
++
++	Assert(mxid >= source_multi_base);
++	return mxid;
++}
++
 +/*
 + * Convert xmin and xmax in a tuple.
 + * This also considers special cases: "double xmax" page format and multixact
@@ -124,7 +135,8 @@ index 00000000000..c5b9634ef41
 + */
 +static void
 +convert_heap_tuple_xids(HeapTupleHeader tuple, TransactionId xid_base,
-+						MultiXactId multi_base, bool double_xmax)
++						MultiXactId source_multi_base,
++						MultiXactId page_multi_base, bool double_xmax)
 +{
 +	/* Convert xmin */
 +	if (double_xmax)
@@ -156,14 +168,8 @@ index 00000000000..c5b9634ef41
 +	if ((tuple->t_infomask & HEAP_XMAX_IS_MULTI) &&
 +		!(tuple->t_infomask & HEAP_XMAX_INVALID))
 +	{
-+		MultiXactId mxid = tuple->t_choice.t_heap.t_xmax;
-+
-+		/* Handle mxid wraparound */
-+		if (mxid < multi_base)
-+		{
-+			mxid += ((MultiXactId) 1 << 32) - FirstMultiXactId;
-+			Assert(mxid >= multi_base);
-+		}
++		MultiXactId mxid = full_source_multixact(
++			tuple->t_choice.t_heap.t_xmax, source_multi_base);
 +
 +		if (double_xmax)
 +		{
@@ -173,12 +179,16 @@ index 00000000000..c5b9634ef41
 +		else
 +		{
 +			/*
-+			 * Save converted mxid offset relative to (minmxid - 1), which
-+			 * will be page's mxid base.
++			 * The short field is relative to the destination page's MultiXact
++			 * base.  As with short XIDs, relative values begin at 3; values 1
++			 * and 2 are read as absolute special values.
 +			 */
-+			Assert(mxid - multi_base + FirstMultiXactId <= PG_UINT32_MAX);
++			Assert(mxid >= page_multi_base);
++			Assert(mxid - page_multi_base <= PG_UINT32_MAX);
++			Assert(page_multi_base == InvalidMultiXactId ||
++				   mxid - page_multi_base >= FirstNormalTransactionId);
 +			tuple->t_choice.t_heap.t_xmax =
-+				(uint32) (mxid - multi_base + FirstMultiXactId);
++				(uint32) (mxid - page_multi_base);
 +		}
 +	}
 +	/* Convert xmax */
@@ -239,12 +249,7 @@ index 00000000000..c5b9634ef41
 +
 +			Assert(MultiXactIdIsValid(mxid));
 +
-+			/* Handle mxid wraparound */
-+			if (mxid < multi_base)
-+			{
-+				mxid += ((MultiXactId) 1 << 32) - FirstMultiXactId;
-+				Assert(mxid >= multi_base);
-+			}
++			mxid = full_source_multixact(mxid, multi_base);
 +
 +			*multi_max = Max(*multi_max, mxid);
 +			*multi_min = Min(*multi_min, mxid);
@@ -297,7 +302,7 @@ index 00000000000..c5b9634ef41
 +	if (multi_max == InvalidMultiXactId)
 +		multi_max_fits = true;
 +
-+	if (multi_max - multi_min <= MaxShortTransactionId - FirstMultiXactId)
++	if (multi_max - multi_min <= MaxShortTransactionId - FirstNormalTransactionId)
 +		multi_max_fits = true;
 +
 +	return xid_max_fits && multi_max_fits;
@@ -324,7 +329,8 @@ index 00000000000..c5b9634ef41
 +		*xid_base = InvalidTransactionId;
 +
 +	if (multi_max != InvalidMultiXactId)
-+		*multi_base = multi_min - FirstMultiXactId;
++		*multi_base = multi_min >= FirstNormalTransactionId ?
++			multi_min - FirstNormalTransactionId : InvalidMultiXactId;
 +	else
 +		*multi_base = InvalidMultiXactId;
 +
@@ -370,7 +376,8 @@ index 00000000000..c5b9634ef41
 +						new_hdr;
 +	PGAlignedBlock		zerobuf = {0};
 +	Page				new_page;
-+	MultiXactId			multi_base = rel_extra->relminmxid,
++	MultiXactId			source_multi_base = rel_extra->relminmxid,
++						page_multi_base = InvalidMultiXactId,
 +						multi_min = MaxMultiXactId,
 +						multi_max = InvalidMultiXactId;
 +	TransactionId		xid_base = rel_extra->relfrozenxid,
@@ -397,6 +404,11 @@ index 00000000000..c5b9634ef41
 +		tuple.t_tableOid = 1;	/* doesn't matter in this case */
 +		tuple.t_data = (HeapTupleHeader) PageGetItem(page, lp);
 +		HeapTupleCopyHeaderXids(&tuple);
++		/* A wrapped source MXID must be valid before visibility checks. */
++		if ((tuple.t_data->t_infomask & HEAP_XMAX_IS_MULTI) &&
++			!(tuple.t_data->t_infomask & HEAP_XMAX_INVALID))
++			tuple.t_xmax = full_source_multixact(tuple.t_xmax,
++												 source_multi_base);
 +		tuple.t_len = ItemIdGetLength(lp);
 +		ItemPointerSet(&(tuple.t_self), blkno, ItemIdGetOffset(lp));
 +
@@ -441,7 +453,7 @@ index 00000000000..c5b9634ef41
 +				HeapTupleHeaderStoreXminFrozen(tuple.t_data);
 +			}
 +
-+			compute_xid_min_max(&tuple, multi_base,
++			compute_xid_min_max(&tuple, source_multi_base,
 +								&xid_min, &xid_max,
 +								&multi_min, &multi_max);
 +		}
@@ -472,7 +484,7 @@ index 00000000000..c5b9634ef41
 +		heap_page_set_base(new_page,
 +						   xid_min, xid_max,
 +						   multi_min, multi_max,
-+						   &xid_base, &multi_base,
++						   &xid_base, &page_multi_base,
 +						   toast);
 +
 +		HeapPageSetPruneXid(new_page, new_hdr->pd_prune_xid);
@@ -486,7 +498,7 @@ index 00000000000..c5b9634ef41
 +		if (try_double_xmax)
 +		{
 +			xid_base = InvalidTransactionId;
-+			multi_base = InvalidMultiXactId;
++			page_multi_base = InvalidMultiXactId;
 +		}
 +		else
 +		{
@@ -518,7 +530,8 @@ index 00000000000..c5b9634ef41
 +
 +		tuple = (HeapTupleHeader) (((char *) new_page) + upper);
 +
-+		convert_heap_tuple_xids(tuple, xid_base, multi_base, double_xmax);
++		convert_heap_tuple_xids(tuple, xid_base, source_multi_base,
++								page_multi_base, double_xmax);
 +
 +		lp->lp_off = upper;
 +	}

@@ -1,0 +1,3 @@
+mini0129(segresize.c) was adapted and applied early as a prerequisite of mini0126(pg_upgrade.c).
+Only CLOG conversion remains here; MultiXacts use native PG19 readers/rewriter.
+Skip replaying this mini. See baloo/AGENTS.md for validation and source commits.
