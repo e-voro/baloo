@@ -1,0 +1,20 @@
+diff --git a/src/backend/utils/adt/jsonfuncs.c b/src/backend/utils/adt/jsonfuncs.c
+index 97cc3d60340..8aa97d06b73 100644
+--- a/src/backend/utils/adt/jsonfuncs.c
++++ b/src/backend/utils/adt/jsonfuncs.c
+@@ -3566,6 +3566,7 @@ populate_record(TupleDesc tupdesc,
+ 		tuple.t_len = HeapTupleHeaderGetDatumLength(defaultval);
+ 		ItemPointerSetInvalid(&(tuple.t_self));
+ 		tuple.t_tableOid = InvalidOid;
++		HeapTupleSetZeroXids(&tuple);
+ 		tuple.t_data = defaultval;
+ 
+ 		/* Break down the tuple into fields */
+@@ -4028,6 +4029,7 @@ populate_recordset_record(PopulateRecordsetState *state, JsObject *obj)
+ 	tuple.t_len = HeapTupleHeaderGetDatumLength(tuphead);
+ 	ItemPointerSetInvalid(&(tuple.t_self));
+ 	tuple.t_tableOid = InvalidOid;
++	HeapTupleSetZeroXids(&tuple);
+ 	tuple.t_data = tuphead;
+ 
+ 	tuplestore_puttuple(state->tuple_store, &tuple);

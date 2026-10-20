@@ -1,0 +1,13 @@
+diff --git a/src/backend/utils/adt/enum.c b/src/backend/utils/adt/enum.c
+index 286d4311ed5..0c51cbdb5d0 100644
+--- a/src/backend/utils/adt/enum.c
++++ b/src/backend/utils/adt/enum.c
+@@ -76,7 +76,7 @@ check_safe_enum_use(HeapTuple enumval_tup)
+ 	 * Usually, a row would get hinted as committed when it's read or loaded
+ 	 * into syscache; but just in case not, let's check the xmin directly.
+ 	 */
+-	xmin = HeapTupleHeaderGetXmin(enumval_tup->t_data);
++	xmin = HeapTupleGetXmin(enumval_tup);
+ 	if (!TransactionIdIsInProgress(xmin) &&
+ 		TransactionIdDidCommit(xmin))
+ 		return;

@@ -1,0 +1,13 @@
+diff --git a/src/backend/utils/adt/arrayfuncs.c b/src/backend/utils/adt/arrayfuncs.c
+index 13eed22dd6a..8aaf320c193 100644
+--- a/src/backend/utils/adt/arrayfuncs.c
++++ b/src/backend/utils/adt/arrayfuncs.c
+@@ -3462,7 +3462,7 @@ construct_array_builtin(Datum *elems, int nelems, Oid elmtype)
+ 		case XIDOID:
+ 			elmlen = sizeof(TransactionId);
+ 			elmbyval = true;
+-			elmalign = TYPALIGN_INT;
++			elmalign = TYPALIGN_XID;
+ 			break;
+ 
+ 		default:

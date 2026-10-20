@@ -1,0 +1,12 @@
+diff --git a/src/backend/utils/adt/pgstatfuncs.c b/src/backend/utils/adt/pgstatfuncs.c
+index 0c59df17901..a9d22ea082a 100644
+--- a/src/backend/utils/adt/pgstatfuncs.c
++++ b/src/backend/utils/adt/pgstatfuncs.c
+@@ -15,6 +15,7 @@
+ #include "postgres.h"
+ 
+ #include "access/htup_details.h"
++#include "access/xact.h"
+ #include "access/xlog.h"
+ #include "access/xlogprefetcher.h"
+ #include "catalog/catalog.h"

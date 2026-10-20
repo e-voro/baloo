@@ -117,7 +117,7 @@ Discussion: https://postgr.es/m/CAJ7c6TPDOYBYrnCAeyndkBktO0WG2xSdYduTF0nxq%2Bvfk
  src/backend/storage/lmgr/predicate.c | 57 +-
  src/backend/storage/lmgr/proc.c | 15 +-
  src/backend/storage/page/bufpage.c | 261 +-
- src/backend/utils/adt/arrayfuncs.c | 6 +-
+ src/backend/utils/adt/arrayfuncs.c | 2 +-
  src/backend/utils/adt/enum.c | 2 +-
  src/backend/utils/adt/jsonfuncs.c | 2 +
  src/backend/utils/adt/lockfuncs.c | 18 +-
@@ -239,7 +239,7 @@ Discussion: https://postgr.es/m/CAJ7c6TPDOYBYrnCAeyndkBktO0WG2xSdYduTF0nxq%2Bvfk
  src/test/xid-64/t/006_zeropage.pl | 33 +
  src/test/xid-64/t/007_first_multi.pl | 83 +
  src/tools/pgindent/typedefs.list | 4 +-
- 217 files changed, 7027 insertions(+), 2128 deletions(-)
+ 217 files changed, 7023 insertions(+), 2128 deletions(-)
 
 diff --git a/contrib/amcheck/verify_heapam.c b/contrib/amcheck/verify_heapam.c
 index e5ea68b801..14ce47cf80 100644
@@ -10747,25 +10747,20 @@ index 1fdfda59edd..94865985b45 100644
  		phdr->pd_upper = pd_special;
  }
 diff --git a/src/backend/utils/adt/arrayfuncs.c b/src/backend/utils/adt/arrayfuncs.c
-index a464349ee3..e95be35e63 100644
+index 13eed22dd6a..8aaf320c193 100644
 --- a/src/backend/utils/adt/arrayfuncs.c
 +++ b/src/backend/utils/adt/arrayfuncs.c
-@@ -3456,8 +3456,12 @@ construct_array_builtin(Datum *elems, int nelems, Oid elmtype)
- 
+@@ -3462,7 +3462,7 @@ construct_array_builtin(Datum *elems, int nelems, Oid elmtype)
  		case XIDOID:
  			elmlen = sizeof(TransactionId);
-+#if SIZEOF_DATUM == 8
  			elmbyval = true;
 -			elmalign = TYPALIGN_INT;
-+#else
-+			elmbyval = false;
-+#endif
 +			elmalign = TYPALIGN_XID;
  			break;
  
  		default:
 diff --git a/src/backend/utils/adt/enum.c b/src/backend/utils/adt/enum.c
-index fcc6981632..cc59f8cfaa 100644
+index 286d4311ed5..0c51cbdb5d0 100644
 --- a/src/backend/utils/adt/enum.c
 +++ b/src/backend/utils/adt/enum.c
 @@ -76,7 +76,7 @@ check_safe_enum_use(HeapTuple enumval_tup)
@@ -10778,7 +10773,7 @@ index fcc6981632..cc59f8cfaa 100644
  		TransactionIdDidCommit(xmin))
  		return;
 diff --git a/src/backend/utils/adt/jsonfuncs.c b/src/backend/utils/adt/jsonfuncs.c
-index 8898f0f90a..51ba819680 100644
+index 97cc3d60340..8aa97d06b73 100644
 --- a/src/backend/utils/adt/jsonfuncs.c
 +++ b/src/backend/utils/adt/jsonfuncs.c
 @@ -3566,6 +3566,7 @@ populate_record(TupleDesc tupdesc,
@@ -10855,7 +10850,7 @@ index c3107f0d5a9..79bf2a84315 100644
  				nulls[2] = true;
  				nulls[3] = true;
 diff --git a/src/backend/utils/adt/pgstatfuncs.c b/src/backend/utils/adt/pgstatfuncs.c
-index 3d98d064a9..30a5215294 100644
+index 0c59df17901..a9d22ea082a 100644
 --- a/src/backend/utils/adt/pgstatfuncs.c
 +++ b/src/backend/utils/adt/pgstatfuncs.c
 @@ -15,6 +15,7 @@
@@ -10867,7 +10862,7 @@ index 3d98d064a9..30a5215294 100644
  #include "access/xlogprefetcher.h"
  #include "catalog/catalog.h"
 diff --git a/src/backend/utils/adt/rowtypes.c b/src/backend/utils/adt/rowtypes.c
-index 9e5449f17d..f0486886de 100644
+index d6126d431d9..ee4c19bb0d2 100644
 --- a/src/backend/utils/adt/rowtypes.c
 +++ b/src/backend/utils/adt/rowtypes.c
 @@ -353,6 +353,7 @@ record_out(PG_FUNCTION_ARGS)
