@@ -1,0 +1,129 @@
+diff --git a/src/backend/storage/lmgr/predicate.c b/src/backend/storage/lmgr/predicate.c
+index 25afb38b426..aaff473e179 100644
+--- a/src/backend/storage/lmgr/predicate.c
++++ b/src/backend/storage/lmgr/predicate.c
+@@ -340,9 +340,9 @@ static SlruDesc SerialSlruDesc;
+ 
+ #define SerialValue(slotno, xid) (*((SerCommitSeqNo *) \
+ 	(SerialSlruCtl->shared->page_buffer[slotno] + \
+-	((((uint32) (xid)) % SERIAL_ENTRIESPERPAGE) * SERIAL_ENTRYSIZE))))
++	((((uint64) (xid)) % SERIAL_ENTRIESPERPAGE) * SERIAL_ENTRYSIZE))))
+ 
+-#define SerialPage(xid)	(((uint32) (xid)) / SERIAL_ENTRIESPERPAGE)
++#define SerialPage(xid)		((int64) (((uint64) (xid)) / SERIAL_ENTRIESPERPAGE))
+ 
+ typedef struct SerialControlData
+ {
+@@ -761,7 +761,8 @@ serial_errdetail_for_io_error(const void *opaque_data)
+ {
+ 	TransactionId xid = *(const TransactionId *) opaque_data;
+ 
+-	return errdetail("Could not access serializable CSN of transaction %u.", xid);
++	return errdetail("Could not access serializable CSN of transaction %llu.",
++					 (unsigned long long) xid);
+ }
+ 
+ #ifdef USE_ASSERT_CHECKING
+@@ -777,22 +778,21 @@ SerialPagePrecedesLogicallyUnitTests(void)
+ 	TransactionId newestXact,
+ 				oldestXact;
+ 
+-	/* GetNewTransactionId() has assigned the last XID it can safely use. */
++	/* Exercise the half-XID-space boundary used by TransactionIdPrecedes. */
+ 	newestPage = 2 * SLRU_PAGES_PER_SEGMENT - 1;	/* nothing special */
+ 	newestXact = newestPage * per_page + offset;
+ 	Assert(newestXact / per_page == newestPage);
+ 	oldestXact = newestXact + 1;
+-	oldestXact -= 1U << 31;
++	oldestXact -= UINT64CONST(1) << 63;
+ 	oldestPage = oldestXact / per_page;
+ 
+ 	/*
+ 	 * In this scenario, the SLRU headPage pertains to the last ~1000 XIDs
+-	 * assigned.  oldestXact finishes, ~2B XIDs having elapsed since it
+-	 * started.  Further transactions cause us to summarize oldestXact to
++	 * assigned.  oldestXact finishes after nearly half the 64-bit XID space
++	 * has elapsed.  Further transactions cause us to summarize oldestXact to
+ 	 * tailPage.  Function must return false so SerialAdd() doesn't zero
+ 	 * tailPage (which may contain entries for other old, recently-finished
+-	 * XIDs) and half the SLRU.  Reaching this requires burning ~2B XIDs in
+-	 * single-user mode, a negligible possibility.
++	 * XIDs) and half the SLRU.  This is a theoretical boundary case.
+ 	 */
+ 	headPage = newestPage;
+ 	targetPage = oldestPage;
+@@ -807,10 +807,9 @@ SerialPagePrecedesLogicallyUnitTests(void)
+ 	 *
+ 	 * Today's implementation mishandles this case, but it doesn't matter
+ 	 * enough to fix.  Verify that the defect affects just one page by
+-	 * asserting correct treatment of its prior page.  Reaching this case
+-	 * requires burning ~2B XIDs in single-user mode, a negligible
+-	 * possibility.  Moreover, if it does happen, the consequence would be
+-	 * mild, namely a new transaction failing in SimpleLruReadPage().
++	 * asserting correct treatment of its prior page.  If this theoretical
++	 * boundary case occurred, the consequence would be mild, namely a new
++	 * transaction failing in SimpleLruReadPage().
+ 	 */
+ 	headPage = oldestPage;
+ 	targetPage = newestPage;
+@@ -1058,31 +1057,6 @@ CheckPointPredicate(void)
+ 		/*----------
+ 		 * The SLRU is no longer needed. Truncate to head before we set head
+ 		 * invalid.
+-		 *
+-		 * XXX: It's possible that the SLRU is not needed again until XID
+-		 * wrap-around has happened, so that the segment containing headPage
+-		 * that we leave behind will appear to be new again. In that case it
+-		 * won't be removed until XID horizon advances enough to make it
+-		 * current again.
+-		 *
+-		 * XXX: This should happen in vac_truncate_clog(), not in checkpoints.
+-		 * Consider this scenario, starting from a system with no in-progress
+-		 * transactions and VACUUM FREEZE having maximized oldestXact:
+-		 * - Start a SERIALIZABLE transaction.
+-		 * - Start, finish, and summarize a SERIALIZABLE transaction, creating
+-		 *   one SLRU page.
+-		 * - Consume XIDs to reach xidStopLimit.
+-		 * - Finish all transactions.  Due to the long-running SERIALIZABLE
+-		 *   transaction, earlier checkpoints did not touch headPage.  The
+-		 *   next checkpoint will change it, but that checkpoint happens after
+-		 *   the end of the scenario.
+-		 * - VACUUM to advance XID limits.
+-		 * - Consume ~2M XIDs, crossing the former xidWrapLimit.
+-		 * - Start, finish, and summarize a SERIALIZABLE transaction.
+-		 *   SerialAdd() declines to create the targetPage, because headPage
+-		 *   is not regarded as in the past relative to that targetPage.  The
+-		 *   transaction instigating the summarize fails in
+-		 *   SimpleLruReadPage().
+ 		 */
+ 		truncateCutoffPage = serialControl->headPage;
+ 		serialControl->headPage = -1;
+@@ -3358,9 +3332,6 @@ ReleasePredicateLocks(bool isCommit, bool isReadOnlySafe)
+ 	topLevelIsDeclaredReadOnly = SxactIsReadOnly(MySerializableXact);
+ 
+ 	/*
+-	 * We don't hold XidGenLock lock here, assuming that TransactionId is
+-	 * atomic!
+-	 *
+ 	 * If this value is changing, we don't care that much whether we get the
+ 	 * old or new value -- it is just used to determine how far
+ 	 * SxactGlobalXmin must advance before this transaction can be fully
+@@ -3368,7 +3339,9 @@ ReleasePredicateLocks(bool isCommit, bool isReadOnlySafe)
+ 	 * transaction to complete before freeing some RAM; correctness of visible
+ 	 * behavior is not affected.
+ 	 */
++	LWLockAcquire(XidGenLock, LW_SHARED);
+ 	MySerializableXact->finishedBefore = XidFromFullTransactionId(TransamVariables->nextXid);
++	LWLockRelease(XidGenLock);
+ 
+ 	/*
+ 	 * If it's not a commit it's either a rollback or a read-only transaction
+@@ -3913,7 +3886,7 @@ XidIsConcurrent(TransactionId xid)
+ 	if (TransactionIdFollowsOrEquals(xid, snap->xmax))
+ 		return true;
+ 
+-	return pg_lfind32(xid, snap->xip, snap->xcnt);
++	return pg_lfind64(xid, snap->xip, snap->xcnt);
+ }
+ 
+ bool

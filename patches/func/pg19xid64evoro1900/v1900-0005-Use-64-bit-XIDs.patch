@@ -114,8 +114,8 @@ Discussion: https://postgr.es/m/CAJ7c6TPDOYBYrnCAeyndkBktO0WG2xSdYduTF0nxq%2Bvfk
  src/backend/storage/ipc/standby.c | 17 +-
  src/backend/storage/lmgr/lmgr.c | 31 +-
  src/backend/storage/lmgr/lock.c | 40 +-
- src/backend/storage/lmgr/predicate.c | 36 +-
- src/backend/storage/lmgr/proc.c | 12 +-
+ src/backend/storage/lmgr/predicate.c | 57 +-
+ src/backend/storage/lmgr/proc.c | 15 +-
  src/backend/storage/page/bufpage.c | 253 +-
  src/backend/utils/adt/arrayfuncs.c | 6 +-
  src/backend/utils/adt/enum.c | 2 +-
@@ -239,7 +239,7 @@ Discussion: https://postgr.es/m/CAJ7c6TPDOYBYrnCAeyndkBktO0WG2xSdYduTF0nxq%2Bvfk
  src/test/xid-64/t/006_zeropage.pl | 33 +
  src/test/xid-64/t/007_first_multi.pl | 83 +
  src/tools/pgindent/typedefs.list | 4 +-
- 217 files changed, 6961 insertions(+), 2103 deletions(-)
+ 217 files changed, 6974 insertions(+), 2114 deletions(-)
 
 diff --git a/contrib/amcheck/verify_heapam.c b/contrib/amcheck/verify_heapam.c
 index e5ea68b801..14ce47cf80 100644
@@ -10171,10 +10171,10 @@ index 8d246ed5a4e..ac0b1f702fe 100644
  	/* Done with proc->fpLockBits */
  	LWLockRelease(&proc->fpInfoLock);
 diff --git a/src/backend/storage/lmgr/predicate.c b/src/backend/storage/lmgr/predicate.c
-index c97ff2d341..34b5cb9888 100644
+index 25afb38b426..aaff473e179 100644
 --- a/src/backend/storage/lmgr/predicate.c
 +++ b/src/backend/storage/lmgr/predicate.c
-@@ -338,9 +338,9 @@ static SlruCtlData SerialSlruCtlData;
+@@ -340,9 +340,9 @@ static SlruDesc SerialSlruDesc;
  
  #define SerialValue(slotno, xid) (*((SerCommitSeqNo *) \
  	(SerialSlruCtl->shared->page_buffer[slotno] + \
@@ -10186,7 +10186,59 @@ index c97ff2d341..34b5cb9888 100644
  
  typedef struct SerialControlData
  {
-@@ -1077,31 +1077,6 @@ CheckPointPredicate(void)
+@@ -761,7 +761,8 @@ serial_errdetail_for_io_error(const void *opaque_data)
+ {
+ 	TransactionId xid = *(const TransactionId *) opaque_data;
+ 
+-	return errdetail("Could not access serializable CSN of transaction %u.", xid);
++	return errdetail("Could not access serializable CSN of transaction %llu.",
++					 (unsigned long long) xid);
+ }
+ 
+ #ifdef USE_ASSERT_CHECKING
+@@ -777,22 +778,21 @@ SerialPagePrecedesLogicallyUnitTests(void)
+ 	TransactionId newestXact,
+ 				oldestXact;
+ 
+-	/* GetNewTransactionId() has assigned the last XID it can safely use. */
++	/* Exercise the half-XID-space boundary used by TransactionIdPrecedes. */
+ 	newestPage = 2 * SLRU_PAGES_PER_SEGMENT - 1;	/* nothing special */
+ 	newestXact = newestPage * per_page + offset;
+ 	Assert(newestXact / per_page == newestPage);
+ 	oldestXact = newestXact + 1;
+-	oldestXact -= 1U << 31;
++	oldestXact -= UINT64CONST(1) << 63;
+ 	oldestPage = oldestXact / per_page;
+ 
+ 	/*
+ 	 * In this scenario, the SLRU headPage pertains to the last ~1000 XIDs
+-	 * assigned.  oldestXact finishes, ~2B XIDs having elapsed since it
+-	 * started.  Further transactions cause us to summarize oldestXact to
++	 * assigned.  oldestXact finishes after nearly half the 64-bit XID space
++	 * has elapsed.  Further transactions cause us to summarize oldestXact to
+ 	 * tailPage.  Function must return false so SerialAdd() doesn't zero
+ 	 * tailPage (which may contain entries for other old, recently-finished
+-	 * XIDs) and half the SLRU.  Reaching this requires burning ~2B XIDs in
+-	 * single-user mode, a negligible possibility.
++	 * XIDs) and half the SLRU.  This is a theoretical boundary case.
+ 	 */
+ 	headPage = newestPage;
+ 	targetPage = oldestPage;
+@@ -807,10 +807,9 @@ SerialPagePrecedesLogicallyUnitTests(void)
+ 	 *
+ 	 * Today's implementation mishandles this case, but it doesn't matter
+ 	 * enough to fix.  Verify that the defect affects just one page by
+-	 * asserting correct treatment of its prior page.  Reaching this case
+-	 * requires burning ~2B XIDs in single-user mode, a negligible
+-	 * possibility.  Moreover, if it does happen, the consequence would be
+-	 * mild, namely a new transaction failing in SimpleLruReadPage().
++	 * asserting correct treatment of its prior page.  If this theoretical
++	 * boundary case occurred, the consequence would be mild, namely a new
++	 * transaction failing in SimpleLruReadPage().
+ 	 */
+ 	headPage = oldestPage;
+ 	targetPage = newestPage;
+@@ -1058,31 +1057,6 @@ CheckPointPredicate(void)
  		/*----------
  		 * The SLRU is no longer needed. Truncate to head before we set head
  		 * invalid.
@@ -10218,7 +10270,7 @@ index c97ff2d341..34b5cb9888 100644
  		 */
  		truncateCutoffPage = serialControl->headPage;
  		serialControl->headPage = -1;
-@@ -3429,9 +3404,6 @@ ReleasePredicateLocks(bool isCommit, bool isReadOnlySafe)
+@@ -3358,9 +3332,6 @@ ReleasePredicateLocks(bool isCommit, bool isReadOnlySafe)
  	topLevelIsDeclaredReadOnly = SxactIsReadOnly(MySerializableXact);
  
  	/*
@@ -10228,7 +10280,7 @@ index c97ff2d341..34b5cb9888 100644
  	 * If this value is changing, we don't care that much whether we get the
  	 * old or new value -- it is just used to determine how far
  	 * SxactGlobalXmin must advance before this transaction can be fully
-@@ -3439,7 +3411,9 @@ ReleasePredicateLocks(bool isCommit, bool isReadOnlySafe)
+@@ -3368,7 +3339,9 @@ ReleasePredicateLocks(bool isCommit, bool isReadOnlySafe)
  	 * transaction to complete before freeing some RAM; correctness of visible
  	 * behavior is not affected.
  	 */
@@ -10238,7 +10290,7 @@ index c97ff2d341..34b5cb9888 100644
  
  	/*
  	 * If it's not a commit it's either a rollback or a read-only transaction
-@@ -3984,7 +3958,7 @@ XidIsConcurrent(TransactionId xid)
+@@ -3913,7 +3886,7 @@ XidIsConcurrent(TransactionId xid)
  	if (TransactionIdFollowsOrEquals(xid, snap->xmax))
  		return true;
  
@@ -10248,46 +10300,49 @@ index c97ff2d341..34b5cb9888 100644
  
  bool
 diff --git a/src/backend/storage/lmgr/proc.c b/src/backend/storage/lmgr/proc.c
-index 1504fafe6d..318a5a8e3e 100644
+index 7d01c981a1f..84401eafc5c 100644
 --- a/src/backend/storage/lmgr/proc.c
 +++ b/src/backend/storage/lmgr/proc.c
-@@ -257,7 +257,7 @@ InitProcGlobal(void)
+@@ -264,7 +264,7 @@ ProcGlobalShmemInit(void *arg)
  	 * XXX: It might make sense to increase padding for these arrays, given
  	 * how hotly they are accessed.
  	 */
 -	ProcGlobal->xids = (TransactionId *) ptr;
 +	ProcGlobal->xids = (pg_atomic_uint64 *) ptr;
- 	ptr = (char *) ptr + (TotalProcs * sizeof(*ProcGlobal->xids));
+ 	ptr = ptr + (TotalProcs * sizeof(*ProcGlobal->xids));
  
  	ProcGlobal->subxidStates = (XidCacheStatus *) ptr;
-@@ -297,6 +297,8 @@ InitProcGlobal(void)
+@@ -300,6 +300,11 @@ ProcGlobalShmemInit(void *arg)
  
  		/* Common initialization for all PGPROCs, regardless of type. */
  
-+		pg_atomic_init_u64(&ProcGlobal->xids[i], 0);
++		/* Include the dummy PGPROCs used by prepared transactions. */
++		pg_atomic_init_u64(&proc->xid, InvalidTransactionId);
++		pg_atomic_init_u64(&proc->xmin, InvalidTransactionId);
++		pg_atomic_init_u64(&ProcGlobal->xids[i], InvalidTransactionId);
 +
  		/*
  		 * Set the fast-path lock arrays, and move the pointer. We interleave
  		 * the two arrays, to (hopefully) get some locality for each backend.
-@@ -477,8 +479,8 @@ InitProcess(void)
+@@ -474,8 +479,8 @@ InitProcess(void)
  	MyProc->waitStatus = PROC_WAIT_STATUS_OK;
  	MyProc->fpVXIDLock = false;
  	MyProc->fpLocalTransactionId = InvalidLocalTransactionId;
 -	MyProc->xid = InvalidTransactionId;
 -	MyProc->xmin = InvalidTransactionId;
-+	pg_atomic_init_u64(&MyProc->xid, InvalidTransactionId);
-+	pg_atomic_init_u64(&MyProc->xmin, InvalidTransactionId);
++	pg_atomic_write_u64(&MyProc->xid, InvalidTransactionId);
++	pg_atomic_write_u64(&MyProc->xmin, InvalidTransactionId);
  	MyProc->pid = MyProcPid;
  	MyProc->vxid.procNumber = MyProcNumber;
  	MyProc->vxid.lxid = InvalidLocalTransactionId;
-@@ -678,8 +680,8 @@ InitAuxiliaryProcess(void)
+@@ -676,8 +681,8 @@ InitAuxiliaryProcess(void)
  	MyProc->waitStatus = PROC_WAIT_STATUS_OK;
  	MyProc->fpVXIDLock = false;
  	MyProc->fpLocalTransactionId = InvalidLocalTransactionId;
 -	MyProc->xid = InvalidTransactionId;
 -	MyProc->xmin = InvalidTransactionId;
-+	pg_atomic_init_u64(&MyProc->xid, InvalidTransactionId);
-+	pg_atomic_init_u64(&MyProc->xmin, InvalidTransactionId);
++	pg_atomic_write_u64(&MyProc->xid, InvalidTransactionId);
++	pg_atomic_write_u64(&MyProc->xmin, InvalidTransactionId);
  	MyProc->vxid.procNumber = INVALID_PROC_NUMBER;
  	MyProc->vxid.lxid = InvalidLocalTransactionId;
  	MyProc->databaseId = InvalidOid;
