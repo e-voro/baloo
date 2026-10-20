@@ -211,7 +211,7 @@ pages or a separate tuple-XID payload to prune WAL.
   zzz0002-Logical-replication-support.patch does not fix lock keys. Its separate
   BEGIN PREPARE length heuristic remains unapplied and needs protocol review.
 
-## IMPORTANT: pause before mini0096(bufpage.c) (2026-10-20)
+## IMPORTANT: completed page-conversion fixes and freeze-plan ordering (2026-10-20)
 
 - Applied mini0094(predicate.c), source `99282376e6c`: preserve PG19 SLRU
   callbacks, widen the new error diagnostic and the existing half-range test.
@@ -221,22 +221,45 @@ pages or a separate tuple-XID payload to prune WAL.
 - Saved minis reverse-apply; their aggregate sections replay on `8ca324058af`
   and match source. Predicate comparator assertions pass with the forthcoming
   xid64 comparator at six block sizes under UBSan. Full build remains deferred.
-- **mini0096(bufpage.c) is unapplied. Stop under the user's new-logic rule.**
-  Its double-xmax conversion copies raw pd_prune_xid while adding a new base.
-  mini0168(bufpage.h) then decodes that hint relative to the base: raw 100
-  becomes 1097 with base 997. The hint setter does nothing before conversion,
-  and the AIO converter can preserve a nonzero legacy hint. Clear or correctly
-  re-encode it; do not let unlogged hints determine tuple bases during redo.
-- **Freeze results also need to fit the chosen bases.** Primary pruneheap.c
-  and heapam_xlog.c redo compact before applying freeze plans. mini0096(bufpage.c)
-  scans current xmax/MultiXact values only. With only MultiXact xmax values it chooses
-  ordinary XID base 0, but a freeze plan can replace a MultiXact with updater
-  XID 4294967396. The mini0136(heapam.h) / mini0140(htup_details.h) store then
-  reaches mini0168(bufpage.h)'s PANIC range guard (maximum short XID 2147483647).
-  Newly allocated replacement MultiXacts require the same range check.
-- This is source-trace evidence, not a backend reproduction. PG18 already
-  compacted before freezing; the ordering issue is inherited. Review a solution
-  that coordinates conversion with planned xmax values on both primary and
-  redo, including the case where their range cannot fit a short-XID page.
-  Validate high-XID MultiXact collapse/replacement and prune hints with WAL
-  consistency checking after the full series is buildable. No fix chosen yet.
+- User authorized the fixes after reviewing the findings. Source `d85584a3eec`
+  applies mini0096(bufpage.c) and mini0168(bufpage.h) early, and updates
+  mini0028(heapam.c), mini0031(heapam_xlog.c), and mini0034(pruneheap.c).
+  Saved patches/tests: Baloo `ae6b71a`, parent `0999d101da0`.
+  **Skip mini0168(bufpage.h) later. Next unapplied: mini0097(arrayfuncs.c).**
+- **Pruning hint:** double-xmax pages store pd_prune_xid directly; normal xid64
+  pages interpret it relative to the page base. Copying raw 1000 with new base
+  997 incorrectly yielded 1997. Conversion now reads the full hint and
+  re-encodes it after installing the base; ordinary base shifts do likewise.
+  If the hint cannot fit, FrozenTransactionId requests conservative
+  reconsideration of pruning. This changes only the hint, not tuple freeze
+  flags. Empty-page conversion clears the hint. Tuple bases remain independent
+  of unlogged hints, which can differ between primary and standby.
+- **Freeze-plan execution order:** previously prune/compact, then execute
+  selected freeze plans; now execute selected freeze plans, then prune/compact.
+  Both primary pruneheap.c and heapam_xlog.c redo use this order. Conversion
+  therefore chooses bases from the resulting xmax values, including an updater
+  XID or replacement MultiXact installed by a plan. If the resulting ranges do
+  not fit, compaction retains the double-xmax format. This fixes the conversion
+  case where base 0 was chosen from existing MultiXacts before a plan installed
+  updater XID 4294967396, exceeding the short-XID limit and reaching PANIC.
+- **Surviving pruning does not make a tuple eligible for freezing.**
+  heap_prepare_freeze_tuple() still determines permitted changes from existing
+  visibility/cutoff rules. Only prepared entries in prstate.frozen are executed,
+  using prstate.nfrozen, and only when do_freeze is true. Their line pointers
+  survive pruning. The change does not force freezing of every surviving tuple
+  or make a page all-frozen; existing VM eligibility checks still apply.
+- **Double-xmax nuance:** tuple xmin is already frozen, but xmax may still hold
+  an XID or MultiXact needed for visibility. Such a tuple is not necessarily
+  totally frozen. A permitted freeze plan can simplify its MultiXact while
+  retaining the updater XID; executing a plan need not freeze every tuple field.
+- Validation: dev/tests/xid64_page_conversion/check.py exercises actual page
+  helpers and extracted conversion/freeze/base-shift code with fixed-width
+  fixtures. Hint boundaries, heap/TOAST conversion, differing hints, high-XID
+  freeze results and base shifts pass at six block sizes under UBSan. Five
+  changed aggregate sections replay on `8ca324058af` and match source; adapted
+  mini sections reverse-check. The conversion scratch page is aligned and
+  zero-initialized. Full backend/WAL consistency testing remains pending until
+  the complete series builds; these tests do not establish runtime recovery.
+- Backport the pruning-hint fix to Tantor 18 as requested. Keep the separate
+  audit of replacement xmax ranges on already-normal pages in codex_todo.txt;
+  changing conversion order does not establish that those paths are correct.
