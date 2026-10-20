@@ -390,4 +390,60 @@ pages or a separate tuple-XID payload to prune WAL.
   same-base no-ops. Perl syntax check passes. Mini reverse check and aggregate
   replay on `8ca324058af` match source exactly. Full pg_amcheck TAP execution
   remains pending until the full series builds; this is helper validation,
-  not a live corruption-diagnostic run. Next: mini0116(pg_controldata.c).
+  not a live corruption-diagnostic run. Subsequent checkpoint is below.
+
+## Frontend checkpoint through mini0121(Makefile) (2026-10-20)
+
+- Applied mini0116(pg_controldata.c), `6ac4b41fb0b`: rename the full-XID
+  accessor; retain PG19 logical-decoding/checksum fields and native uint64
+  MultiXactOffset output. mini0117(pg_dump.c), `3b8a0af33bd`, and
+  mini0118(pg_dump.h), `23fab87ce02`: keep database/table/TOAST/large-object
+  freeze horizons full-width from SQL text through storage and dump output.
+  OIDs remain uint32. Reviewed PG19 statistics/extended-statistics export,
+  property graphs, publication exclusions, subscription server/timeout,
+  large-object metadata transfer and sequence changes; no additional XID
+  reads or horizon narrowing found in those additions.
+- mini0119(pg_resetwal.c), `fe2ba8baa9d`: adapt to PG19's given/value option
+  state and existing strict uint64 parser. Remove the separate epoch option,
+  state, output and help; -x sets the complete XID. Widen XID/MultiXact-ID
+  inputs, including both commit-timestamp components. Keep strict uint32 OID
+  parsing, native uint64 nonzero offsets and explicit zero commit-ts resets.
+  Preserve PG19 reset/default behavior, including nextMultiOffset=1.
+- mini0120(001_basic.pl), `0991bc61e70`: retain PG19 invalid-input coverage;
+  move XID overflow to UINT64_MAX+1, test a 33-bit XID, the OID boundary and
+  negative newest commit-ts XID; remove epoch cases and use the forthcoming
+  72-byte/eight-member group layout. Offset entries were already eight bytes.
+  mini0121(Makefile), `77c7610ca0a`: add forthcoming segresize.o; retain PG19
+  native multixact readers/rewriter, slru_io and extension-test dependencies.
+- Saved six minis and probe in Baloo `03e7c80`, parent `65365793f36`.
+  All six reverse-check; aggregate sections replay on `8ca324058af` and match
+  source exactly. `dev/tests/xid64_resetwal/check.py` compiles actual extracted
+  option handlers, strict parsers and control assignments with fixed-width
+  scaffolding: 61 cases pass under UBSan. Perl syntax passes. No real control
+  file is touched by this probe; utility/TAP/full-build tests remain pending
+  until remaining 0005 headers/definitions, including segresize.c, are applied.
+
+## IMPORTANT: paused before mini0122(check.c)
+
+- New upgrade logic topic under the user's stop rule; mini0122(check.c)
+  remains unapplied. The original patch's post-upgrade hook calls
+  invalidate_spgist_indexes/invalidate_gin_indexes/invalidate_external_indexes
+  with **(&old_cluster, true)**. The old cluster is normally stopped here;
+  the hook starts the new cluster. The helper in mini0131(version.c) writes
+  REINDEX scripts and updates pg_index.indisvalid only when check_mode=false.
+  Current calls can target a stopped server and never perform that work.
+- Proposed correction: keep the pre-upgrade (&old_cluster, true) checks;
+  change only the post-upgrade calls to **(&new_cluster, false)**. This
+  follows the existing hash-index upgrade pattern. Validate target selection,
+  emitted REINDEX instructions and index invalidation before accepting it.
+- The new is_xid_wraparound() query also extracts low bits with
+  **tx % 4294967295**, which is not low-32-bit extraction. For full XID
+  4294967396 it gives 101 instead of 100; for 12884901913 it gives 28 instead
+  of 25. Proposed modulus is **4294967296**. Arithmetic and source flow are
+  checked; no live pg_upgrade reproduction has been run.
+- Trace the wraparound result through mini0126(pg_upgrade.c)'s
+  set_frozenxids choice before finalizing the correction. Also review the
+  forthcoming placeholder XID_FORMATCHANGE_CAT_VER=999999999 and how old
+  32-bit versus already-xid64 clusters are recognized. Do not claim those
+  upgrade cases supported from context application alone. Resolve these
+  findings with the user before applying mini0122(check.c).
