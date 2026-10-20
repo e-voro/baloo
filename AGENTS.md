@@ -55,6 +55,10 @@ pages or a separate tuple-XID payload to prune WAL.
   behavior and distinguish context repairs from functional adaptations.
   Escalate unresolved design decisions rather than applying an unsafe workaround.
 
+- Give brief English corrections before starting the technical work, so the
+  user can read them during execution. Italicize corrected whole sentences;
+  bold changed words, or only the corrected letters when fixing a typo.
+
 - Log in REAL TIME to baloo/codex.log, not at the end of the operation. Stream
   command output with tee -a and append decisions/findings as they occur.
 - Use set -o pipefail so tee does not conceal failures. Add set -e to dependent
@@ -500,3 +504,53 @@ XID width alone does not identify a source MultiXact layout:
 - After approval, test all three formats, wrapped MXIDs, nonzero epochs,
   offsets above UINT32_MAX, SLRU boundaries/names, counters and catalog
   horizons; then live cross-version upgrades after the series builds.
+
+## Prepared solution: distinguish source MultiXact offset width (2026-10-20)
+
+- Added `cluster_has_64bit_multixact_offsets()` in version.c, declared in
+  pg_upgrade.h, source `85d42c458b0`. Recognized xid64 sources return true: the supplied PG18
+  patch widens MultiXactOffset too. Otherwise use PG19's existing catalog
+  boundary **MULTIXACTOFFSET_FORMATCHANGE_CAT_VER = 202512091**, introduced
+  by upstream `bd8d9c9bdfa`. Thus pre-v19 xid64 and vanilla PG19 both have
+  eight-byte offsets, while their member XID widths differ. A small current
+  nextOffset value or a major-version comparison cannot identify the layout.
+- Keep two decisions in mini0126(pg_upgrade.c):
+  `old_xid64 = cluster_is_xid64(&old_cluster)` and
+  `old_offsets64 = cluster_has_64bit_multixact_offsets(&old_cluster)`.
+  Already-xid64 sources may copy after verifying the supported member layout
+  and normalizing legacy segment names. Every xid32 source requires member
+  conversion; old_offsets64 selects its offset reader. Retain the special
+  pre-9.3 initialization path, which discards locking-only legacy multis.
+- Recommended implementation: extend the native PG19 reader/rewriter to
+  accept the source offset format, then use its existing target-layout writer.
+  This retains PG19's invalid-entry handling and selection of the updater
+  (or one locker), rather than replacing those semantics with the original
+  segresize.c bulk converter. Native writer already uses target member-group
+  definitions and writes the final next-MultiXact offset entry.
+- Source reader requirements:
+  - Use explicit uint32 for source MXIDs/member XIDs and four flag bytes per
+    four source members (**20-byte groups**). The current v18 reader uses
+    sizeof(TransactionId) and TransactionId pointers; those become wrong
+    when the target typedef widens. Target writer uses eight-byte XIDs and
+    eight flag bytes per eight members (**72-byte groups**).
+  - Store decoded offsets in uint64; decode four-byte or eight-byte entries
+    according to old_offsets64. Select the corresponding entries-per-page.
+    Use short source names for the legacy offset layout and native PG19
+    **15-digit** names for its 64-bit offset layout. Supported older xid64
+    sources may need **12-to-15-digit** copy/rename handling from supplied0006.
+  - Preserve legacy uint32 offset wrap/zero-slot rules only for four-byte
+    sources. For eight-byte sources, offsets are monotonic; reject reversed
+    or oversized member ranges before narrowing their length. MXID wrap is
+    independent: advance raw source uint32 MXIDs and map them consistently
+    to full destination IDs; do not rely on the widened target typedef to wrap.
+  - Keep existing zero/invalid-entry checks and multiple-updater rejection.
+    Match converted control counters to the output and preserve restored
+    horizons using supplied0012. Relminmxid/page-conversion mapping must agree
+    with the SLRU ID mapping, including a wrapped source range.
+- Preparation scope: the discriminator is implemented; reader/writer dispatch
+  and mini0126(pg_upgrade.c) remain unapplied. No upgrade compatibility is
+  claimed until integration and cross-version tests pass.
+- Validation: the existing actual-function/UBSan probe now adds 12 offset-format
+  cases: PG15–18 vanilla/xid64, PG19 before/at catalog boundary, beta3 vanilla
+  and xid64. The earlier 11 index scenarios and 3 rejection cases still pass.
+  These checks validate classification, not SLRU conversion or live upgrades.
