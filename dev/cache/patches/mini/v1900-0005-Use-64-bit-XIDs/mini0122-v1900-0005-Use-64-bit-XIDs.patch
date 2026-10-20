@@ -1,0 +1,119 @@
+diff --git a/src/bin/pg_upgrade/check.c b/src/bin/pg_upgrade/check.c
+index e298e5658da..c3b1516e9c0 100644
+--- a/src/bin/pg_upgrade/check.c
++++ b/src/bin/pg_upgrade/check.c
+@@ -37,6 +37,7 @@ static void check_new_cluster_subscription_configuration(void);
+ static void check_old_cluster_for_valid_slots(void);
+ static void check_old_cluster_subscription_state(void);
+ static void check_old_cluster_global_names(ClusterInfo *cluster);
++static bool is_xid_wraparound(ClusterInfo *cluster);
+ 
+ /*
+  * DataTypesUsageChecks - definitions of data type checks for the old cluster
+@@ -315,6 +316,22 @@ static DataTypesUsageChecks data_types_usage_checks[] =
+ 		.threshold_version = 1100
+ 	},
+ 
++	/* xid64 changes the on-disk storage size of the xid type. */
++	{
++		.status = gettext_noop("Checking for changed \"xid\" data type in user tables"),
++		.report_filename = "tables_using_xid.txt",
++		.base_query =
++		"SELECT 'pg_catalog.xid'::pg_catalog.regtype AS oid",
++		.report_text =
++		gettext_noop("Your installation contains the \"xid\" data type in user tables.\n"
++					 "The size of the \"xid\" type changes from four to eight bytes,\n"
++					 "so this cluster cannot currently be upgraded.  You can drop the\n"
++					 "problem columns, or change them to another data type, and restart\n"
++					 "the upgrade.\n"),
++		.threshold_version = MANUAL_CHECK,
++		.version_hook = xid_check_applicable
++	},
++
+ 	/* End of checks marker, must remain last */
+ 	{
+ 		NULL, NULL, NULL, NULL, 0, NULL
+@@ -590,7 +607,7 @@ output_check_banner(void)
+ 
+ 
+ void
+-check_and_dump_old_cluster(void)
++check_and_dump_old_cluster(bool *is_wraparound)
+ {
+ 	/* -- OLD -- */
+ 
+@@ -726,6 +743,14 @@ check_and_dump_old_cluster(void)
+ 	if (GET_MAJOR_VERSION(old_cluster.major_version) <= 905)
+ 		check_for_pg_role_prefix(&old_cluster);
+ 
++	/* Check index formats affected by conversion from 32-bit XIDs. */
++	if (cluster_is_xid32(&old_cluster))
++	{
++		invalidate_spgist_indexes(&old_cluster, true);
++		invalidate_gin_indexes(&old_cluster, true);
++		invalidate_external_indexes(&old_cluster, true);
++	}
++
+ 	/*
+ 	 * While not a check option, we do this now because this is the only time
+ 	 * the old server is running.
+@@ -733,6 +758,9 @@ check_and_dump_old_cluster(void)
+ 	if (!user_opts.check)
+ 		generate_old_dump();
+ 
++	*is_wraparound = cluster_is_xid32(&old_cluster) &&
++		is_xid_wraparound(&old_cluster);
++
+ 	if (!user_opts.live_check)
+ 		stop_postmaster(false);
+ }
+@@ -835,6 +863,15 @@ issue_warnings_and_set_wal_level(void)
+ 	if (GET_MAJOR_VERSION(old_cluster.major_version) <= 906)
+ 		old_9_6_invalidate_hash_indexes(&new_cluster, false);
+ 
++	/* Reindex formats affected by the 32-bit to 64-bit XID conversion. */
++	if (cluster_is_xid32(&old_cluster))
++	{
++		/* The old server is stopped; invalidate indexes in the new cluster. */
++		invalidate_spgist_indexes(&new_cluster, false);
++		invalidate_gin_indexes(&new_cluster, false);
++		invalidate_external_indexes(&new_cluster, false);
++	}
++
+ 	report_extension_updates(&new_cluster);
+ 
+ 	stop_postmaster(false);
+@@ -2723,3 +2760,33 @@ check_old_cluster_global_names(ClusterInfo *cluster)
+ 	else
+ 		check_ok();
+ }
++
++/*
++ * is_xid_wraparound()
++ *
++ * Return true if a database horizon precedes the current XID in modulo order.
++ */
++static bool
++is_xid_wraparound(ClusterInfo *cluster)
++{
++	PGconn	   *conn;
++	PGresult   *res;
++	bool		is_wraparound;
++
++	conn = connectToServer(cluster, "template1");
++
++	/*
++	 * txid_current() includes an epoch.  Extract its low 32 bits to compare
++	 * with the old cluster's raw datfrozenxid values.
++	 */
++	res = executeQueryOrDie(conn,
++							"SELECT 1 "
++							"FROM   pg_catalog.pg_database, txid_current() tx "
++							"WHERE  (tx %% 4294967296)::bigint <= datfrozenxid::text::bigint "
++							"LIMIT  1");
++	is_wraparound = PQntuples(res) ? true : false;
++	PQclear(res);
++	PQfinish(conn);
++
++	return is_wraparound;
++}

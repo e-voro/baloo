@@ -1,0 +1,3 @@
+mini0131(version.c) was adapted and applied early with mini0122(check.c).
+Retain its saved patch in the aggregate; skip replaying this mini in sequence.
+See baloo/AGENTS.md for commits and source-format detection.

@@ -1,0 +1,12 @@
+diff --git a/src/bin/pg_upgrade/meson.build b/src/bin/pg_upgrade/meson.build
+index ffbf6ae8d75..33207219014 100644
+--- a/src/bin/pg_upgrade/meson.build
++++ b/src/bin/pg_upgrade/meson.build
+@@ -14,6 +14,7 @@ pg_upgrade_sources = files(
+   'parallel.c',
+   'pg_upgrade.c',
+   'relfilenumber.c',
++  'segresize.c',
+   'server.c',
+   'slru_io.c',
+   'tablespace.c',

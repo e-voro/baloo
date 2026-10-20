@@ -1,0 +1,25 @@
+diff --git a/src/bin/pg_upgrade/info.c b/src/bin/pg_upgrade/info.c
+index 37fff93892f..ef693c8fab2 100644
+--- a/src/bin/pg_upgrade/info.c
++++ b/src/bin/pg_upgrade/info.c
+@@ -459,6 +459,20 @@ get_db_infos(ClusterInfo *cluster)
+ 	}
+ 	PQclear(res);
+ 
++	/* Read the built-in type, not a user-defined type also named xid. */
++	res = executeQueryOrDie(conn,
++							"SELECT typlen FROM pg_catalog.pg_type "
++							"WHERE oid = 'pg_catalog.xid'::pg_catalog.regtype");
++	if (PQntuples(res) != 1 || PQnfields(res) != 1 || PQgetisnull(res, 0, 0))
++		pg_fatal("could not determine storage size of type pg_catalog.xid");
++	if (strcmp(PQgetvalue(res, 0, 0), "4") == 0)
++		cluster->xid_sz = 4;
++	else if (strcmp(PQgetvalue(res, 0, 0), "8") == 0)
++		cluster->xid_sz = 8;
++	else
++		pg_fatal("unsupported xid type size: %s", PQgetvalue(res, 0, 0));
++	PQclear(res);
++
+ 	PQfinish(conn);
+ 
+ 	cluster->dbarr.dbs = dbinfos;

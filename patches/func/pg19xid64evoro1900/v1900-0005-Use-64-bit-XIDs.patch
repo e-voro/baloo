@@ -22,224 +22,225 @@ Authors:
 Discussion: https://postgr.es/m/CACG%3DezZe1NQSCnfHOr78AtAZxJZeCvxrts0ygrxYwe%3DpyyjVWA%40mail.gmail.com
 Discussion: https://postgr.es/m/CAJ7c6TPDOYBYrnCAeyndkBktO0WG2xSdYduTF0nxq%2BvfkmTF5Q%40mail.gmail.com
 ---
- contrib/amcheck/verify_heapam.c | 119 +-
- contrib/amcheck/verify_nbtree.c | 2 +-
- contrib/hstore/hstore_io.c | 2 +
- contrib/pageinspect/Makefile | 2 +-
- contrib/pageinspect/btreefuncs.c | 18 +-
- contrib/pageinspect/expected/btree.out | 4 +-
- contrib/pageinspect/expected/hash_1.out | 166 +
- contrib/pageinspect/expected/oldextversions.out | 2 +-
- contrib/pageinspect/expected/page.out | 34 +-
- contrib/pageinspect/heapfuncs.c | 10 +-
- contrib/pageinspect/meson.build | 1 +
- contrib/pageinspect/pageinspect--1.13--1.14.sql | 23 +
- contrib/pageinspect/pageinspect.control | 2 +-
- contrib/pageinspect/rawpage.c | 34 +-
- contrib/pageinspect/sql/btree.sql | 3 +-
- contrib/pg_overexplain/pg_overexplain.c | 2 +-
- contrib/pg_surgery/expected/heap_surgery_1.out | 185 +
- contrib/pg_surgery/heap_surgery.c | 11 +-
- contrib/pg_visibility/pg_visibility.c | 5 +-
- contrib/pgrowlocks/pgrowlocks.c | 2 +-
- contrib/pgstattuple/pgstatapprox.c | 4 +
- contrib/pgstattuple/pgstatindex.c | 2 +-
- contrib/postgres_fdw/expected/postgres_fdw.out | 55 +-
- contrib/postgres_fdw/postgres_fdw.c | 9 +-
- contrib/postgres_fdw/sql/postgres_fdw.sql | 15 +-
- doc/src/sgml/monitoring.sgml | 8 +-
- src/backend/access/common/heaptuple.c | 10 +-
- src/backend/access/common/reloptions.c | 118 +-
- src/backend/access/heap/heapam.c | 996 +-
- src/backend/access/heap/heapam_handler.c | 75 +-
- src/backend/access/heap/heapam_indexscan.c | 9 +-
- src/backend/access/heap/heapam_visibility.c | 187 +-
- src/backend/access/heap/heapam_xlog.c | 186 +-
- src/backend/access/heap/heaptoast.c | 3 +
- src/backend/access/heap/hio.c | 39 +-
- src/backend/access/heap/pruneheap.c | 96 +-
- src/backend/access/heap/rewriteheap.c | 101 +-
- src/backend/access/heap/vacuumlazy.c | 38 +-
- src/backend/access/nbtree/nbtpage.c | 2 +
- src/backend/access/nbtree/nbtsplitloc.c | 16 +-
- src/backend/access/rmgrdesc/gistdesc.c | 4 +-
- src/backend/access/rmgrdesc/heapdesc.c | 32 +
- src/backend/access/rmgrdesc/nbtdesc.c | 4 +-
- src/backend/access/rmgrdesc/xactdesc.c | 6 +-
- src/backend/access/rmgrdesc/xlogdesc.c | 2 +-
- src/backend/access/transam/clog.c | 19 +-
- src/backend/access/transam/commit_ts.c | 19 -
- src/backend/access/transam/multixact.c | 287 +-
- src/backend/access/transam/slru.c | 10 +-
- src/backend/access/transam/subtrans.c | 3 -
- src/backend/access/transam/transam.c | 1 -
- src/backend/access/transam/twophase.c | 83 +-
- src/backend/access/transam/varsup.c | 207 +-
- src/backend/access/transam/xact.c | 6 +-
- src/backend/access/transam/xlog.c | 3 +-
- src/backend/access/transam/xloginsert.c | 7 +
- src/backend/access/transam/xlogreader.c | 3 +-
- src/backend/catalog/heap.c | 4 +-
- src/backend/catalog/pg_inherits.c | 2 +-
- src/backend/commands/async.c | 4 +-
- src/backend/commands/dbcommands.c | 5 +
- src/backend/commands/indexcmds.c | 6 +-
- src/backend/commands/sequence.c | 30 +-
- src/backend/commands/vacuum.c | 22 +-
- src/backend/commands/wait.c | 2 +-
- src/backend/executor/execExprInterp.c | 1 +
- src/backend/executor/execReplication.c | 2 +-
- src/backend/executor/execTuples.c | 4 +-
- src/backend/executor/execUtils.c | 1 +
- src/backend/executor/nodeModifyTable.c | 1 +
- src/backend/executor/spi.c | 1 +
- src/backend/nodes/gen_node_support.pl | 6 +-
- src/backend/optimizer/util/plancat.c | 2 +-
- src/backend/postmaster/autovacuum.c | 82 +-
- src/backend/replication/logical/decode.c | 30 +-
- src/backend/replication/logical/launcher.c | 2 +-
- src/backend/replication/logical/proto.c | 50 +-
- src/backend/replication/logical/reorderbuffer.c | 17 +-
- src/backend/replication/logical/slotsync.c | 6 +-
- src/backend/replication/logical/snapbuild.c | 4 +-
- src/backend/replication/logical/worker.c | 10 +-
- src/backend/replication/walreceiver.c | 28 +-
- src/backend/replication/walsender.c | 76 +-
- src/backend/statistics/extended_stats.c | 1 +
- src/backend/storage/buffer/Makefile | 3 +-
- src/backend/storage/buffer/bufmgr.c | 94 +
- src/backend/storage/buffer/heap_convert.c | 532 +
- src/backend/storage/buffer/meson.build | 1 +
- src/backend/storage/ipc/procarray.c | 183 +-
- src/backend/storage/ipc/standby.c | 17 +-
- src/backend/storage/lmgr/lmgr.c | 31 +-
- src/backend/storage/lmgr/lock.c | 40 +-
- src/backend/storage/lmgr/predicate.c | 57 +-
- src/backend/storage/lmgr/proc.c | 15 +-
- src/backend/storage/page/bufpage.c | 261 +-
- src/backend/utils/adt/arrayfuncs.c | 2 +-
- src/backend/utils/adt/enum.c | 2 +-
- src/backend/utils/adt/jsonfuncs.c | 2 +
- src/backend/utils/adt/lockfuncs.c | 18 +-
- src/backend/utils/adt/pgstatfuncs.c | 1 +
- src/backend/utils/adt/rowtypes.c | 12 +
- src/backend/utils/adt/xid.c | 44 +-
- src/backend/utils/adt/xid8funcs.c | 68 +-
- src/backend/utils/cache/catcache.c | 1 +
- src/backend/utils/cache/funccache.c | 4 +-
- src/backend/utils/cache/relcache.c | 3 +-
- src/backend/utils/fmgr/fmgr.c | 4 +-
- src/backend/utils/misc/gen_guc_tables.pl | 1 +
- src/backend/utils/misc/guc_parameters.dat | 28 +-
- src/backend/utils/misc/pg_controldata.c | 2 +-
- src/backend/utils/probes.d | 4 +-
- src/backend/utils/sort/tuplesortvariants.c | 16 +-
- src/backend/utils/time/combocid.c | 32 +-
- src/backend/utils/time/snapmgr.c | 22 +-
- src/bin/pg_amcheck/t/004_verify_heapam.pl | 226 +-
- src/bin/pg_controldata/pg_controldata.c | 2 +-
- src/bin/pg_dump/pg_dump.c | 27 +-
- src/bin/pg_dump/pg_dump.h | 8 +-
- src/bin/pg_resetwal/pg_resetwal.c | 52 +-
- src/bin/pg_resetwal/t/001_basic.pl | 31 +-
- src/bin/pg_upgrade/Makefile | 1 +
- src/bin/pg_upgrade/check.c | 70 +-
- src/bin/pg_upgrade/controldata.c | 17 +-
- src/bin/pg_upgrade/file.c | 99 +-
- src/bin/pg_upgrade/meson.build | 1 +
- src/bin/pg_upgrade/multixact_rewrite.c | 10 +-
- src/bin/pg_upgrade/pg_upgrade.c | 143 +-
- src/bin/pg_upgrade/pg_upgrade.h | 35 +-
- src/bin/pg_upgrade/relfilenumber.c | 33 +-
- src/bin/pg_upgrade/segresize.c | 582 +
- src/bin/pg_upgrade/t/002_pg_upgrade.pl | 17 +
- src/bin/pg_upgrade/version.c | 181 +
- src/bin/pg_verifybackup/t/003_corruption.pl | 6 +-
- src/bin/pg_waldump/t/001_basic.pl | 3 +-
- src/include/access/ginblock.h | 11 +-
- src/include/access/gist.h | 2 +-
- src/include/access/heapam.h | 53 +-
- src/include/access/heapam_xlog.h | 23 +-
- src/include/access/heaptoast.h | 11 +-
- src/include/access/htup.h | 20 +-
- src/include/access/htup_details.h | 273 +-
- src/include/access/multixact.h | 4 +-
- src/include/access/multixact_internal.h | 10 +-
- src/include/access/nbtree.h | 10 +
- src/include/access/reloptions.h | 2 +-
- src/include/access/rewriteheap.h | 4 +-
- src/include/access/rmgrlist.h | 1 +
- src/include/access/tableam.h | 2 +-
- src/include/access/transam.h | 128 +-
- src/include/access/tupmacs.h | 4 +-
- src/include/access/xact.h | 13 +-
- src/include/access/xloginsert.h | 1 +
- src/include/access/xlogrecord.h | 4 +-
- src/include/c.h | 20 +-
- src/include/catalog/catversion.h | 2 +-
- src/include/catalog/pg_class.h | 3 +
- src/include/catalog/pg_operator.dat | 8 +-
- src/include/catalog/pg_proc.dat | 12 +-
- src/include/catalog/pg_type.dat | 4 +-
- src/include/catalog/pg_type.h | 5 +
- src/include/commands/vacuum.h | 22 +-
- src/include/fmgr.h | 2 +
- src/include/nodes/pg_list.h | 4 +
- src/include/port/pg_lfind.h | 62 +
- src/include/postgres.h | 9 +-
- src/include/postmaster/autovacuum.h | 4 +-
- src/include/storage/aio_types.h | 2 +
- src/include/storage/buf_internals.h | 3 +-
- src/include/storage/bufmgr.h | 9 +
- src/include/storage/bufpage.h | 270 +-
- src/include/storage/itemid.h | 2 +
- src/include/storage/locktag.h | 37 +-
- src/include/storage/proc.h | 6 +-
- src/include/storage/relation_extra_data.h | 31 +
- src/include/utils/combocid.h | 2 +-
- src/include/utils/rel.h | 12 +-
- src/include/utils/xid8.h | 4 +-
- src/pl/plperl/plperl.c | 4 +-
- src/pl/plpgsql/src/pl_exec.c | 2 +
- src/pl/plpython/plpy_procedure.c | 4 +-
- src/pl/tcl/pltcl.c | 4 +-
- src/test/Makefile | 3 +-
- src/test/meson.build | 1 +
- src/test/modules/injection_points/regress_injection.c | 3 +-
- src/test/modules/test_lfind/test_lfind.c | 30 +-
- src/test/modules/xid_wraparound/xid_wraparound.c | 1 -
- src/test/perl/PostgreSQL/Test/AdjustUpgrade.pm | 4 +
- src/test/perl/PostgreSQL/Test/Cluster.pm | 25 +-
- src/test/recovery/t/003_recovery_targets.pl | 2 +-
- src/test/recovery/t/035_standby_logical_decoding.pl | 2 +-
- src/test/recovery/t/039_end_of_wal.pl | 19 +-
- src/test/regress/expected/indirect_toast.out | 8 +
- src/test/regress/expected/insert.out | 16 +-
- src/test/regress/expected/opr_sanity.out | 6 +-
- src/test/regress/expected/select_views.out | 86 +-
- src/test/regress/expected/txid.out | 8 +-
- src/test/regress/expected/type_sanity.out | 5 +-
- src/test/regress/expected/xid.out | 22 +-
- src/test/regress/expected/xid64.out | 92 +
- src/test/regress/parallel_schedule | 2 +-
- src/test/regress/regress.c | 307 +-
- src/test/regress/sql/indirect_toast.sql | 11 +
- src/test/regress/sql/insert.sql | 17 +-
- src/test/regress/sql/select_views.sql | 2 +-
- src/test/regress/sql/type_sanity.sql | 5 +-
- src/test/regress/sql/xid.sql | 2 +-
- src/test/regress/sql/xid64.sql | 84 +
- src/test/xid-64/Makefile | 22 +
- src/test/xid-64/README | 16 +
- src/test/xid-64/meson.build | 16 +
- src/test/xid-64/t/002_test_gucs.pl | 79 +
- src/test/xid-64/t/003_test_integrity.pl | 73 +
- src/test/xid-64/t/004_test_relminmxid.pl | 90 +
- src/test/xid-64/t/005_stream_subxact.pl | 154 +
- src/test/xid-64/t/006_zeropage.pl | 33 +
- src/test/xid-64/t/007_first_multi.pl | 83 +
- src/tools/pgindent/typedefs.list | 4 +-
- 217 files changed, 7070 insertions(+), 2123 deletions(-)
+ contrib/amcheck/verify_heapam.c                    |  119 +-
+ contrib/amcheck/verify_nbtree.c                    |    2 
+ contrib/hstore/hstore_io.c                         |    2 
+ contrib/pageinspect/Makefile                       |    2 
+ contrib/pageinspect/btreefuncs.c                   |   18 
+ contrib/pageinspect/expected/btree.out             |    4 
+ contrib/pageinspect/expected/hash_1.out            |  166 +++
+ contrib/pageinspect/expected/oldextversions.out    |    2 
+ contrib/pageinspect/expected/page.out              |   34 -
+ contrib/pageinspect/heapfuncs.c                    |   10 
+ contrib/pageinspect/meson.build                    |    1 
+ contrib/pageinspect/pageinspect--1.13--1.14.sql    |   23 
+ contrib/pageinspect/pageinspect.control            |    2 
+ contrib/pageinspect/rawpage.c                      |   34 +
+ contrib/pageinspect/sql/btree.sql                  |    3 
+ contrib/pg_overexplain/pg_overexplain.c            |    2 
+ contrib/pg_surgery/expected/heap_surgery_1.out     |  185 ++++
+ contrib/pg_surgery/heap_surgery.c                  |   11 
+ contrib/pg_visibility/pg_visibility.c              |    5 
+ contrib/pgrowlocks/pgrowlocks.c                    |    2 
+ contrib/pgstattuple/pgstatapprox.c                 |    4 
+ contrib/pgstattuple/pgstatindex.c                  |    2 
+ contrib/postgres_fdw/expected/postgres_fdw.out     |   55 +
+ contrib/postgres_fdw/postgres_fdw.c                |    9 
+ contrib/postgres_fdw/sql/postgres_fdw.sql          |   15 
+ doc/src/sgml/monitoring.sgml                       |    8 
+ src/backend/access/common/heaptuple.c              |   10 
+ src/backend/access/common/reloptions.c             |  118 +-
+ src/backend/access/heap/heapam.c                   |  996 ++++++++++++++++++--
+ src/backend/access/heap/heapam_handler.c           |   75 +-
+ src/backend/access/heap/heapam_indexscan.c         |    9 
+ src/backend/access/heap/heapam_visibility.c        |  187 ++--
+ src/backend/access/heap/heapam_xlog.c              |  186 +++-
+ src/backend/access/heap/heaptoast.c                |    3 
+ src/backend/access/heap/hio.c                      |   39 +
+ src/backend/access/heap/pruneheap.c                |   96 +-
+ src/backend/access/heap/rewriteheap.c              |  101 ++
+ src/backend/access/heap/vacuumlazy.c               |   38 -
+ src/backend/access/nbtree/nbtpage.c                |    2 
+ src/backend/access/nbtree/nbtsplitloc.c            |   16 
+ src/backend/access/rmgrdesc/gistdesc.c             |    4 
+ src/backend/access/rmgrdesc/heapdesc.c             |   32 +
+ src/backend/access/rmgrdesc/nbtdesc.c              |    4 
+ src/backend/access/rmgrdesc/xactdesc.c             |    6 
+ src/backend/access/rmgrdesc/xlogdesc.c             |    2 
+ src/backend/access/transam/clog.c                  |   19 
+ src/backend/access/transam/commit_ts.c             |   19 
+ src/backend/access/transam/multixact.c             |  287 ++----
+ src/backend/access/transam/slru.c                  |   10 
+ src/backend/access/transam/subtrans.c              |    3 
+ src/backend/access/transam/transam.c               |    1 
+ src/backend/access/transam/twophase.c              |   83 +-
+ src/backend/access/transam/varsup.c                |  207 ----
+ src/backend/access/transam/xact.c                  |    6 
+ src/backend/access/transam/xlog.c                  |    3 
+ src/backend/access/transam/xloginsert.c            |    7 
+ src/backend/access/transam/xlogreader.c            |    3 
+ src/backend/catalog/heap.c                         |    4 
+ src/backend/catalog/pg_inherits.c                  |    2 
+ src/backend/commands/async.c                       |    4 
+ src/backend/commands/dbcommands.c                  |    5 
+ src/backend/commands/indexcmds.c                   |    6 
+ src/backend/commands/sequence.c                    |   30 +
+ src/backend/commands/vacuum.c                      |   22 
+ src/backend/commands/wait.c                        |    2 
+ src/backend/executor/execExprInterp.c              |    1 
+ src/backend/executor/execReplication.c             |    2 
+ src/backend/executor/execTuples.c                  |    4 
+ src/backend/executor/execUtils.c                   |    1 
+ src/backend/executor/nodeModifyTable.c             |    1 
+ src/backend/executor/spi.c                         |    1 
+ src/backend/nodes/gen_node_support.pl              |    6 
+ src/backend/optimizer/util/plancat.c               |    2 
+ src/backend/postmaster/autovacuum.c                |   82 +-
+ src/backend/replication/logical/decode.c           |   30 +
+ src/backend/replication/logical/launcher.c         |    2 
+ src/backend/replication/logical/proto.c            |   50 +
+ src/backend/replication/logical/reorderbuffer.c    |   17 
+ src/backend/replication/logical/slotsync.c         |    6 
+ src/backend/replication/logical/snapbuild.c        |    4 
+ src/backend/replication/logical/worker.c           |   10 
+ src/backend/replication/walreceiver.c              |   28 -
+ src/backend/replication/walsender.c                |   76 --
+ src/backend/statistics/extended_stats.c            |    1 
+ src/backend/storage/buffer/Makefile                |    3 
+ src/backend/storage/buffer/bufmgr.c                |   94 ++
+ src/backend/storage/buffer/heap_convert.c          |  532 +++++++++++
+ src/backend/storage/buffer/meson.build             |    1 
+ src/backend/storage/ipc/procarray.c                |  183 +---
+ src/backend/storage/ipc/standby.c                  |   17 
+ src/backend/storage/lmgr/lmgr.c                    |   31 -
+ src/backend/storage/lmgr/lock.c                    |   40 +
+ src/backend/storage/lmgr/predicate.c               |   57 -
+ src/backend/storage/lmgr/proc.c                    |   15 
+ src/backend/storage/page/bufpage.c                 |  261 +++++
+ src/backend/utils/adt/arrayfuncs.c                 |    2 
+ src/backend/utils/adt/enum.c                       |    2 
+ src/backend/utils/adt/jsonfuncs.c                  |    2 
+ src/backend/utils/adt/lockfuncs.c                  |   18 
+ src/backend/utils/adt/pgstatfuncs.c                |    1 
+ src/backend/utils/adt/rowtypes.c                   |   12 
+ src/backend/utils/adt/xid.c                        |   44 +
+ src/backend/utils/adt/xid8funcs.c                  |   68 +
+ src/backend/utils/cache/catcache.c                 |    1 
+ src/backend/utils/cache/funccache.c                |    4 
+ src/backend/utils/cache/relcache.c                 |    3 
+ src/backend/utils/fmgr/fmgr.c                      |    4 
+ src/backend/utils/misc/gen_guc_tables.pl           |    1 
+ src/backend/utils/misc/guc_parameters.dat          |   28 -
+ src/backend/utils/misc/pg_controldata.c            |    2 
+ src/backend/utils/probes.d                         |    4 
+ src/backend/utils/sort/tuplesortvariants.c         |   16 
+ src/backend/utils/time/combocid.c                  |   32 -
+ src/backend/utils/time/snapmgr.c                   |   22 
+ src/bin/pg_amcheck/t/004_verify_heapam.pl          |  226 ++++-
+ src/bin/pg_controldata/pg_controldata.c            |    2 
+ src/bin/pg_dump/pg_dump.c                          |   27 -
+ src/bin/pg_dump/pg_dump.h                          |    8 
+ src/bin/pg_resetwal/pg_resetwal.c                  |   52 -
+ src/bin/pg_resetwal/t/001_basic.pl                 |   31 -
+ src/bin/pg_upgrade/Makefile                        |    1 
+ src/bin/pg_upgrade/check.c                         |   69 +
+ src/bin/pg_upgrade/controldata.c                   |   17 
+ src/bin/pg_upgrade/file.c                          |  117 ++
+ src/bin/pg_upgrade/info.c                          |   14 
+ src/bin/pg_upgrade/meson.build                     |    1 
+ src/bin/pg_upgrade/multixact_rewrite.c             |   10 
+ src/bin/pg_upgrade/pg_upgrade.c                    |  143 ++-
+ src/bin/pg_upgrade/pg_upgrade.h                    |   31 -
+ src/bin/pg_upgrade/relfilenumber.c                 |   33 +
+ src/bin/pg_upgrade/segresize.c                     |  582 ++++++++++++
+ src/bin/pg_upgrade/t/002_pg_upgrade.pl             |   17 
+ src/bin/pg_upgrade/version.c                       |  219 ++++
+ src/bin/pg_verifybackup/t/003_corruption.pl        |    6 
+ src/bin/pg_waldump/t/001_basic.pl                  |    3 
+ src/include/access/ginblock.h                      |   11 
+ src/include/access/gist.h                          |    2 
+ src/include/access/heapam.h                        |   53 +
+ src/include/access/heapam_xlog.h                   |   23 
+ src/include/access/heaptoast.h                     |   11 
+ src/include/access/htup.h                          |   20 
+ src/include/access/htup_details.h                  |  273 +++++
+ src/include/access/multixact.h                     |    4 
+ src/include/access/multixact_internal.h            |   10 
+ src/include/access/nbtree.h                        |   10 
+ src/include/access/reloptions.h                    |    2 
+ src/include/access/rewriteheap.h                   |    4 
+ src/include/access/rmgrlist.h                      |    1 
+ src/include/access/tableam.h                       |    2 
+ src/include/access/transam.h                       |  128 +--
+ src/include/access/tupmacs.h                       |    4 
+ src/include/access/xact.h                          |   13 
+ src/include/access/xloginsert.h                    |    1 
+ src/include/access/xlogrecord.h                    |    4 
+ src/include/c.h                                    |   20 
+ src/include/catalog/catversion.h                   |    2 
+ src/include/catalog/pg_class.h                     |    3 
+ src/include/catalog/pg_operator.dat                |    8 
+ src/include/catalog/pg_proc.dat                    |   12 
+ src/include/catalog/pg_type.dat                    |    4 
+ src/include/catalog/pg_type.h                      |    5 
+ src/include/commands/vacuum.h                      |   22 
+ src/include/fmgr.h                                 |    2 
+ src/include/nodes/pg_list.h                        |    4 
+ src/include/port/pg_lfind.h                        |   62 +
+ src/include/postgres.h                             |    9 
+ src/include/postmaster/autovacuum.h                |    4 
+ src/include/storage/aio_types.h                    |    2 
+ src/include/storage/buf_internals.h                |    3 
+ src/include/storage/bufmgr.h                       |    9 
+ src/include/storage/bufpage.h                      |  270 +++++
+ src/include/storage/itemid.h                       |    2 
+ src/include/storage/locktag.h                      |   37 +
+ src/include/storage/proc.h                         |    6 
+ src/include/storage/relation_extra_data.h          |   31 +
+ src/include/utils/combocid.h                       |    2 
+ src/include/utils/rel.h                            |   12 
+ src/include/utils/xid8.h                           |    4 
+ src/pl/plperl/plperl.c                             |    4 
+ src/pl/plpgsql/src/pl_exec.c                       |    2 
+ src/pl/plpython/plpy_procedure.c                   |    4 
+ src/pl/tcl/pltcl.c                                 |    4 
+ src/test/Makefile                                  |    3 
+ src/test/meson.build                               |    1 
+ .../modules/injection_points/regress_injection.c   |    3 
+ src/test/modules/test_lfind/test_lfind.c           |   30 -
+ src/test/modules/xid_wraparound/xid_wraparound.c   |    1 
+ src/test/perl/PostgreSQL/Test/AdjustUpgrade.pm     |    4 
+ src/test/perl/PostgreSQL/Test/Cluster.pm           |   25 -
+ src/test/recovery/t/003_recovery_targets.pl        |    2 
+ .../recovery/t/035_standby_logical_decoding.pl     |    2 
+ src/test/recovery/t/039_end_of_wal.pl              |   19 
+ src/test/regress/expected/indirect_toast.out       |    8 
+ src/test/regress/expected/insert.out               |   16 
+ src/test/regress/expected/opr_sanity.out           |    6 
+ src/test/regress/expected/select_views.out         |   86 +-
+ src/test/regress/expected/txid.out                 |    8 
+ src/test/regress/expected/type_sanity.out          |    5 
+ src/test/regress/expected/xid.out                  |   22 
+ src/test/regress/expected/xid64.out                |   92 ++
+ src/test/regress/parallel_schedule                 |    2 
+ src/test/regress/regress.c                         |  307 ++++++
+ src/test/regress/sql/indirect_toast.sql            |   11 
+ src/test/regress/sql/insert.sql                    |   17 
+ src/test/regress/sql/select_views.sql              |    2 
+ src/test/regress/sql/type_sanity.sql               |    5 
+ src/test/regress/sql/xid.sql                       |    2 
+ src/test/regress/sql/xid64.sql                     |   84 ++
+ src/test/xid-64/Makefile                           |   22 
+ src/test/xid-64/README                             |   16 
+ src/test/xid-64/meson.build                        |   16 
+ src/test/xid-64/t/002_test_gucs.pl                 |   79 ++
+ src/test/xid-64/t/003_test_integrity.pl            |   73 +
+ src/test/xid-64/t/004_test_relminmxid.pl           |   90 ++
+ src/test/xid-64/t/005_stream_subxact.pl            |  154 +++
+ src/test/xid-64/t/006_zeropage.pl                  |   33 +
+ src/test/xid-64/t/007_first_multi.pl               |   83 ++
+ src/tools/pgindent/typedefs.list                   |    4 
+ 218 files changed, 7136 insertions(+), 2122 deletions(-)
 
 diff --git a/contrib/amcheck/verify_heapam.c b/contrib/amcheck/verify_heapam.c
 index e5ea68b801..14ce47cf80 100644
@@ -12353,24 +12354,22 @@ index 771addb675a..0b7b2bb86bf 100644
  	slru_io.o \
  	tablespace.o \
 diff --git a/src/bin/pg_upgrade/check.c b/src/bin/pg_upgrade/check.c
-index 1e17d64b3e..5d283b2b59 100644
+index e298e5658da..c3b1516e9c0 100644
 --- a/src/bin/pg_upgrade/check.c
 +++ b/src/bin/pg_upgrade/check.c
-@@ -32,6 +32,7 @@ static void check_new_cluster_replication_slots(void);
- static void check_new_cluster_subscription_configuration(void);
+@@ -37,6 +37,7 @@ static void check_new_cluster_subscription_configuration(void);
  static void check_old_cluster_for_valid_slots(void);
  static void check_old_cluster_subscription_state(void);
+ static void check_old_cluster_global_names(ClusterInfo *cluster);
 +static bool is_xid_wraparound(ClusterInfo *cluster);
  
  /*
   * DataTypesUsageChecks - definitions of data type checks for the old cluster
-@@ -310,6 +311,23 @@ static DataTypesUsageChecks data_types_usage_checks[] =
+@@ -315,6 +316,22 @@ static DataTypesUsageChecks data_types_usage_checks[] =
  		.threshold_version = 1100
  	},
  
-+	/*
-+	 * PG 18 changed xid datatype size from 4 to 8 bytes.
-+	 */
++	/* xid64 changes the on-disk storage size of the xid type. */
 +	{
 +		.status = gettext_noop("Checking for changed \"xid\" data type in user tables"),
 +		.report_filename = "tables_using_xid.txt",
@@ -12378,17 +12377,18 @@ index 1e17d64b3e..5d283b2b59 100644
 +		"SELECT 'pg_catalog.xid'::pg_catalog.regtype AS oid",
 +		.report_text =
 +		gettext_noop("Your installation contains the \"xid\" data type in user tables.\n"
-+					 "The size of \"xid\" type has been changed in PostgreSQL version 18,\n"
++					 "The size of the \"xid\" type changes from four to eight bytes,\n"
 +					 "so this cluster cannot currently be upgraded.  You can drop the\n"
 +					 "problem columns, or change them to another data type, and restart\n"
 +					 "the upgrade.\n"),
-+		.threshold_version = 1100
++		.threshold_version = MANUAL_CHECK,
++		.version_hook = xid_check_applicable
 +	},
 +
  	/* End of checks marker, must remain last */
  	{
  		NULL, NULL, NULL, NULL, 0, NULL
-@@ -587,7 +605,7 @@ output_check_banner(void)
+@@ -590,7 +607,7 @@ output_check_banner(void)
  
  
  void
@@ -12397,14 +12397,13 @@ index 1e17d64b3e..5d283b2b59 100644
  {
  	/* -- OLD -- */
  
-@@ -695,6 +713,15 @@ check_and_dump_old_cluster(void)
+@@ -726,6 +743,14 @@ check_and_dump_old_cluster(void)
  	if (GET_MAJOR_VERSION(old_cluster.major_version) <= 905)
  		check_for_pg_role_prefix(&old_cluster);
  
-+	/* Prepare for 64bit xid */
-+	if (old_cluster.controldata.cat_ver < XID_FORMATCHANGE_CAT_VER)
++	/* Check index formats affected by conversion from 32-bit XIDs. */
++	if (cluster_is_xid32(&old_cluster))
 +	{
-+		/* Check indexes to be upgraded */
 +		invalidate_spgist_indexes(&old_cluster, true);
 +		invalidate_gin_indexes(&old_cluster, true);
 +		invalidate_external_indexes(&old_cluster, true);
@@ -12413,32 +12412,33 @@ index 1e17d64b3e..5d283b2b59 100644
  	/*
  	 * While not a check option, we do this now because this is the only time
  	 * the old server is running.
-@@ -702,6 +729,8 @@ check_and_dump_old_cluster(void)
+@@ -733,6 +758,9 @@ check_and_dump_old_cluster(void)
  	if (!user_opts.check)
  		generate_old_dump();
  
-+	*is_wraparound = is_xid_wraparound(&old_cluster);
++	*is_wraparound = cluster_is_xid32(&old_cluster) &&
++		is_xid_wraparound(&old_cluster);
 +
  	if (!user_opts.live_check)
  		stop_postmaster(false);
  }
-@@ -804,6 +833,15 @@ issue_warnings_and_set_wal_level(void)
+@@ -835,6 +863,15 @@ issue_warnings_and_set_wal_level(void)
  	if (GET_MAJOR_VERSION(old_cluster.major_version) <= 906)
  		old_9_6_invalidate_hash_indexes(&new_cluster, false);
  
-+	/* Raindex for 64bit xid */
-+	if (old_cluster.controldata.cat_ver < XID_FORMATCHANGE_CAT_VER)
++	/* Reindex formats affected by the 32-bit to 64-bit XID conversion. */
++	if (cluster_is_xid32(&old_cluster))
 +	{
-+		/* Check indexes to be upgraded */
-+		invalidate_spgist_indexes(&old_cluster, true);
-+		invalidate_gin_indexes(&old_cluster, true);
-+		invalidate_external_indexes(&old_cluster, true);
++		/* The old server is stopped; invalidate indexes in the new cluster. */
++		invalidate_spgist_indexes(&new_cluster, false);
++		invalidate_gin_indexes(&new_cluster, false);
++		invalidate_external_indexes(&new_cluster, false);
 +	}
 +
  	report_extension_updates(&new_cluster);
  
  	stop_postmaster(false);
-@@ -2434,3 +2472,33 @@ check_old_cluster_subscription_state(void)
+@@ -2723,3 +2760,33 @@ check_old_cluster_global_names(ClusterInfo *cluster)
  	else
  		check_ok();
  }
@@ -12446,7 +12446,7 @@ index 1e17d64b3e..5d283b2b59 100644
 +/*
 + * is_xid_wraparound()
 + *
-+ * Return true if 32-xid cluster had wraparound.
++ * Return true if a database horizon precedes the current XID in modulo order.
 + */
 +static bool
 +is_xid_wraparound(ClusterInfo *cluster)
@@ -12458,13 +12458,13 @@ index 1e17d64b3e..5d283b2b59 100644
 +	conn = connectToServer(cluster, "template1");
 +
 +	/*
-+	 * txid_current is extended with an "epoch" counter, so to check
-+	 * wraparound in old 32-xid cluster we cut epoch by casting to int4.
++	 * txid_current() includes an epoch.  Extract its low 32 bits to compare
++	 * with the old cluster's raw datfrozenxid values.
 +	 */
 +	res = executeQueryOrDie(conn,
 +							"SELECT 1 "
 +							"FROM   pg_catalog.pg_database, txid_current() tx "
-+							"WHERE  (tx %% 4294967295)::bigint <= datfrozenxid::text::bigint "
++							"WHERE  (tx %% 4294967296)::bigint <= datfrozenxid::text::bigint "
 +							"LIMIT  1");
 +	is_wraparound = PQntuples(res) ? true : false;
 +	PQclear(res);
@@ -12473,10 +12473,10 @@ index 1e17d64b3e..5d283b2b59 100644
 +	return is_wraparound;
 +}
 diff --git a/src/bin/pg_upgrade/controldata.c b/src/bin/pg_upgrade/controldata.c
-index b603758599..63a7edda00 100644
+index 28ab5cdc420..d75915a1e67 100644
 --- a/src/bin/pg_upgrade/controldata.c
 +++ b/src/bin/pg_upgrade/controldata.c
-@@ -290,6 +290,8 @@ get_control_data(ClusterInfo *cluster)
+@@ -291,6 +291,8 @@ get_control_data(ClusterInfo *cluster)
  			xid.value = strtou64(p, NULL, 10);
  
  			/*
@@ -12485,7 +12485,7 @@ index b603758599..63a7edda00 100644
  			 * Delimiter changed from '/' to ':' in 9.6.  We don't test for
  			 * the catalog version of the change because the catalog version
  			 * is pulled from pg_controldata too, and it isn't worth adding an
-@@ -305,8 +307,7 @@ get_control_data(ClusterInfo *cluster)
+@@ -306,8 +308,7 @@ get_control_data(ClusterInfo *cluster)
  			if (p == NULL)
  			{
  				/* FullTransactionId representation */
@@ -12495,18 +12495,18 @@ index b603758599..63a7edda00 100644
  			}
  			else
  			{
-@@ -315,8 +316,8 @@ get_control_data(ClusterInfo *cluster)
+@@ -316,8 +317,8 @@ get_control_data(ClusterInfo *cluster)
  
  				/* Epoch:Xid representation */
  				p++;				/* remove '/' or ':' char */
 -				cluster->controldata.chkpnt_nxtxid = str2uint(p);
 -				cluster->controldata.chkpnt_nxtepoch = (TransactionId) XidFromFullTransactionId(xid);
-+				cluster->controldata.chkpnt_nxtxid = (XidFromFullTransactionId(xid)) << 32 |
-+													  (TransactionId) str2uint(p);
++				cluster->controldata.chkpnt_nxtxid = (xid.value << 32) |
++													  str2uint(p);
  			}
  
  			got_xid = true;
-@@ -340,7 +341,7 @@ get_control_data(ClusterInfo *cluster)
+@@ -341,7 +342,7 @@ get_control_data(ClusterInfo *cluster)
  				pg_fatal("%d: controldata retrieval problem", __LINE__);
  
  			p++;				/* remove ':' char */
@@ -12515,7 +12515,7 @@ index b603758599..63a7edda00 100644
  			got_multi = true;
  		}
  		else if ((p = strstr(bufin, "Latest checkpoint's oldestXID:")) != NULL)
-@@ -351,7 +352,7 @@ get_control_data(ClusterInfo *cluster)
+@@ -352,7 +353,7 @@ get_control_data(ClusterInfo *cluster)
  				pg_fatal("%d: controldata retrieval problem", __LINE__);
  
  			p++;				/* remove ':' char */
@@ -12524,7 +12524,7 @@ index b603758599..63a7edda00 100644
  			got_oldestxid = true;
  		}
  		else if ((p = strstr(bufin, "Latest checkpoint's oldestMultiXid:")) != NULL)
-@@ -362,7 +363,7 @@ get_control_data(ClusterInfo *cluster)
+@@ -363,7 +364,7 @@ get_control_data(ClusterInfo *cluster)
  				pg_fatal("%d: controldata retrieval problem", __LINE__);
  
  			p++;				/* remove ':' char */
@@ -12533,7 +12533,7 @@ index b603758599..63a7edda00 100644
  			got_oldestmulti = true;
  		}
  		else if ((p = strstr(bufin, "Latest checkpoint's NextMultiOffset:")) != NULL)
-@@ -373,7 +374,7 @@ get_control_data(ClusterInfo *cluster)
+@@ -374,7 +375,7 @@ get_control_data(ClusterInfo *cluster)
  				pg_fatal("%d: controldata retrieval problem", __LINE__);
  
  			p++;				/* remove ':' char */
@@ -12543,7 +12543,7 @@ index b603758599..63a7edda00 100644
  		}
  		else if ((p = strstr(bufin, "First log segment after reset:")) != NULL)
 diff --git a/src/bin/pg_upgrade/file.c b/src/bin/pg_upgrade/file.c
-index 91ed16acb0..c078a1dc2e 100644
+index 5b276008614..654b9ca073d 100644
 --- a/src/bin/pg_upgrade/file.c
 +++ b/src/bin/pg_upgrade/file.c
 @@ -214,7 +214,8 @@ linkFile(const char *src, const char *dst,
@@ -12566,35 +12566,35 @@ index 91ed16acb0..c078a1dc2e 100644
 +										  PG_PAGE_LAYOUT_VERSION);
 +
  			/* Set new checksum for visibility map page, if enabled */
- 			if (new_cluster.controldata.data_checksum_version != 0)
+ 			if (new_cluster.controldata.data_checksum_version != PG_DATA_CHECKSUM_OFF)
  				((PageHeader) new_vmbuf.data)->pd_checksum =
-@@ -356,6 +362,97 @@ rewriteVisibilityMap(const char *fromfile, const char *tofile,
+@@ -356,6 +362,115 @@ rewriteVisibilityMap(const char *fromfile, const char *tofile,
  	close(src_fd);
  }
  
 +/*
-+ * updateSegmentVersion()
++ * updateSegmentPagesVersion()
 + *
 + * Transform a segment file, copying from src to dst.
 + * schemaName/relName are relation's SQL name (used for error messages only).
 + *
 + * Read segment pages one by one and set version to PG_PAGE_LAYOUT_VERSION.
 + *
-+ * Although FSM and MV formats does not change while switch to 64-bit XIDs, we
++ * Although FSM and VM formats do not change when switching to 64-bit XIDs, we
 + * must upgrade pages version in order to avoid lazy conversion on first read.
 + */
 +void
 +updateSegmentPagesVersion(const char *fromfile, const char *tofile,
 +						  const char *schemaName, const char *relName)
 +{
-+	int				src_fd;
-+	int				dst_fd;
-+	struct stat		statbuf;
-+	ssize_t			src_filesize;
-+	ssize_t			totalBytesRead;
-+	ssize_t			bytesRead;
-+	BlockNumber		blkno;
-+	PGAlignedBlock	buf;
++	int			src_fd;
++	int			dst_fd;
++	struct stat statbuf;
++	ssize_t		src_filesize;
++	ssize_t		totalBytesRead;
++	ssize_t		bytesRead;
++	BlockNumber blkno;
++	PGAlignedBlock buf;
 +
 +	if ((src_fd = open(fromfile, O_RDONLY | PG_BINARY, 0)) < 0)
 +		pg_fatal("error while copying relation \"%s.%s\": could not open file \"%s\": %s",
@@ -12628,22 +12628,40 @@ index 91ed16acb0..c078a1dc2e 100644
 +		}
 +
 +		totalBytesRead += BLCKSZ;
-+		PageSetPageSizeAndVersion((Page) buf.data,
-+								  PageGetPageSize((Page) buf.data),
-+								  PG_PAGE_LAYOUT_VERSION);
 +
-+		/* Set new checksum for page, if enabled */
-+		if (new_cluster.controldata.data_checksum_version != 0)
-+			((PageHeader) buf.data)->pd_checksum =
-+				pg_checksum_page(buf.data, blkno);
-+
-+		/*
-+		 * We dealing here only with FSM and VM pages.
-+		 */
-+		if (((PageHeader) buf.data)->pd_lower != SizeOfPageHeaderData ||
-+			((PageHeader) buf.data)->pd_upper != BLCKSZ)
-+				pg_fatal("error while copying relation \"%s.%s\": unknown page format found in file \"%s\"",
++		if (PageIsNew(buf.data))
++		{
++			/*
++			 * We probably have an uninitialised page. In this case we skip
++			 * changing the page's version, because there is no header on the page.
++			 *
++			 * But we have to check! If pd_upper is equal to zero, the only
++			 * correct case is that the whole page is equal to zero. Otherwise,
++			 * we have a corrupted page and we can't treat it properly further.
++			 */
++			if (buf.data[0] != 0 || memcmp(buf.data, buf.data + 1, BLCKSZ - 1) != 0)
++				pg_fatal("error while copying relation \"%s.%s\": page corrupted \"%s\"",
 +						 schemaName, relName, fromfile);
++		}
++		else
++		{
++			PageSetPageSizeAndVersion((Page) buf.data,
++									  PageGetPageSize((Page) buf.data),
++									  PG_PAGE_LAYOUT_VERSION);
++
++			/* Set new checksum for page, if enabled */
++			if (new_cluster.controldata.data_checksum_version != PG_DATA_CHECKSUM_OFF)
++				((PageHeader) buf.data)->pd_checksum =
++					pg_checksum_page(buf.data, blkno);
++
++			/*
++			 * Only FSM and VM pages reach this function.
++			 */
++			if (((PageHeader) buf.data)->pd_lower != SizeOfPageHeaderData ||
++				((PageHeader) buf.data)->pd_upper != BLCKSZ)
++				pg_fatal("error while copying relation \"%s.%s\": unknown page format found in file \"%s\"",
++							 schemaName, relName, fromfile);
++		}
 +
 +		errno = 0;
 +		if (write(dst_fd, buf.data, BLCKSZ) != BLCKSZ)
@@ -12652,7 +12670,7 @@ index 91ed16acb0..c078a1dc2e 100644
 +			if (errno == 0)
 +				errno = ENOSPC;
 +			pg_fatal("error while copying relation \"%s.%s\": could not write file \"%s\": %s",
-+					 schemaName, relName, tofile, strerror(errno));
++						schemaName, relName, tofile, strerror(errno));
 +		}
 +
 +		blkno++;
@@ -12666,18 +12684,43 @@ index 91ed16acb0..c078a1dc2e 100644
  void
  check_file_clone(void)
  {
+diff --git a/src/bin/pg_upgrade/info.c b/src/bin/pg_upgrade/info.c
+index 37fff93892f..ef693c8fab2 100644
+--- a/src/bin/pg_upgrade/info.c
++++ b/src/bin/pg_upgrade/info.c
+@@ -459,6 +459,20 @@ get_db_infos(ClusterInfo *cluster)
+ 	}
+ 	PQclear(res);
+ 
++	/* Read the built-in type, not a user-defined type also named xid. */
++	res = executeQueryOrDie(conn,
++							"SELECT typlen FROM pg_catalog.pg_type "
++							"WHERE oid = 'pg_catalog.xid'::pg_catalog.regtype");
++	if (PQntuples(res) != 1 || PQnfields(res) != 1 || PQgetisnull(res, 0, 0))
++		pg_fatal("could not determine storage size of type pg_catalog.xid");
++	if (strcmp(PQgetvalue(res, 0, 0), "4") == 0)
++		cluster->xid_sz = 4;
++	else if (strcmp(PQgetvalue(res, 0, 0), "8") == 0)
++		cluster->xid_sz = 8;
++	else
++		pg_fatal("unsupported xid type size: %s", PQgetvalue(res, 0, 0));
++	PQclear(res);
++
+ 	PQfinish(conn);
+ 
+ 	cluster->dbarr.dbs = dbinfos;
 diff --git a/src/bin/pg_upgrade/meson.build b/src/bin/pg_upgrade/meson.build
-index ac992f0d14..5659c215b5 100644
+index ffbf6ae8d75..33207219014 100644
 --- a/src/bin/pg_upgrade/meson.build
 +++ b/src/bin/pg_upgrade/meson.build
-@@ -12,6 +12,7 @@ pg_upgrade_sources = files(
+@@ -14,6 +14,7 @@ pg_upgrade_sources = files(
    'parallel.c',
    'pg_upgrade.c',
    'relfilenumber.c',
 +  'segresize.c',
    'server.c',
+   'slru_io.c',
    'tablespace.c',
-   'task.c',
 diff --git a/src/bin/pg_upgrade/multixact_rewrite.c b/src/bin/pg_upgrade/multixact_rewrite.c
 index 35cfe29c5e3..49645195988 100644
 --- a/src/bin/pg_upgrade/multixact_rewrite.c
@@ -12983,42 +13026,37 @@ index 899b3488fa..ee92fa130e 100644
  
  		/* Reset datallowconn flag */
 diff --git a/src/bin/pg_upgrade/pg_upgrade.h b/src/bin/pg_upgrade/pg_upgrade.h
-index e86336f4be..196dede8e3 100644
+index ccd1ac0d013..afa1cdec4e1 100644
 --- a/src/bin/pg_upgrade/pg_upgrade.h
 +++ b/src/bin/pg_upgrade/pg_upgrade.h
-@@ -114,6 +114,11 @@ extern char *output_files[];
-  */
- #define MULTIXACT_FORMATCHANGE_CAT_VER 201301231
- 
-+/*
-+ * xid format changed from 32-bit to 64-bit.
-+ */
-+#define XID_FORMATCHANGE_CAT_VER 999999999
-+
- /*
-  * large object chunk size added to pg_controldata,
-  * commit 5f93c37805e7485488480916b4585e098d3cc883
-@@ -231,13 +236,13 @@ typedef struct
+@@ -238,13 +238,13 @@ typedef struct
  	uint32		ctrl_ver;
  	uint32		cat_ver;
  	char		nextxlogfile[25];
 -	uint32		chkpnt_nxtxid;
 -	uint32		chkpnt_nxtepoch;
 +	uint64		chkpnt_nxtxid;
-+	uint32		chkpnt_nxtepoch;	/* for 32bit xids only */
++	uint32		chkpnt_nxtepoch;	/* for 32-bit XIDs only */
  	uint32		chkpnt_nxtoid;
 -	uint32		chkpnt_nxtmulti;
--	uint32		chkpnt_nxtmxoff;
++	uint64		chkpnt_nxtmulti;
+ 	uint64		chkpnt_nxtmxoff;
 -	uint32		chkpnt_oldstMulti;
 -	uint32		chkpnt_oldstxid;
-+	uint64		chkpnt_nxtmulti;
-+	uint64		chkpnt_nxtmxoff;
 +	uint64		chkpnt_oldstMulti;
 +	uint64		chkpnt_oldstxid;
  	uint32		align;
  	uint32		blocksz;
  	uint32		largesz;
-@@ -380,7 +385,7 @@ extern OSInfo os_info;
+@@ -311,6 +311,7 @@ typedef struct
+ 	int			num_tablespaces;
+ 	const char *tablespace_suffix;	/* directory specification */
+ 	int			nsubs;			/* number of subscriptions */
++	int			xid_sz;			/* pg_catalog.xid storage size */
+ 	bool		sub_retain_dead_tuples; /* whether a subscription enables
+ 										 * retain_dead_tuples. */
+ } ClusterInfo;
+@@ -387,7 +388,7 @@ extern OSInfo os_info;
  /* check.c */
  
  void		output_check_banner(void);
@@ -13027,7 +13065,7 @@ index e86336f4be..196dede8e3 100644
  void		check_new_cluster(void);
  void		report_clusters_compatible(void);
  void		issue_warnings_and_set_wal_level(void);
-@@ -423,7 +428,10 @@ void		copyFileByRange(const char *src, const char *dst,
+@@ -430,7 +431,10 @@ void		copyFileByRange(const char *src, const char *dst,
  void		linkFile(const char *src, const char *dst,
  					 const char *schemaName, const char *relName);
  void		rewriteVisibilityMap(const char *fromfile, const char *tofile,
@@ -13039,13 +13077,17 @@ index e86336f4be..196dede8e3 100644
  void		check_file_clone(void);
  void		check_copy_file_range(void);
  void		check_hard_link(transferMode transfer_mode);
-@@ -494,11 +502,16 @@ unsigned int str2uint(const char *str);
+@@ -500,6 +504,9 @@ unsigned int str2uint(const char *str);
+ 
  /* version.c */
  
- bool		jsonb_9_4_check_applicable(ClusterInfo *cluster);
++bool		cluster_is_xid64(const ClusterInfo *cluster);
++bool		cluster_is_xid32(const ClusterInfo *cluster);
 +bool		xid_check_applicable(ClusterInfo *cluster);
+ bool		jsonb_9_4_check_applicable(ClusterInfo *cluster);
+ bool		protocol_negotiation_supported(const ClusterInfo *cluster);
  void		old_9_6_invalidate_hash_indexes(ClusterInfo *cluster,
- 											bool check_mode);
+@@ -507,6 +514,10 @@ void		old_9_6_invalidate_hash_indexes(ClusterInfo *cluster,
  
  void		report_extension_updates(ClusterInfo *cluster);
  
@@ -13053,10 +13095,10 @@ index e86336f4be..196dede8e3 100644
 +void		invalidate_gin_indexes(ClusterInfo *cluster, bool check_mode);
 +void		invalidate_external_indexes(ClusterInfo *cluster, bool check_mode);
 +
- /* parallel.c */
- void		parallel_exec_prog(const char *log_file, const char *opt_log_file,
- 							   const char *fmt,...) pg_attribute_printf(3, 4);
-@@ -527,3 +540,9 @@ typedef struct
+ /* multixact_rewrite.c */
+ MultiXactOffset rewrite_multixacts(MultiXactId from_multi, MultiXactId to_multi);
+ 
+@@ -538,3 +549,9 @@ typedef struct
  	FILE	   *file;
  	char		path[MAXPGPATH];
  } UpgradeTaskReport;
@@ -13772,7 +13814,7 @@ index 823f41e754..dc8326172a 100644
  # retained on failure.
  my $log_path = $newnode->data_dir . "/pg_upgrade_output.d";
 diff --git a/src/bin/pg_upgrade/version.c b/src/bin/pg_upgrade/version.c
-index 3ad5a991a3..fcfc42da3a 100644
+index 047670d4acb..a5d8b5e7774 100644
 --- a/src/bin/pg_upgrade/version.c
 +++ b/src/bin/pg_upgrade/version.c
 @@ -9,6 +9,7 @@
@@ -13783,27 +13825,7 @@ index 3ad5a991a3..fcfc42da3a 100644
  #include "fe_utils/string_utils.h"
  #include "pg_upgrade.h"
  
-@@ -28,6 +29,19 @@ jsonb_9_4_check_applicable(ClusterInfo *cluster)
- 	return false;
- }
- 
-+/*
-+ * And another one for the xid type.
-+ */
-+bool
-+xid_check_applicable(ClusterInfo *cluster)
-+{
-+	/* xid type changed its storage format */
-+	if (cluster->controldata.cat_ver < XID_FORMATCHANGE_CAT_VER)
-+		return true;
-+
-+	return false;
-+}
-+
- /*
-  * old_9_6_invalidate_hash_indexes()
-  *	9.6 -> 10
-@@ -210,3 +224,170 @@ report_extension_updates(ClusterInfo *cluster)
+@@ -226,3 +227,221 @@ report_extension_updates(ClusterInfo *cluster)
  	else
  		check_ok();
  }
@@ -13973,6 +13995,57 @@ index 3ad5a991a3..fcfc42da3a 100644
 +{
 +	invalidate_indexes(cluster, check_mode, "external",
 +					   "NOT a.amname IN ('btree', 'hash', 'gist', 'gin', 'spgist', 'brin')");
++}
++
++/*
++ * Identify XID storage using the supplied PG18 detection rules, extended to
++ * PG19.  A PostgreSQL major version alone cannot identify an xid64 build.
++ */
++bool
++cluster_is_xid64(const ClusterInfo *cluster)
++{
++	uint32		major_version = GET_MAJOR_VERSION(cluster->major_version);
++
++	/* XID64 first appeared in Tantor 15. */
++	if (major_version < 1500)
++		return false;
++
++	switch (major_version)
++	{
++		case 1500:
++		case 1600:
++		case 1700:
++		case 1900:
++			if (cluster->xid_sz != 4 && cluster->xid_sz != 8)
++				pg_fatal("unsupported xid type size: %d", cluster->xid_sz);
++			return cluster->xid_sz == 8;
++		case 1800:
++		{
++			uint32		prefix = cluster->controldata.cat_ver / 10000000;
++
++			/* Tantor 18 uses the 64 prefix for its xid64 catalog. */
++			if (prefix != 20 && prefix != 64)
++				pg_fatal("transaction ID format is not defined for catalog version %u",
++						 cluster->controldata.cat_ver);
++			return prefix == 64;
++		}
++		default:
++			pg_fatal("transaction ID format is not defined for major version %u",
++					 major_version);
++	}
++}
++
++bool
++cluster_is_xid32(const ClusterInfo *cluster)
++{
++	return !cluster_is_xid64(cluster);
++}
++
++/* User xid columns cannot be copied across a change in their storage size. */
++bool
++xid_check_applicable(ClusterInfo *cluster)
++{
++	return cluster_is_xid32(cluster);
 +}
 diff --git a/src/bin/pg_verifybackup/t/003_corruption.pl b/src/bin/pg_verifybackup/t/003_corruption.pl
 index deb8c11ca9..4f86cc3ef5 100644
