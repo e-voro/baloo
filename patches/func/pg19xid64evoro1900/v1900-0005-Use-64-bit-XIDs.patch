@@ -123,17 +123,17 @@ Discussion: https://postgr.es/m/CAJ7c6TPDOYBYrnCAeyndkBktO0WG2xSdYduTF0nxq%2Bvfk
  src/backend/utils/adt/lockfuncs.c | 18 +-
  src/backend/utils/adt/pgstatfuncs.c | 1 +
  src/backend/utils/adt/rowtypes.c | 12 +
- src/backend/utils/adt/xid.c | 43 +-
+ src/backend/utils/adt/xid.c | 44 +-
  src/backend/utils/adt/xid8funcs.c | 68 +-
  src/backend/utils/cache/catcache.c | 1 +
  src/backend/utils/cache/funccache.c | 4 +-
  src/backend/utils/cache/relcache.c | 3 +-
  src/backend/utils/fmgr/fmgr.c | 4 +-
- src/backend/utils/misc/guc_parameters.dat | 36 +-
+ src/backend/utils/misc/gen_guc_tables.pl | 1 +
+ src/backend/utils/misc/guc_parameters.dat | 28 +-
  src/backend/utils/misc/pg_controldata.c | 2 +-
- src/backend/utils/misc/postgresql.conf.sample | 4 +-
  src/backend/utils/probes.d | 4 +-
- src/backend/utils/sort/tuplesortvariants.c | 14 +-
+ src/backend/utils/sort/tuplesortvariants.c | 16 +-
  src/backend/utils/time/combocid.c | 32 +-
  src/backend/utils/time/snapmgr.c | 22 +-
  src/bin/pg_amcheck/t/004_verify_heapam.pl | 185 +-
@@ -239,7 +239,7 @@ Discussion: https://postgr.es/m/CAJ7c6TPDOYBYrnCAeyndkBktO0WG2xSdYduTF0nxq%2Bvfk
  src/test/xid-64/t/006_zeropage.pl | 33 +
  src/test/xid-64/t/007_first_multi.pl | 83 +
  src/tools/pgindent/typedefs.list | 4 +-
- 217 files changed, 7023 insertions(+), 2128 deletions(-)
+ 217 files changed, 7020 insertions(+), 2123 deletions(-)
 
 diff --git a/contrib/amcheck/verify_heapam.c b/contrib/amcheck/verify_heapam.c
 index e5ea68b801..14ce47cf80 100644
@@ -10950,7 +10950,7 @@ index d6126d431d9..ee4c19bb0d2 100644
  	/*
  	 * We arrange to look up the needed hashing info just once per series of
 diff --git a/src/backend/utils/adt/xid.c b/src/backend/utils/adt/xid.c
-index 3d0c48769c..72d6196f82 100644
+index f746a5f97dd..8e54abda908 100644
 --- a/src/backend/utils/adt/xid.c
 +++ b/src/backend/utils/adt/xid.c
 @@ -35,7 +35,7 @@ xidin(PG_FUNCTION_ARGS)
@@ -10969,27 +10969,28 @@ index 3d0c48769c..72d6196f82 100644
 -	char	   *result = (char *) palloc(16);
 +	char	   *result = (char *) palloc(32);
  
--	snprintf(result, 16, "%lu", (unsigned long) transactionId);
+-	snprintf(result, 16, "%u", transactionId);
 +	snprintf(result, 32, "%llu", (unsigned long long) transactionId);
  	PG_RETURN_CSTRING(result);
  }
  
-@@ -56,8 +56,13 @@ Datum
+@@ -56,8 +56,14 @@ Datum
  xidrecv(PG_FUNCTION_ARGS)
  {
  	StringInfo	buf = (StringInfo) PG_GETARG_POINTER(0);
 +	uint32		lo,
 +				hi;
 +
-+	lo = (uint32) pq_getmsgint(buf, sizeof(TransactionId));
-+	hi = (uint32) pq_getmsgint(buf, sizeof(TransactionId));
++	/* Match xidsend(): two network-order uint32 halves, low half first. */
++	lo = (uint32) pq_getmsgint(buf, sizeof(lo));
++	hi = (uint32) pq_getmsgint(buf, sizeof(hi));
  
 -	PG_RETURN_TRANSACTIONID((TransactionId) pq_getmsgint(buf, sizeof(TransactionId)));
 +	PG_RETURN_TRANSACTIONID((uint64) lo + ((uint64) hi << 32));
  }
  
  /*
-@@ -68,9 +73,15 @@ xidsend(PG_FUNCTION_ARGS)
+@@ -68,9 +74,15 @@ xidsend(PG_FUNCTION_ARGS)
  {
  	TransactionId arg1 = PG_GETARG_TRANSACTIONID(0);
  	StringInfoData buf;
@@ -11006,7 +11007,7 @@ index 3d0c48769c..72d6196f82 100644
  	PG_RETURN_BYTEA_P(pq_endtypsend(&buf));
  }
  
-@@ -101,13 +112,13 @@ xidneq(PG_FUNCTION_ARGS)
+@@ -101,13 +113,13 @@ xidneq(PG_FUNCTION_ARGS)
  Datum
  hashxid(PG_FUNCTION_ARGS)
  {
@@ -11022,7 +11023,7 @@ index 3d0c48769c..72d6196f82 100644
  }
  
  /*
-@@ -121,9 +132,9 @@ xid_age(PG_FUNCTION_ARGS)
+@@ -121,9 +133,9 @@ xid_age(PG_FUNCTION_ARGS)
  
  	/* Permanent XIDs are always infinitely old */
  	if (!TransactionIdIsNormal(xid))
@@ -11034,7 +11035,7 @@ index 3d0c48769c..72d6196f82 100644
  }
  
  /*
-@@ -136,9 +147,9 @@ mxid_age(PG_FUNCTION_ARGS)
+@@ -136,9 +148,9 @@ mxid_age(PG_FUNCTION_ARGS)
  	MultiXactId now = ReadNextMultiXactId();
  
  	if (!MultiXactIdIsValid(xid))
@@ -11046,7 +11047,7 @@ index 3d0c48769c..72d6196f82 100644
  }
  
  /*
-@@ -154,7 +165,7 @@ xidComparator(const void *arg1, const void *arg2)
+@@ -154,7 +166,7 @@ xidComparator(const void *arg1, const void *arg2)
  	TransactionId xid1 = *(const TransactionId *) arg1;
  	TransactionId xid2 = *(const TransactionId *) arg2;
  
@@ -11055,7 +11056,7 @@ index 3d0c48769c..72d6196f82 100644
  }
  
  /*
-@@ -198,7 +209,7 @@ xid8in(PG_FUNCTION_ARGS)
+@@ -198,7 +210,7 @@ xid8in(PG_FUNCTION_ARGS)
  	uint64		result;
  
  	result = uint64in_subr(str, NULL, "xid8", fcinfo->context);
@@ -11064,7 +11065,7 @@ index 3d0c48769c..72d6196f82 100644
  }
  
  Datum
-@@ -207,7 +218,7 @@ xid8out(PG_FUNCTION_ARGS)
+@@ -207,7 +219,7 @@ xid8out(PG_FUNCTION_ARGS)
  	FullTransactionId fxid = PG_GETARG_FULLTRANSACTIONID(0);
  	char	   *result = (char *) palloc(21);
  
@@ -11073,7 +11074,7 @@ index 3d0c48769c..72d6196f82 100644
  	PG_RETURN_CSTRING(result);
  }
  
-@@ -218,7 +229,7 @@ xid8recv(PG_FUNCTION_ARGS)
+@@ -218,7 +230,7 @@ xid8recv(PG_FUNCTION_ARGS)
  	uint64		value;
  
  	value = (uint64) pq_getmsgint64(buf);
@@ -11082,7 +11083,7 @@ index 3d0c48769c..72d6196f82 100644
  }
  
  Datum
-@@ -228,7 +239,7 @@ xid8send(PG_FUNCTION_ARGS)
+@@ -228,7 +240,7 @@ xid8send(PG_FUNCTION_ARGS)
  	StringInfoData buf;
  
  	pq_begintypsend(&buf);
@@ -11092,7 +11093,7 @@ index 3d0c48769c..72d6196f82 100644
  }
  
 diff --git a/src/backend/utils/adt/xid8funcs.c b/src/backend/utils/adt/xid8funcs.c
-index a211a10776..bd8ab9ec00 100644
+index c607e78d9ac..ac2e1c556f6 100644
 --- a/src/backend/utils/adt/xid8funcs.c
 +++ b/src/backend/utils/adt/xid8funcs.c
 @@ -87,8 +87,7 @@ StaticAssertDecl(MAX_BACKENDS * 2 <= PG_SNAPSHOT_MAX_NXIP,
@@ -11270,22 +11271,22 @@ index a211a10776..bd8ab9ec00 100644
   * If it points to a committed subxact the result is the subxact status even
   * though the parent xact may still be in progress or may have aborted.
 diff --git a/src/backend/utils/cache/catcache.c b/src/backend/utils/cache/catcache.c
-index 02ae7d5a83..415fe10801 100644
+index 0c8955fc61a..cbf25263602 100644
 --- a/src/backend/utils/cache/catcache.c
 +++ b/src/backend/utils/cache/catcache.c
-@@ -2220,6 +2220,7 @@ CatalogCacheCreateEntry(CatCache *cache, HeapTuple ntp, Datum *arguments,
+@@ -2246,6 +2246,7 @@ CatalogCacheCreateEntry(CatCache *cache, HeapTuple ntp, Datum *arguments,
  		memcpy((char *) ct->tuple.t_data,
  			   (const char *) dtp->t_data,
  			   dtp->t_len);
 +		HeapTupleCopyXids(&ct->tuple, dtp);
- 		MemoryContextSwitchTo(oldcxt);
  
  		if (dtp != ntp)
+ 			heap_freetuple(dtp);
 diff --git a/src/backend/utils/cache/funccache.c b/src/backend/utils/cache/funccache.c
-index afc048a051..40ee1a9c11 100644
+index 43f031d53a2..336a0dfb222 100644
 --- a/src/backend/utils/cache/funccache.c
 +++ b/src/backend/utils/cache/funccache.c
-@@ -521,7 +521,7 @@ recheck:
+@@ -535,7 +535,7 @@ recheck:
  	if (function)
  	{
  		/* We have a compiled function, but is it still valid? */
@@ -11294,7 +11295,7 @@ index afc048a051..40ee1a9c11 100644
  			ItemPointerEquals(&function->fn_tid, &procTup->t_self))
  			function_valid = true;
  		else
-@@ -615,7 +615,7 @@ recheck:
+@@ -629,7 +629,7 @@ recheck:
  		 * function from looking valid before it's fully built.)  fn_hashkey
  		 * will be set by cfunc_hashtable_insert; use_count remains zero.
  		 */
@@ -11304,10 +11305,10 @@ index afc048a051..40ee1a9c11 100644
  		function->dcallback = dcallback;
  
 diff --git a/src/backend/utils/cache/relcache.c b/src/backend/utils/cache/relcache.c
-index 915d0bc908..f5c37f02fa 100644
+index 19c4ff6e75e..63f056cbf33 100644
 --- a/src/backend/utils/cache/relcache.c
 +++ b/src/backend/utils/cache/relcache.c
-@@ -2362,8 +2362,7 @@ RelationReloadIndexInfo(Relation relation)
+@@ -2366,8 +2366,7 @@ RelationReloadIndexInfo(Relation relation)
  		relation->rd_index->indisreplident = index->indisreplident;
  
  		/* Copy xmin too, as that is needed to make sense of indcheckxmin */
@@ -11318,10 +11319,10 @@ index 915d0bc908..f5c37f02fa 100644
  		ReleaseSysCache(tuple);
  	}
 diff --git a/src/backend/utils/fmgr/fmgr.c b/src/backend/utils/fmgr/fmgr.c
-index 0fe63c6bb8..fcbc078350 100644
+index bfeceb7a92f..8b25f2adde6 100644
 --- a/src/backend/utils/fmgr/fmgr.c
 +++ b/src/backend/utils/fmgr/fmgr.c
-@@ -527,7 +527,7 @@ lookup_C_func(HeapTuple procedureTuple)
+@@ -528,7 +528,7 @@ lookup_C_func(HeapTuple procedureTuple)
  					NULL);
  	if (entry == NULL)
  		return NULL;			/* no such entry */
@@ -11330,7 +11331,7 @@ index 0fe63c6bb8..fcbc078350 100644
  		ItemPointerEquals(&entry->fn_tid, &procedureTuple->t_self))
  		return entry;			/* OK */
  	return NULL;				/* entry is out of date */
-@@ -563,7 +563,7 @@ record_C_func(HeapTuple procedureTuple,
+@@ -564,7 +564,7 @@ record_C_func(HeapTuple procedureTuple,
  					HASH_ENTER,
  					&found);
  	/* OID is already filled in */
@@ -11339,7 +11340,20 @@ index 0fe63c6bb8..fcbc078350 100644
  	entry->fn_tid = procedureTuple->t_self;
  	entry->user_fn = user_fn;
  	entry->inforec = inforec;
+diff --git a/src/backend/utils/misc/gen_guc_tables.pl b/src/backend/utils/misc/gen_guc_tables.pl
+index 8606b70bc9d..54256cabb28 100644
+--- a/src/backend/utils/misc/gen_guc_tables.pl
++++ b/src/backend/utils/misc/gen_guc_tables.pl
+@@ -47,6 +47,7 @@ sub validate_guc_entry
+ 
+ 	my %required_by_type = (
+ 		int => [qw(min max)],
++		int64 => [qw(min max)],
+ 		real => [qw(min max)],
+ 		enum => [qw(options)],
+ 		bool => [],      # no extra required fields
 diff --git a/src/backend/utils/misc/guc_parameters.dat b/src/backend/utils/misc/guc_parameters.dat
+index 15f9261dab6..45f38566ff9 100644
 --- a/src/backend/utils/misc/guc_parameters.dat
 +++ b/src/backend/utils/misc/guc_parameters.dat
 @@ -153,12 +153,12 @@
@@ -11392,12 +11406,10 @@ diff --git a/src/backend/utils/misc/guc_parameters.dat b/src/backend/utils/misc/
    boot_val => '50000000',
    min => '0',
 -  max => '1000000000',
--},
--
--{ name => 'vacuum_freeze_table_age', type => 'int', context => 'PGC_USERSET', group => 'VACUUM_FREEZING',
 +  max => '0x7FFFFFFFFFFFFFFF',
-+},
-+
+ },
+ 
+-{ name => 'vacuum_freeze_table_age', type => 'int', context => 'PGC_USERSET', group => 'VACUUM_FREEZING',
 +{ name => 'vacuum_freeze_table_age', type => 'int64', context => 'PGC_USERSET', group => 'VACUUM_FREEZING',
    short_desc => 'Age at which VACUUM should scan whole table to freeze tuples.',
    variable => 'vacuum_freeze_table_age',
@@ -11428,12 +11440,10 @@ diff --git a/src/backend/utils/misc/guc_parameters.dat b/src/backend/utils/misc/
    boot_val => '5000000',
    min => '0',
 -  max => '1000000000',
--},
--
--{ name => 'vacuum_multixact_freeze_table_age', type => 'int', context => 'PGC_USERSET', group => 'VACUUM_FREEZING',
 +  max => '0x7FFFFFFFFFFFFFFF',
-+},
-+
+ },
+ 
+-{ name => 'vacuum_multixact_freeze_table_age', type => 'int', context => 'PGC_USERSET', group => 'VACUUM_FREEZING',
 +{ name => 'vacuum_multixact_freeze_table_age', type => 'int64', context => 'PGC_USERSET', group => 'VACUUM_FREEZING',
    short_desc => 'Multixact age at which VACUUM should scan whole table to freeze tuples.',
    variable => 'vacuum_multixact_freeze_table_age',
@@ -11445,33 +11455,18 @@ diff --git a/src/backend/utils/misc/guc_parameters.dat b/src/backend/utils/misc/
  
  { name => 'vacuum_truncate', type => 'bool', context => 'PGC_USERSET', group => 'VACUUM_DEFAULT',
 diff --git a/src/backend/utils/misc/pg_controldata.c b/src/backend/utils/misc/pg_controldata.c
-index b4bccf6a34..a7803cfaef 100644
+index 028a5f54b69..323fd3280c6 100644
 --- a/src/backend/utils/misc/pg_controldata.c
 +++ b/src/backend/utils/misc/pg_controldata.c
-@@ -117,7 +117,7 @@ pg_control_checkpoint(PG_FUNCTION_ARGS)
- 	nulls[5] = false;
- 
- 	values[6] = CStringGetTextDatum(psprintf("%llu",
--											 (unsigned long long) U64FromFullTransactionId(ControlFile->checkPointCopy.nextXid)));
-+											 (unsigned long long) XidFromFullTransactionId(ControlFile->checkPointCopy.nextXid)));
+@@ -120,7 +120,7 @@ pg_control_checkpoint(PG_FUNCTION_ARGS)
  	nulls[6] = false;
  
- 	values[7] = ObjectIdGetDatum(ControlFile->checkPointCopy.nextOid);
-diff --git a/src/backend/utils/misc/postgresql.conf.sample b/src/backend/utils/misc/postgresql.conf.sample
-index dc9e2255f8..4208d0b1d4 100644
---- a/src/backend/utils/misc/postgresql.conf.sample
-+++ b/src/backend/utils/misc/postgresql.conf.sample
-@@ -706,8 +706,8 @@
- #autovacuum_vacuum_max_threshold = 100000000    # max number of row updates
-                                                 # before vacuum; -1 disables max
-                                                 # threshold
--#autovacuum_freeze_max_age = 200000000  # maximum XID age before forced vacuum
--                                        # (change requires restart)
-+#autovacuum_freeze_max_age =  10000000000       # maximum XID age before forced vacuum
-+                                                # (change requires restart)
- #autovacuum_multixact_freeze_max_age = 400000000        # maximum multixact age
-                                                         # before forced vacuum
-                                                         # (change requires restart)
+ 	values[7] = CStringGetTextDatum(psprintf("%llu",
+-											 (unsigned long long) U64FromFullTransactionId(ControlFile->checkPointCopy.nextXid)));
++											 (unsigned long long) XidFromFullTransactionId(ControlFile->checkPointCopy.nextXid)));
+ 	nulls[7] = false;
+ 
+ 	values[8] = ObjectIdGetDatum(ControlFile->checkPointCopy.nextOid);
 diff --git a/src/backend/utils/probes.d b/src/backend/utils/probes.d
 index 1929521c6a5..446aa9fc543 100644
 --- a/src/backend/utils/probes.d
@@ -11488,10 +11483,10 @@ index 1929521c6a5..446aa9fc543 100644
  	probe query__parse__start(const char *);
  	probe query__parse__done(const char *);
 diff --git a/src/backend/utils/sort/tuplesortvariants.c b/src/backend/utils/sort/tuplesortvariants.c
-index 41ac4afbf4..a7ced80d61 100644
+index 2509ac3e3a4..f341c4e38ef 100644
 --- a/src/backend/utils/sort/tuplesortvariants.c
 +++ b/src/backend/utils/sort/tuplesortvariants.c
-@@ -1476,11 +1476,16 @@ writetup_cluster(Tuplesortstate *state, LogicalTape *tape, SortTuple *stup)
+@@ -1492,11 +1492,16 @@ writetup_cluster(Tuplesortstate *state, LogicalTape *tape, SortTuple *stup)
  {
  	TuplesortPublic *base = TuplesortstateGetPublic(state);
  	HeapTuple	tuple = (HeapTuple) stup->tuple;
@@ -11501,7 +11496,8 @@ index 41ac4afbf4..a7ced80d61 100644
 +							2 * sizeof(TransactionId) + /* tuple xmin, xmax */
 +							sizeof(int);
  
- 	/* We need to store t_self, but not other fields of HeapTupleData */
+-	/* We need to store t_self, but not other fields of HeapTupleData */
++	/* Preserve t_self and full XIDs along with the tuple body. */
  	LogicalTapeWrite(tape, &tuplen, sizeof(tuplen));
  	LogicalTapeWrite(tape, &tuple->t_self, sizeof(ItemPointerData));
 +	LogicalTapeWrite(tape, &tuple->t_xmin, sizeof(TransactionId));
@@ -11509,7 +11505,7 @@ index 41ac4afbf4..a7ced80d61 100644
  	LogicalTapeWrite(tape, tuple->t_data, tuple->t_len);
  	if (base->sortopt & TUPLESORT_RANDOMACCESS) /* need trailing length word? */
  		LogicalTapeWrite(tape, &tuplen, sizeof(tuplen));
-@@ -1492,7 +1497,10 @@ readtup_cluster(Tuplesortstate *state, SortTuple *stup,
+@@ -1508,7 +1513,10 @@ readtup_cluster(Tuplesortstate *state, SortTuple *stup,
  {
  	TuplesortPublic *base = TuplesortstateGetPublic(state);
  	TuplesortClusterArg *arg = (TuplesortClusterArg *) base->arg;
@@ -11521,7 +11517,7 @@ index 41ac4afbf4..a7ced80d61 100644
  	HeapTuple	tuple = (HeapTuple) tuplesort_readtup_alloc(state,
  															t_len + HEAPTUPLESIZE);
  
-@@ -1500,6 +1508,8 @@ readtup_cluster(Tuplesortstate *state, SortTuple *stup,
+@@ -1516,6 +1524,8 @@ readtup_cluster(Tuplesortstate *state, SortTuple *stup,
  	tuple->t_data = (HeapTupleHeader) ((char *) tuple + HEAPTUPLESIZE);
  	tuple->t_len = t_len;
  	LogicalTapeReadExact(tape, &tuple->t_self, sizeof(ItemPointerData));
@@ -11531,7 +11527,7 @@ index 41ac4afbf4..a7ced80d61 100644
  	tuple->t_tableOid = InvalidOid;
  	/* Read in the tuple body */
 diff --git a/src/backend/utils/time/combocid.c b/src/backend/utils/time/combocid.c
-index 1e81557157..96193ed1aa 100644
+index 614b7c1006b..8ece545dfa0 100644
 --- a/src/backend/utils/time/combocid.c
 +++ b/src/backend/utils/time/combocid.c
 @@ -101,25 +101,27 @@ static CommandId GetRealCmax(CommandId combocid);
@@ -11608,10 +11604,10 @@ index 1e81557157..96193ed1aa 100644
  		*cmax = GetComboCommandId(cmin, *cmax);
  		*iscombo = true;
 diff --git a/src/backend/utils/time/snapmgr.c b/src/backend/utils/time/snapmgr.c
-index 9d1845567b..0fe4cf8665 100644
+index 4d959f254fe..ff9e5b720b9 100644
 --- a/src/backend/utils/time/snapmgr.c
 +++ b/src/backend/utils/time/snapmgr.c
-@@ -941,15 +941,19 @@ SnapshotResetXmin(void)
+@@ -943,15 +943,19 @@ SnapshotResetXmin(void)
  
  	if (pairingheap_is_empty(&RegisteredSnapshots))
  	{
@@ -11634,7 +11630,7 @@ index 9d1845567b..0fe4cf8665 100644
  }
  
  /*
-@@ -1099,7 +1103,7 @@ AtEOXact_Snapshot(bool isCommit, bool resetXmin)
+@@ -1101,7 +1105,7 @@ AtEOXact_Snapshot(bool isCommit, bool resetXmin)
  	if (resetXmin)
  		SnapshotResetXmin();
  
@@ -11643,7 +11639,7 @@ index 9d1845567b..0fe4cf8665 100644
  }
  
  
-@@ -1164,8 +1168,8 @@ ExportSnapshot(Snapshot snapshot)
+@@ -1166,8 +1170,8 @@ ExportSnapshot(Snapshot snapshot)
  	 * Generate file path for the snapshot.  We start numbering of snapshots
  	 * inside the transaction from 1.
  	 */
@@ -11654,7 +11650,7 @@ index 9d1845567b..0fe4cf8665 100644
  			 list_length(exportedSnapshots) + 1);
  
  	/*
-@@ -1905,7 +1909,7 @@ XidInMVCCSnapshot(TransactionId xid, Snapshot snapshot)
+@@ -1904,7 +1908,7 @@ XidInMVCCSnapshot(TransactionId xid, Snapshot snapshot)
  		if (!snapshot->suboverflowed)
  		{
  			/* we have full data, so search subxip */
@@ -11663,7 +11659,7 @@ index 9d1845567b..0fe4cf8665 100644
  				return true;
  
  			/* not there, fall through to search xip[] */
-@@ -1927,7 +1931,7 @@ XidInMVCCSnapshot(TransactionId xid, Snapshot snapshot)
+@@ -1926,7 +1930,7 @@ XidInMVCCSnapshot(TransactionId xid, Snapshot snapshot)
  				return false;
  		}
  
@@ -11672,7 +11668,7 @@ index 9d1845567b..0fe4cf8665 100644
  			return true;
  	}
  	else
-@@ -1961,7 +1965,7 @@ XidInMVCCSnapshot(TransactionId xid, Snapshot snapshot)
+@@ -1960,7 +1964,7 @@ XidInMVCCSnapshot(TransactionId xid, Snapshot snapshot)
  		 * indeterminate xid. We don't know whether it's top level or subxact
  		 * but it doesn't matter. If it's present, the xid is visible.
  		 */

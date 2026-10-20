@@ -1,0 +1,14 @@
+diff --git a/src/backend/utils/cache/relcache.c b/src/backend/utils/cache/relcache.c
+index 19c4ff6e75e..63f056cbf33 100644
+--- a/src/backend/utils/cache/relcache.c
++++ b/src/backend/utils/cache/relcache.c
+@@ -2366,8 +2366,7 @@ RelationReloadIndexInfo(Relation relation)
+ 		relation->rd_index->indisreplident = index->indisreplident;
+ 
+ 		/* Copy xmin too, as that is needed to make sense of indcheckxmin */
+-		HeapTupleHeaderSetXmin(relation->rd_indextuple->t_data,
+-							   HeapTupleHeaderGetXmin(tuple->t_data));
++		HeapTupleSetXmin(relation->rd_indextuple, HeapTupleGetXmin(tuple));
+ 
+ 		ReleaseSysCache(tuple);
+ 	}

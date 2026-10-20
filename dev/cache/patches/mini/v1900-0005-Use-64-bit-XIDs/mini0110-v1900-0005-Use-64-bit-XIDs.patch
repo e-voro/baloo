@@ -1,0 +1,13 @@
+diff --git a/src/backend/utils/misc/pg_controldata.c b/src/backend/utils/misc/pg_controldata.c
+index 028a5f54b69..323fd3280c6 100644
+--- a/src/backend/utils/misc/pg_controldata.c
++++ b/src/backend/utils/misc/pg_controldata.c
+@@ -120,7 +120,7 @@ pg_control_checkpoint(PG_FUNCTION_ARGS)
+ 	nulls[6] = false;
+ 
+ 	values[7] = CStringGetTextDatum(psprintf("%llu",
+-											 (unsigned long long) U64FromFullTransactionId(ControlFile->checkPointCopy.nextXid)));
++											 (unsigned long long) XidFromFullTransactionId(ControlFile->checkPointCopy.nextXid)));
+ 	nulls[7] = false;
+ 
+ 	values[8] = ObjectIdGetDatum(ControlFile->checkPointCopy.nextOid);
