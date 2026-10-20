@@ -50,14 +50,14 @@ Discussion: https://postgr.es/m/CAJ7c6TPDOYBYrnCAeyndkBktO0WG2xSdYduTF0nxq%2Bvfk
  doc/src/sgml/monitoring.sgml | 8 +-
  src/backend/access/common/heaptuple.c | 10 +-
  src/backend/access/common/reloptions.c | 118 +-
- src/backend/access/heap/heapam.c | 992 +-
+ src/backend/access/heap/heapam.c | 996 +-
  src/backend/access/heap/heapam_handler.c | 75 +-
  src/backend/access/heap/heapam_indexscan.c | 9 +-
  src/backend/access/heap/heapam_visibility.c | 187 +-
- src/backend/access/heap/heapam_xlog.c | 165 +-
+ src/backend/access/heap/heapam_xlog.c | 186 +-
  src/backend/access/heap/heaptoast.c | 3 +
  src/backend/access/heap/hio.c | 39 +-
- src/backend/access/heap/pruneheap.c | 83 +-
+ src/backend/access/heap/pruneheap.c | 96 +-
  src/backend/access/heap/rewriteheap.c | 101 +-
  src/backend/access/heap/vacuumlazy.c | 38 +-
  src/backend/access/nbtree/nbtpage.c | 2 +
@@ -116,7 +116,7 @@ Discussion: https://postgr.es/m/CAJ7c6TPDOYBYrnCAeyndkBktO0WG2xSdYduTF0nxq%2Bvfk
  src/backend/storage/lmgr/lock.c | 40 +-
  src/backend/storage/lmgr/predicate.c | 57 +-
  src/backend/storage/lmgr/proc.c | 15 +-
- src/backend/storage/page/bufpage.c | 253 +-
+ src/backend/storage/page/bufpage.c | 261 +-
  src/backend/utils/adt/arrayfuncs.c | 6 +-
  src/backend/utils/adt/enum.c | 2 +-
  src/backend/utils/adt/jsonfuncs.c | 2 +
@@ -191,7 +191,7 @@ Discussion: https://postgr.es/m/CAJ7c6TPDOYBYrnCAeyndkBktO0WG2xSdYduTF0nxq%2Bvfk
  src/include/storage/aio_types.h | 2 +
  src/include/storage/buf_internals.h | 3 +-
  src/include/storage/bufmgr.h | 9 +
- src/include/storage/bufpage.h | 249 +-
+ src/include/storage/bufpage.h | 270 +-
  src/include/storage/itemid.h | 2 +
  src/include/storage/locktag.h | 37 +-
  src/include/storage/proc.h | 6 +-
@@ -239,7 +239,7 @@ Discussion: https://postgr.es/m/CAJ7c6TPDOYBYrnCAeyndkBktO0WG2xSdYduTF0nxq%2Bvfk
  src/test/xid-64/t/006_zeropage.pl | 33 +
  src/test/xid-64/t/007_first_multi.pl | 83 +
  src/tools/pgindent/typedefs.list | 4 +-
- 217 files changed, 6974 insertions(+), 2114 deletions(-)
+ 217 files changed, 7027 insertions(+), 2128 deletions(-)
 
 diff --git a/contrib/amcheck/verify_heapam.c b/contrib/amcheck/verify_heapam.c
 index e5ea68b801..14ce47cf80 100644
@@ -1799,7 +1799,7 @@ diff --git a/src/backend/access/common/reloptions.c b/src/backend/access/common/
  		{"log_autovacuum_min_duration", RELOPT_TYPE_INT,
  		offsetof(StdRdOptions, autovacuum) + offsetof(AutoVacOpts, log_vacuum_min_duration)},
 diff --git a/src/backend/access/heap/heapam.c b/src/backend/access/heap/heapam.c
-index 20e30a749b0..4f2aaeb2432 100644
+index 20e30a749b0..5730e0e92e9 100644
 --- a/src/backend/access/heap/heapam.c
 +++ b/src/backend/access/heap/heapam.c
 @@ -40,12 +40,14 @@
@@ -3271,7 +3271,7 @@ index 20e30a749b0..4f2aaeb2432 100644
  			break;
  		case HEAPTUPLE_DEAD:
  			Assert(!visible);
-@@ -9531,3 +9771,515 @@ HeapCheckForSerializableConflictOut(bool visible, Relation relation,
+@@ -9531,3 +9771,519 @@ HeapCheckForSerializableConflictOut(bool visible, Relation relation,
  
  	CheckForSerializableConflictOut(relation, xid, snapshot);
  }
@@ -3383,6 +3383,7 @@ index 20e30a749b0..4f2aaeb2432 100644
 +{
 +	TransactionId	   *xid_base,
 +					   *multi_base;
++	TransactionId		prune_xid = HeapPageGetPruneXid(page);
 +	OffsetNumber		offnum,
 +						maxoff;
 +	ItemId				itemid;
@@ -3446,7 +3447,10 @@ index 20e30a749b0..4f2aaeb2432 100644
 +
 +	/* Apply xid shift to base as well */
 +	if (!multi)
++	{
 +		*xid_base += delta;
++		HeapPageSetPruneXid(page, prune_xid);
++	}
 +	else
 +		*multi_base += delta;
 +
@@ -4731,21 +4735,30 @@ index 361b76e5065..e0f58cb023d 100644
  	{
  		case SNAPSHOT_MVCC:
 diff --git a/src/backend/access/heap/heapam_xlog.c b/src/backend/access/heap/heapam_xlog.c
-index fbda931522c..642d8e98861 100644
+index fbda931522c..32d4c4d4176 100644
 --- a/src/backend/access/heap/heapam_xlog.c
 +++ b/src/backend/access/heap/heapam_xlog.c
-@@ -169,7 +169,9 @@ heap_xlog_prune_freeze(XLogReaderState *record)
- 									(xlrec.flags & XLHP_CLEANUP_LOCK) == 0,
- 									redirected, nredirected,
- 									nowdead, ndead,
--									nowunused, nunused);
-+									nowunused, nunused,
-+									(xlrec.flags & XLHP_REPAIR_FRAGMENTATION) != 0,
-+									(xlrec.flags & XLHP_TOAST_RELATION) != 0);
+@@ -161,17 +161,9 @@ heap_xlog_prune_freeze(XLogReaderState *record)
+ 		Assert(do_prune || nplans > 0 || vmflags & VISIBILITYMAP_VALID_BITS);
  
- 		/* Freeze tuples */
+ 		/*
+-		 * Update all line pointers per the record, and repair fragmentation
+-		 * if needed.
++		 * As on the primary, freeze before compaction chooses bases for a
++		 * double-xmax page.  Freeze plans only reference surviving tuples.
+ 		 */
+-		if (do_prune)
+-			heap_page_prune_execute(buffer,
+-									(xlrec.flags & XLHP_CLEANUP_LOCK) == 0,
+-									redirected, nredirected,
+-									nowdead, ndead,
+-									nowunused, nunused);
+-
+-		/* Freeze tuples */
  		for (int p = 0; p < nplans; p++)
-@@ -188,13 +190,13 @@ heap_xlog_prune_freeze(XLogReaderState *record)
+ 		{
+ 			HeapTupleFreeze frz;
+@@ -188,16 +180,29 @@ heap_xlog_prune_freeze(XLogReaderState *record)
  
  			for (int i = 0; i < plans[p].ntuples; i++)
  			{
@@ -4762,7 +4775,23 @@ index fbda931522c..642d8e98861 100644
  			}
  		}
  
-@@ -326,9 +328,6 @@ fix_infomask_from_infobits(uint8 infobits, uint16 *infomask, uint16 *infomask2)
++		/*
++		 * Update all line pointers per the record, and repair fragmentation
++		 * if needed.
++		 */
++		if (do_prune)
++			heap_page_prune_execute(buffer,
++									(xlrec.flags & XLHP_CLEANUP_LOCK) == 0,
++									redirected, nredirected,
++									nowdead, ndead,
++									nowunused, nunused,
++									(xlrec.flags & XLHP_REPAIR_FRAGMENTATION) != 0,
++									(xlrec.flags & XLHP_TOAST_RELATION) != 0);
++
+ 		/* There should be no more data */
+ 		Assert((char *) frz_offsets == dataptr + datalen);
+ 
+@@ -326,9 +331,6 @@ fix_infomask_from_infobits(uint8 infobits, uint16 *infomask, uint16 *infomask2)
  		*infomask2 |= HEAP_KEYS_UPDATED;
  }
  
@@ -4772,7 +4801,7 @@ index fbda931522c..642d8e98861 100644
  static void
  heap_xlog_delete(XLogReaderState *record)
  {
-@@ -359,6 +358,8 @@ heap_xlog_delete(XLogReaderState *record)
+@@ -359,6 +361,8 @@ heap_xlog_delete(XLogReaderState *record)
  	if (XLogReadBufferForRedo(record, HEAP_DELETE_BLKREF_HEAP,
  							  &buffer) == BLK_NEEDS_REDO)
  	{
@@ -4781,7 +4810,7 @@ index fbda931522c..642d8e98861 100644
  		page = BufferGetPage(buffer);
  
  		if (xlrec->offnum < 1 || xlrec->offnum > PageGetMaxOffsetNumber(page))
-@@ -374,10 +375,12 @@ heap_xlog_delete(XLogReaderState *record)
+@@ -374,10 +378,12 @@ heap_xlog_delete(XLogReaderState *record)
  		HeapTupleHeaderClearHotUpdated(htup);
  		fix_infomask_from_infobits(xlrec->infobits_set,
  								   &htup->t_infomask, &htup->t_infomask2);
@@ -4796,7 +4825,7 @@ index fbda931522c..642d8e98861 100644
  		HeapTupleHeaderSetCmax(htup, FirstCommandId, false);
  
  		/* Mark the page as a candidate for pruning */
-@@ -398,14 +401,11 @@ heap_xlog_delete(XLogReaderState *record)
+@@ -398,14 +404,11 @@ heap_xlog_delete(XLogReaderState *record)
  		UnlockReleaseBuffer(buffer);
  }
  
@@ -4812,7 +4841,7 @@ index fbda931522c..642d8e98861 100644
  	Buffer		buffer;
  	Page		page;
  	union
-@@ -421,6 +421,20 @@ heap_xlog_insert(XLogReaderState *record)
+@@ -421,6 +424,20 @@ heap_xlog_insert(XLogReaderState *record)
  	BlockNumber blkno;
  	ItemPointerData target_tid;
  	XLogRedoAction action;
@@ -4833,7 +4862,7 @@ index fbda931522c..642d8e98861 100644
  
  	XLogRecGetBlockTag(record, HEAP_INSERT_BLKREF_HEAP, &target_locator, NULL,
  					   &blkno);
-@@ -443,11 +457,28 @@ heap_xlog_insert(XLogReaderState *record)
+@@ -443,11 +460,28 @@ heap_xlog_insert(XLogReaderState *record)
  	 * If we inserted the first and only tuple on the page, re-initialize the
  	 * page from scratch.
  	 */
@@ -4864,7 +4893,7 @@ index fbda931522c..642d8e98861 100644
  		action = BLK_NEEDS_REDO;
  	}
  	else
-@@ -457,6 +488,7 @@ heap_xlog_insert(XLogReaderState *record)
+@@ -457,6 +491,7 @@ heap_xlog_insert(XLogReaderState *record)
  	{
  		Size		datalen;
  		char	   *data;
@@ -4872,7 +4901,7 @@ index fbda931522c..642d8e98861 100644
  
  		page = BufferGetPage(buffer);
  
-@@ -480,7 +512,8 @@ heap_xlog_insert(XLogReaderState *record)
+@@ -480,7 +515,8 @@ heap_xlog_insert(XLogReaderState *record)
  		htup->t_infomask2 = xlhdr.t_infomask2;
  		htup->t_infomask = xlhdr.t_infomask;
  		htup->t_hoff = xlhdr.t_hoff;
@@ -4882,7 +4911,7 @@ index fbda931522c..642d8e98861 100644
  		HeapTupleHeaderSetCmin(htup, FirstCommandId);
  		htup->t_ctid = target_tid;
  
-@@ -521,7 +554,7 @@ heap_xlog_insert(XLogReaderState *record)
+@@ -521,7 +557,7 @@ heap_xlog_insert(XLogReaderState *record)
  }
  
  /*
@@ -4891,7 +4920,7 @@ index fbda931522c..642d8e98861 100644
   */
  static void
  heap_xlog_multi_insert(XLogReaderState *record)
-@@ -544,12 +577,22 @@ heap_xlog_multi_insert(XLogReaderState *record)
+@@ -544,12 +580,22 @@ heap_xlog_multi_insert(XLogReaderState *record)
  	bool		isinit = (XLogRecGetInfo(record) & XLOG_HEAP_INIT_PAGE) != 0;
  	XLogRedoAction action;
  	Buffer		vmbuffer = InvalidBuffer;
@@ -4915,7 +4944,7 @@ index fbda931522c..642d8e98861 100644
  
  	XLogRecGetBlockTag(record, HEAP_MULTI_INSERT_BLKREF_HEAP, &rlocator, NULL,
  					   &blkno);
-@@ -575,7 +618,22 @@ heap_xlog_multi_insert(XLogReaderState *record)
+@@ -575,7 +621,22 @@ heap_xlog_multi_insert(XLogReaderState *record)
  	{
  		buffer = XLogInitBufferForRedo(record, HEAP_MULTI_INSERT_BLKREF_HEAP);
  		page = BufferGetPage(buffer);
@@ -4939,7 +4968,7 @@ index fbda931522c..642d8e98861 100644
  		action = BLK_NEEDS_REDO;
  	}
  	else
-@@ -598,6 +656,7 @@ heap_xlog_multi_insert(XLogReaderState *record)
+@@ -598,6 +659,7 @@ heap_xlog_multi_insert(XLogReaderState *record)
  		{
  			OffsetNumber offnum;
  			xl_multi_insert_tuple *xlhdr;
@@ -4947,7 +4976,7 @@ index fbda931522c..642d8e98861 100644
  
  			/*
  			 * If we're reinitializing the page, the tuples are stored in
-@@ -628,7 +687,8 @@ heap_xlog_multi_insert(XLogReaderState *record)
+@@ -628,7 +690,8 @@ heap_xlog_multi_insert(XLogReaderState *record)
  			htup->t_infomask2 = xlhdr->t_infomask2;
  			htup->t_infomask = xlhdr->t_infomask;
  			htup->t_hoff = xlhdr->t_hoff;
@@ -4957,7 +4986,7 @@ index fbda931522c..642d8e98861 100644
  			HeapTupleHeaderSetCmin(htup, FirstCommandId);
  			ItemPointerSetBlockNumber(&htup->t_ctid, blkno);
  			ItemPointerSetOffsetNumber(&htup->t_ctid, offnum);
-@@ -727,14 +787,14 @@ heap_xlog_multi_insert(XLogReaderState *record)
+@@ -727,14 +790,14 @@ heap_xlog_multi_insert(XLogReaderState *record)
  }
  
  /*
@@ -4974,7 +5003,7 @@ index fbda931522c..642d8e98861 100644
  	BlockNumber oldblk;
  	BlockNumber newblk;
  	ItemPointerData newtid;
-@@ -762,6 +822,20 @@ heap_xlog_update(XLogReaderState *record, bool hot_update)
+@@ -762,6 +825,20 @@ heap_xlog_update(XLogReaderState *record, bool hot_update)
  	XLogRedoAction oldaction;
  	XLogRedoAction newaction;
  	Relation	reln = NULL;
@@ -4995,7 +5024,7 @@ index fbda931522c..642d8e98861 100644
  
  	/* initialize to keep the compiler quiet */
  	oldtup.t_data = NULL;
-@@ -878,6 +952,8 @@ heap_xlog_update(XLogReaderState *record, bool hot_update)
+@@ -878,6 +955,8 @@ heap_xlog_update(XLogReaderState *record, bool hot_update)
  
  		oldtup.t_data = htup;
  		oldtup.t_len = ItemIdGetLength(lp);
@@ -5004,7 +5033,7 @@ index fbda931522c..642d8e98861 100644
  
  		htup->t_infomask &= ~(HEAP_XMAX_BITS | HEAP_MOVED);
  		htup->t_infomask2 &= ~HEAP_KEYS_UPDATED;
-@@ -887,7 +963,7 @@ heap_xlog_update(XLogReaderState *record, bool hot_update)
+@@ -887,7 +966,7 @@ heap_xlog_update(XLogReaderState *record, bool hot_update)
  			HeapTupleHeaderClearHotUpdated(htup);
  		fix_infomask_from_infobits(xlrec->old_infobits_set, &htup->t_infomask,
  								   &htup->t_infomask2);
@@ -5013,7 +5042,7 @@ index fbda931522c..642d8e98861 100644
  		HeapTupleHeaderSetCmax(htup, FirstCommandId, false);
  		/* Set forward chain link in t_ctid */
  		htup->t_ctid = newtid;
-@@ -910,11 +986,17 @@ heap_xlog_update(XLogReaderState *record, bool hot_update)
+@@ -910,11 +989,17 @@ heap_xlog_update(XLogReaderState *record, bool hot_update)
  		nbuffer = obuffer;
  		newaction = oldaction;
  	}
@@ -5033,7 +5062,7 @@ index fbda931522c..642d8e98861 100644
  		newaction = BLK_NEEDS_REDO;
  	}
  	else
-@@ -928,6 +1010,7 @@ heap_xlog_update(XLogReaderState *record, bool hot_update)
+@@ -928,6 +1013,7 @@ heap_xlog_update(XLogReaderState *record, bool hot_update)
  		char	   *recdata_end;
  		Size		datalen;
  		Size		tuplen;
@@ -5041,7 +5070,7 @@ index fbda931522c..642d8e98861 100644
  
  		recdata = XLogRecGetBlockData(record, HEAP_UPDATE_BLKREF_HEAP_NEW,
  									  &datalen);
-@@ -1007,9 +1090,10 @@ heap_xlog_update(XLogReaderState *record, bool hot_update)
+@@ -1007,9 +1093,10 @@ heap_xlog_update(XLogReaderState *record, bool hot_update)
  		htup->t_infomask = xlhdr.t_infomask;
  		htup->t_hoff = xlhdr.t_hoff;
  
@@ -5054,7 +5083,7 @@ index fbda931522c..642d8e98861 100644
  		/* Make sure there is no forward chain link in t_ctid */
  		htup->t_ctid = newtid;
  
-@@ -1053,9 +1137,6 @@ heap_xlog_update(XLogReaderState *record, bool hot_update)
+@@ -1053,9 +1140,6 @@ heap_xlog_update(XLogReaderState *record, bool hot_update)
  		XLogRecordPageWithFreeSpace(rlocator, newblk, freespace);
  }
  
@@ -5064,7 +5093,7 @@ index fbda931522c..642d8e98861 100644
  static void
  heap_xlog_confirm(XLogReaderState *record)
  {
-@@ -1092,9 +1173,6 @@ heap_xlog_confirm(XLogReaderState *record)
+@@ -1092,9 +1176,6 @@ heap_xlog_confirm(XLogReaderState *record)
  		UnlockReleaseBuffer(buffer);
  }
  
@@ -5074,7 +5103,7 @@ index fbda931522c..642d8e98861 100644
  static void
  heap_xlog_lock(XLogReaderState *record)
  {
-@@ -1126,6 +1204,8 @@ heap_xlog_lock(XLogReaderState *record)
+@@ -1126,6 +1207,8 @@ heap_xlog_lock(XLogReaderState *record)
  	if (XLogReadBufferForRedo(record, HEAP_LOCK_BLKREF_HEAP,
  							  &buffer) == BLK_NEEDS_REDO)
  	{
@@ -5083,7 +5112,7 @@ index fbda931522c..642d8e98861 100644
  		page = BufferGetPage(buffer);
  
  		offnum = xlrec->offnum;
-@@ -1154,7 +1234,9 @@ heap_xlog_lock(XLogReaderState *record)
+@@ -1154,7 +1237,9 @@ heap_xlog_lock(XLogReaderState *record)
  						   BufferGetBlockNumber(buffer),
  						   offnum);
  		}
@@ -5094,7 +5123,7 @@ index fbda931522c..642d8e98861 100644
  		HeapTupleHeaderSetCmax(htup, FirstCommandId, false);
  		PageSetLSN(page, lsn);
  		MarkBufferDirty(buffer);
-@@ -1163,9 +1245,6 @@ heap_xlog_lock(XLogReaderState *record)
+@@ -1163,9 +1248,6 @@ heap_xlog_lock(XLogReaderState *record)
  		UnlockReleaseBuffer(buffer);
  }
  
@@ -5104,7 +5133,7 @@ index fbda931522c..642d8e98861 100644
  static void
  heap_xlog_lock_updated(XLogReaderState *record)
  {
-@@ -1199,6 +1278,8 @@ heap_xlog_lock_updated(XLogReaderState *record)
+@@ -1199,6 +1281,8 @@ heap_xlog_lock_updated(XLogReaderState *record)
  	if (XLogReadBufferForRedo(record, HEAP_LOCK_BLKREF_HEAP,
  							  &buffer) == BLK_NEEDS_REDO)
  	{
@@ -5113,7 +5142,7 @@ index fbda931522c..642d8e98861 100644
  		page = BufferGetPage(buffer);
  
  		offnum = xlrec->offnum;
-@@ -1214,7 +1295,8 @@ heap_xlog_lock_updated(XLogReaderState *record)
+@@ -1214,7 +1298,8 @@ heap_xlog_lock_updated(XLogReaderState *record)
  		htup->t_infomask2 &= ~HEAP_KEYS_UPDATED;
  		fix_infomask_from_infobits(xlrec->infobits_set, &htup->t_infomask,
  								   &htup->t_infomask2);
@@ -5123,7 +5152,7 @@ index fbda931522c..642d8e98861 100644
  
  		PageSetLSN(page, lsn);
  		MarkBufferDirty(buffer);
-@@ -1223,9 +1305,6 @@ heap_xlog_lock_updated(XLogReaderState *record)
+@@ -1223,9 +1308,6 @@ heap_xlog_lock_updated(XLogReaderState *record)
  		UnlockReleaseBuffer(buffer);
  }
  
@@ -5133,7 +5162,7 @@ index fbda931522c..642d8e98861 100644
  static void
  heap_xlog_inplace(XLogReaderState *record)
  {
-@@ -1364,6 +1443,10 @@ heap_mask(char *pagedata, BlockNumber blkno)
+@@ -1364,6 +1446,10 @@ heap_mask(char *pagedata, BlockNumber blkno)
  	mask_page_lsn_and_checksum(page);
  
  	mask_page_hint_bits(page);
@@ -5255,7 +5284,7 @@ index 24c83e349c..1cbdd4a441 100644
  			/* use this page as future insert target, too */
  			RelationSetTargetBlock(relation, targetBlock);
 diff --git a/src/backend/access/heap/pruneheap.c b/src/backend/access/heap/pruneheap.c
-index e1be6c37084..5288f762c6b 100644
+index e1be6c37084..a87b3c31dda 100644
 --- a/src/backend/access/heap/pruneheap.c
 +++ b/src/backend/access/heap/pruneheap.c
 @@ -291,7 +291,7 @@ heap_page_prune_opt(Relation relation, Buffer buffer, Buffer *vmbuffer,
@@ -5318,7 +5347,24 @@ index e1be6c37084..5288f762c6b 100644
  
  		/*
  		 * Also clear the "page is full" flag, since there's no point in
-@@ -1287,11 +1293,13 @@ heap_page_prune_and_freeze(PruneFreezeParams *params,
+@@ -1281,17 +1287,30 @@ heap_page_prune_and_freeze(PruneFreezeParams *params,
+ 
+ 	if (do_prune || do_freeze || do_set_vm)
+ 	{
++		/*
++		 * Freeze before compaction can convert a double-xmax page.  The
++		 * conversion must choose bases from the final xmax values, including
++		 * updater XIDs or new MultiXacts installed by freeze plans.  Frozen
++		 * tuples are survivors, so their line pointers are still valid here.
++		 * WAL replay must use the same order.
++		 */
++		if (do_freeze)
++			heap_freeze_prepared_tuples(prstate.relation, prstate.buffer,
++										prstate.frozen, prstate.nfrozen);
++
+ 		/* Apply the planned item changes and repair page fragmentation. */
+ 		if (do_prune)
+ 		{
  			heap_page_prune_execute(prstate.buffer, false,
  									prstate.redirected, prstate.nredirected,
  									prstate.nowdead, prstate.ndead,
@@ -5327,14 +5373,15 @@ index e1be6c37084..5288f762c6b 100644
 +									true, IsToastRelation(prstate.relation));
  		}
  
- 		if (do_freeze)
+-		if (do_freeze)
 -			heap_freeze_prepared_tuples(prstate.buffer, prstate.frozen, prstate.nfrozen);
-+			heap_freeze_prepared_tuples(prstate.relation, prstate.buffer,
-+										prstate.frozen, prstate.nfrozen);
++		/* Conversion may now allow the full hint to be stored exactly. */
++		if (do_hint_prune && do_prune)
++			HeapPageSetPruneXid(prstate.page, prstate.new_prune_xid);
  
  		/* Set the visibility map and page visibility hint */
  		if (do_set_vm)
-@@ -1330,7 +1338,8 @@ heap_page_prune_and_freeze(PruneFreezeParams *params,
+@@ -1330,7 +1349,8 @@ heap_page_prune_and_freeze(PruneFreezeParams *params,
  									  prstate.frozen, prstate.nfrozen,
  									  prstate.redirected, prstate.nredirected,
  									  prstate.nowdead, prstate.ndead,
@@ -5344,7 +5391,7 @@ index e1be6c37084..5288f762c6b 100644
  		}
  	}
  
-@@ -1518,7 +1527,9 @@ heap_prune_chain(OffsetNumber maxoff, OffsetNumber rootoffnum,
+@@ -1518,7 +1538,9 @@ heap_prune_chain(OffsetNumber maxoff, OffsetNumber rootoffnum,
  	 */
  	int			ndeadchain = 0,
  				nchain = 0;
@@ -5354,7 +5401,7 @@ index e1be6c37084..5288f762c6b 100644
  	rootlp = PageGetItemId(page, rootoffnum);
  
  	/* Start from the root tuple */
-@@ -1572,12 +1583,16 @@ heap_prune_chain(OffsetNumber maxoff, OffsetNumber rootoffnum,
+@@ -1572,12 +1594,16 @@ heap_prune_chain(OffsetNumber maxoff, OffsetNumber rootoffnum,
  		Assert(ItemIdIsNormal(lp));
  
  		htup = (HeapTupleHeader) PageGetItem(page, lp);
@@ -5372,7 +5419,7 @@ index e1be6c37084..5288f762c6b 100644
  			break;
  
  		/*
-@@ -1591,7 +1606,7 @@ heap_prune_chain(OffsetNumber maxoff, OffsetNumber rootoffnum,
+@@ -1591,7 +1617,7 @@ heap_prune_chain(OffsetNumber maxoff, OffsetNumber rootoffnum,
  
  				/* Remember the last DEAD tuple seen */
  				ndeadchain = nchain;
@@ -5381,7 +5428,7 @@ index e1be6c37084..5288f762c6b 100644
  													  &prstate->latest_xid_removed);
  				/* Advance to next chain member */
  				break;
-@@ -1641,7 +1656,7 @@ heap_prune_chain(OffsetNumber maxoff, OffsetNumber rootoffnum,
+@@ -1641,7 +1667,7 @@ heap_prune_chain(OffsetNumber maxoff, OffsetNumber rootoffnum,
  		 */
  		Assert(ItemPointerGetBlockNumber(&htup->t_ctid) == prstate->block);
  		offnum = ItemPointerGetOffsetNumber(&htup->t_ctid);
@@ -5390,7 +5437,7 @@ index e1be6c37084..5288f762c6b 100644
  	}
  
  	if (ItemIdIsRedirected(rootlp) && nchain < 2)
-@@ -1857,6 +1872,7 @@ static void
+@@ -1857,6 +1883,7 @@ static void
  heap_prune_record_unchanged_lp_normal(PruneState *prstate, OffsetNumber offnum)
  {
  	HeapTupleHeader htup;
@@ -5398,7 +5445,7 @@ index e1be6c37084..5288f762c6b 100644
  	TransactionId xmin;
  	Page		page = prstate->page;
  
-@@ -1886,6 +1902,9 @@ heap_prune_record_unchanged_lp_normal(PruneState *prstate, OffsetNumber offnum)
+@@ -1886,6 +1913,9 @@ heap_prune_record_unchanged_lp_normal(PruneState *prstate, OffsetNumber offnum)
  	 * should be negligible.)
  	 */
  	htup = (HeapTupleHeader) PageGetItem(page, PageGetItemId(page, offnum));
@@ -5408,7 +5455,7 @@ index e1be6c37084..5288f762c6b 100644
  
  	switch (prstate->htsv[offnum])
  	{
-@@ -1919,7 +1938,7 @@ heap_prune_record_unchanged_lp_normal(PruneState *prstate, OffsetNumber offnum)
+@@ -1919,7 +1949,7 @@ heap_prune_record_unchanged_lp_normal(PruneState *prstate, OffsetNumber offnum)
  			 * any snapshot that still considers the newest xid on the page to
  			 * be running. If so, we don't consider the page all-visible.
  			 */
@@ -5417,7 +5464,7 @@ index e1be6c37084..5288f762c6b 100644
  
  			/* Track newest xmin on page. */
  			if (TransactionIdFollows(xmin, prstate->newest_live_xid) &&
-@@ -1938,7 +1957,7 @@ heap_prune_record_unchanged_lp_normal(PruneState *prstate, OffsetNumber offnum)
+@@ -1938,7 +1968,7 @@ heap_prune_record_unchanged_lp_normal(PruneState *prstate, OffsetNumber offnum)
  			 * that the page is reconsidered for pruning in future.
  			 */
  			heap_prune_record_prunable(prstate,
@@ -5426,7 +5473,7 @@ index e1be6c37084..5288f762c6b 100644
  									   offnum);
  			break;
  
-@@ -1960,7 +1979,7 @@ heap_prune_record_unchanged_lp_normal(PruneState *prstate, OffsetNumber offnum)
+@@ -1960,7 +1990,7 @@ heap_prune_record_unchanged_lp_normal(PruneState *prstate, OffsetNumber offnum)
  			 * mark them all-visible during the next round of pruning.
  			 */
  			heap_prune_record_prunable(prstate,
@@ -5435,7 +5482,7 @@ index e1be6c37084..5288f762c6b 100644
  									   offnum);
  			break;
  
-@@ -1980,7 +1999,7 @@ heap_prune_record_unchanged_lp_normal(PruneState *prstate, OffsetNumber offnum)
+@@ -1980,7 +2010,7 @@ heap_prune_record_unchanged_lp_normal(PruneState *prstate, OffsetNumber offnum)
  			 * the page is reconsidered for pruning in future.
  			 */
  			heap_prune_record_prunable(prstate,
@@ -5444,7 +5491,7 @@ index e1be6c37084..5288f762c6b 100644
  									   offnum);
  			break;
  
-@@ -2000,7 +2019,7 @@ heap_prune_record_unchanged_lp_normal(PruneState *prstate, OffsetNumber offnum)
+@@ -2000,7 +2030,7 @@ heap_prune_record_unchanged_lp_normal(PruneState *prstate, OffsetNumber offnum)
  	{
  		bool		totally_frozen;
  
@@ -5453,7 +5500,7 @@ index e1be6c37084..5288f762c6b 100644
  									   prstate->cutoffs,
  									   &prstate->pagefrz,
  									   &prstate->frozen[prstate->nfrozen],
-@@ -2088,7 +2107,8 @@ void
+@@ -2088,7 +2118,8 @@ void
  heap_page_prune_execute(Buffer buffer, bool lp_truncate_only,
  						OffsetNumber *redirected, int nredirected,
  						OffsetNumber *nowdead, int ndead,
@@ -5463,7 +5510,7 @@ index e1be6c37084..5288f762c6b 100644
  {
  	Page		page = BufferGetPage(buffer);
  	OffsetNumber *offnum;
-@@ -2236,7 +2256,8 @@ heap_page_prune_execute(Buffer buffer, bool lp_truncate_only,
+@@ -2236,7 +2267,8 @@ heap_page_prune_execute(Buffer buffer, bool lp_truncate_only,
  		 * Finally, repair any fragmentation, and update the page's hint bit
  		 * about whether it has free pointers.
  		 */
@@ -5473,7 +5520,7 @@ index e1be6c37084..5288f762c6b 100644
  
  		/*
  		 * Now that the page has been modified, assert that redirect items
-@@ -2309,7 +2330,8 @@ page_verify_redirects(Page page)
+@@ -2309,7 +2341,8 @@ page_verify_redirects(Page page)
   * and reused by a completely unrelated tuple.
   */
  void
@@ -5483,7 +5530,7 @@ index e1be6c37084..5288f762c6b 100644
  {
  	OffsetNumber offnum,
  				maxoff;
-@@ -2324,7 +2346,9 @@ heap_get_root_tuples(Page page, OffsetNumber *root_offsets)
+@@ -2324,7 +2357,9 @@ heap_get_root_tuples(Page page, OffsetNumber *root_offsets)
  		HeapTupleHeader htup;
  		OffsetNumber nextoffnum;
  		TransactionId priorXmax;
@@ -5493,7 +5540,7 @@ index e1be6c37084..5288f762c6b 100644
  		/* skip unused and dead items */
  		if (!ItemIdIsUsed(lp) || ItemIdIsDead(lp))
  			continue;
-@@ -2332,6 +2356,9 @@ heap_get_root_tuples(Page page, OffsetNumber *root_offsets)
+@@ -2332,6 +2367,9 @@ heap_get_root_tuples(Page page, OffsetNumber *root_offsets)
  		if (ItemIdIsNormal(lp))
  		{
  			htup = (HeapTupleHeader) PageGetItem(page, lp);
@@ -5503,7 +5550,7 @@ index e1be6c37084..5288f762c6b 100644
  
  			/*
  			 * Check if this tuple is part of a HOT-chain rooted at some other
-@@ -2353,7 +2380,7 @@ heap_get_root_tuples(Page page, OffsetNumber *root_offsets)
+@@ -2353,7 +2391,7 @@ heap_get_root_tuples(Page page, OffsetNumber *root_offsets)
  
  			/* Set up to scan the HOT-chain */
  			nextoffnum = ItemPointerGetOffsetNumber(&htup->t_ctid);
@@ -5512,7 +5559,7 @@ index e1be6c37084..5288f762c6b 100644
  		}
  		else
  		{
-@@ -2392,9 +2419,12 @@ heap_get_root_tuples(Page page, OffsetNumber *root_offsets)
+@@ -2392,9 +2430,12 @@ heap_get_root_tuples(Page page, OffsetNumber *root_offsets)
  				break;
  
  			htup = (HeapTupleHeader) PageGetItem(page, lp);
@@ -5526,7 +5573,7 @@ index e1be6c37084..5288f762c6b 100644
  				break;
  
  			/* Remember the root line pointer for this item */
-@@ -2408,7 +2438,7 @@ heap_get_root_tuples(Page page, OffsetNumber *root_offsets)
+@@ -2408,7 +2449,7 @@ heap_get_root_tuples(Page page, OffsetNumber *root_offsets)
  			Assert(!HeapTupleHeaderIndicatesMovedPartitions(htup));
  
  			nextoffnum = ItemPointerGetOffsetNumber(&htup->t_ctid);
@@ -5535,7 +5582,7 @@ index e1be6c37084..5288f762c6b 100644
  		}
  	}
  }
-@@ -2589,7 +2619,8 @@ log_heap_prune_and_freeze(Relation relation, Buffer buffer,
+@@ -2589,7 +2630,8 @@ log_heap_prune_and_freeze(Relation relation, Buffer buffer,
  						  HeapTupleFreeze *frozen, int nfrozen,
  						  OffsetNumber *redirected, int nredirected,
  						  OffsetNumber *dead, int ndead,
@@ -5545,7 +5592,7 @@ index e1be6c37084..5288f762c6b 100644
  {
  	xl_heap_prune xlrec;
  	XLogRecPtr	recptr;
-@@ -2612,6 +2643,10 @@ log_heap_prune_and_freeze(Relation relation, Buffer buffer,
+@@ -2612,6 +2654,10 @@ log_heap_prune_and_freeze(Relation relation, Buffer buffer,
  	Assert((vmflags & VISIBILITYMAP_VALID_BITS) == vmflags);
  
  	xlrec.flags = 0;
@@ -10347,7 +10394,7 @@ index 7d01c981a1f..84401eafc5c 100644
  	MyProc->vxid.lxid = InvalidLocalTransactionId;
  	MyProc->databaseId = InvalidOid;
 diff --git a/src/backend/storage/page/bufpage.c b/src/backend/storage/page/bufpage.c
-index aac6e69595..ebe4c77947 100644
+index 1fdfda59edd..94865985b45 100644
 --- a/src/backend/storage/page/bufpage.c
 +++ b/src/backend/storage/page/bufpage.c
 @@ -26,6 +26,25 @@
@@ -10376,20 +10423,26 @@ index aac6e69595..ebe4c77947 100644
  
  /* ----------------------------------------------------------------
   *						Page support functions
-@@ -431,15 +450,148 @@ PageRestoreTempPage(Page tempPage, Page oldPage)
+@@ -441,15 +460,153 @@ PageRestoreTempPage(Page tempPage, Page oldPage)
  }
  
  /*
 - * Tuple defrag support for PageRepairFragmentation and PageIndexMultiDelete
 + * Get minimum and maximum values of xid and multixact on "double xmax" page.
-+ */
+  */
+-typedef struct itemIdCompactData
 +static void
 +heap_page_double_xmax_get_min_max(Page page,
 +								  TransactionId *xid_min,
 +								  TransactionId *xid_max,
 +								  MultiXactId *multi_min,
 +								  MultiXactId *multi_max)
-+{
+ {
+-	uint16		offsetindex;	/* linp array index */
+-	int16		itemoff;		/* page offset of item data */
+-	uint16		alignedlen;		/* MAXALIGN(item data len) */
+-} itemIdCompactData;
+-typedef itemIdCompactData *itemIdCompact;
 +	bool		xid_found = false,
 +				multi_found = false;
 +	OffsetNumber offnum,
@@ -10449,21 +10502,17 @@ index aac6e69595..ebe4c77947 100644
 +/*
 + * Add special area to heap page, so convert from "double xmax" to normal
 + * format.
-  */
--typedef struct itemIdCompactData
++ */
 +static void
 +heap_page_add_special_area(ItemIdCompact itemidbase, int nitems, Page page,
 +						   TransactionId xid_base, MultiXactId multi_base,
 +						   bool is_toast)
- {
--	uint16		offsetindex;	/* linp array index */
--	int16		itemoff;		/* page offset of item data */
--	uint16		alignedlen;		/* MAXALIGN(item data len) */
--} itemIdCompactData;
--typedef itemIdCompactData *itemIdCompact;
-+	char		newPage[BLCKSZ];
++{
++	PGAlignedBlock newbuf = {0};
++	Page		newPage = newbuf.data;
 +	PageHeader	phdr = (PageHeader) page;
 +	PageHeader	new_phdr = (PageHeader) newPage;
++	TransactionId prune_xid = HeapPageGetPruneXid(page);
 +	Offset		upper;
 +	int			i;
 +
@@ -10487,6 +10536,9 @@ index aac6e69595..ebe4c77947 100644
 +		special->pd_xid_base = xid_base;
 +		special->pd_multi_base = multi_base;
 +	}
++
++	/* The copied hint was absolute on the double-xmax page. */
++	HeapPageSetPruneXid(newPage, prune_xid);
 +
 +	/* sort itemIdSortData array into decreasing itemoff order */
 +	qsort((char *) itemidbase, nitems, sizeof(ItemIdCompactData),
@@ -10532,7 +10584,7 @@ index aac6e69595..ebe4c77947 100644
  
  /*
   * After removing or marking some line pointers unused, move the tuples to
-@@ -470,21 +622,47 @@ typedef itemIdCompactData *itemIdCompact;
+@@ -480,21 +637,47 @@ typedef itemIdCompactData *itemIdCompact;
   * Callers must ensure that nitems is > 0
   */
  static void
@@ -10583,7 +10635,7 @@ index aac6e69595..ebe4c77947 100644
  #ifdef USE_ASSERT_CHECKING
  		{
  			/*
-@@ -695,14 +873,14 @@ compactify_tuples(itemIdCompact itemidbase, int nitems, Page page, bool presorte
+@@ -705,14 +888,14 @@ compactify_tuples(itemIdCompact itemidbase, int nitems, Page page, bool presorte
   * the line pointer array following array truncation.
   */
  void
@@ -10601,12 +10653,15 @@ index aac6e69595..ebe4c77947 100644
  	ItemId		lp;
  	int			nline,
  				nstorage,
-@@ -776,11 +954,30 @@ PageRepairFragmentation(Page page)
+@@ -786,11 +969,33 @@ PageRepairFragmentation(Page page)
  	nstorage = itemidptr - itemidbase;
  	if (nstorage == 0)
  	{
 +		if (pd_special == PageGetPageSize(page))
 +		{
++			/* No tuples remain, and the old absolute hint is obsolete. */
++			PageClearPrunable(page);
++
 +			if (is_toast)
 +			{
 +				pd_special = PageGetPageSize(page) - sizeof(ToastPageSpecialData);
@@ -10632,9 +10687,9 @@ index aac6e69595..ebe4c77947 100644
  		/* Need to compact the page the hard way */
  		if (totallen > (Size) (pd_special - pd_lower))
  			ereport(ERROR,
-@@ -788,7 +985,25 @@ PageRepairFragmentation(Page page)
- 					 errmsg("corrupted item lengths: total %u, available space %u",
- 							(unsigned int) totallen, pd_special - pd_lower)));
+@@ -798,7 +1003,25 @@ PageRepairFragmentation(Page page)
+ 					 errmsg("corrupted item lengths: total %zu, available space %u",
+ 							totallen, pd_special - pd_lower)));
  
 -		compactify_tuples(itemidbase, nstorage, page, presorted);
 +		/*
@@ -10659,7 +10714,7 @@ index aac6e69595..ebe4c77947 100644
  	}
  
  	if (finalusedlp != nline)
-@@ -991,6 +1206,9 @@ PageGetHeapFreeSpace(const PageData *page)
+@@ -1001,6 +1224,9 @@ PageGetHeapFreeSpace(const PageData *page)
  {
  	Size		space;
  
@@ -10669,7 +10724,7 @@ index aac6e69595..ebe4c77947 100644
  	space = PageGetFreeSpace(page);
  	if (space > 0)
  	{
-@@ -1164,9 +1382,9 @@ PageIndexMultiDelete(Page page, OffsetNumber *itemnos, int nitems)
+@@ -1174,9 +1400,9 @@ PageIndexMultiDelete(Page page, OffsetNumber *itemnos, int nitems)
  	Offset		pd_upper = phdr->pd_upper;
  	Offset		pd_special = phdr->pd_special;
  	Offset		last_offset;
@@ -10681,7 +10736,7 @@ index aac6e69595..ebe4c77947 100644
  	ItemId		lp;
  	int			nline,
  				nused;
-@@ -1274,7 +1492,8 @@ PageIndexMultiDelete(Page page, OffsetNumber *itemnos, int nitems)
+@@ -1284,7 +1510,8 @@ PageIndexMultiDelete(Page page, OffsetNumber *itemnos, int nitems)
  
  	/* and compactify the tuple data */
  	if (nused > 0)
@@ -15565,7 +15620,7 @@ index 6837b35fc6d..da2f515ff51 100644
  extern bool BufferSetHintBits16(uint16 *ptr, uint16 val, Buffer buffer);
  extern bool BufferBeginSetHintBits(Buffer buffer);
 diff --git a/src/include/storage/bufpage.h b/src/include/storage/bufpage.h
-index abc2cf2a02..c2df78e55e 100644
+index 634e1e49ee5..ffe213a4847 100644
 --- a/src/include/storage/bufpage.h
 +++ b/src/include/storage/bufpage.h
 @@ -14,9 +14,12 @@
@@ -15581,7 +15636,18 @@ index abc2cf2a02..c2df78e55e 100644
  
  /* GUC variable */
  extern PGDLLIMPORT bool ignore_checksum_failure;
-@@ -166,12 +169,43 @@ typedef struct PageHeaderData
+@@ -165,7 +168,9 @@ PageXLogRecPtrSet(volatile PageXLogRecPtr *ptr, XLogRecPtr lsn)
+  * there are no flag bits relating to checksums.
+  *
+  * pd_prune_xid is a hint field that helps determine whether pruning will be
+- * useful.  It is currently unused in index pages.
++ * useful.  On heap pages, FrozenTransactionId means that the full hint XID
++ * could not be represented and pruning should be reconsidered conservatively.
++ * It is currently unused in index pages.
+  *
+  * The page version number and page size are packed together into a single
+  * uint16 field.  This is for historical reasons: before PostgreSQL 7.3,
+@@ -192,12 +197,43 @@ typedef struct PageHeaderData
  	LocationIndex pd_upper;		/* offset to end of free space */
  	LocationIndex pd_special;	/* offset to start of special space */
  	uint16		pd_pagesize_version;
@@ -15626,20 +15692,20 @@ index abc2cf2a02..c2df78e55e 100644
  /*
   * pd_flags contains the following flag bits.  Undefined bits are initialized
   * to zero and may be used in the future.
-@@ -203,7 +237,7 @@ typedef PageHeaderData *PageHeader;
+@@ -229,7 +265,7 @@ typedef PageHeaderData *PageHeader;
   * As of Release 9.3, the checksum version must also be considered when
   * handling pages.
   */
 -#define PG_PAGE_LAYOUT_VERSION		4
 +#define PG_PAGE_LAYOUT_VERSION		5
- #define PG_DATA_CHECKSUM_VERSION	1
  
  /* ----------------------------------------------------------------
-@@ -442,18 +476,197 @@ PageClearAllVisible(Page page)
+  *						page support functions
+@@ -467,25 +503,215 @@ PageClearAllVisible(Page page)
+ 	((PageHeader) page)->pd_flags &= ~PD_ALL_VISIBLE;
  }
  
- /*
-- * These two require "access/transam.h", so left as macros.
++/*
 + * Check if page is in "double xmax" format.
 + */
 +static inline bool
@@ -15683,9 +15749,11 @@ index abc2cf2a02..c2df78e55e 100644
 +/*
 + * Get pd_xid_base from page based on size of the special area.
 + */
-+static inline TransactionId
+ static inline TransactionId
+-PageGetPruneXid(const PageData *page)
 +PageGetSpecialXidBase(Page page)
-+{
+ {
+-	return ((const PageHeaderData *) page)->pd_prune_xid;
 +	int		pd_special = ((PageHeader) page)->pd_special;
 +
 +	if (pd_special == HeapPageSpecialOffset)
@@ -15697,9 +15765,18 @@ index abc2cf2a02..c2df78e55e 100644
 +	elog(PANIC, "invalid page pd_special %d", pd_special);
 +
 +	return InvalidTransactionId;	/* keep compiler quiet */
-+}
-+
-+/*
+ }
+ 
+ /*
+- * These two require "access/transam.h", so left as macros.
+- */
+-#define PageSetPrunable(page, xid) \
+-do { \
+-	Assert(TransactionIdIsNormal(xid)); \
+-	if (!TransactionIdIsValid(((PageHeader) (page))->pd_prune_xid) || \
+-		TransactionIdPrecedes(xid, ((PageHeader) (page))->pd_prune_xid)) \
+-		((PageHeader) (page))->pd_prune_xid = (xid); \
+-} while (0)
 + * Convert short xid from/to full xid.  Assertion should fail if we full xid
 + * doesn't fit to xid base.
 + */
@@ -15742,15 +15819,11 @@ index abc2cf2a02..c2df78e55e 100644
 +}
 +
 +/*
-+ * Set pd_prune_xid.
-  */
--#define PageSetPrunable(page, xid) \
--do { \
--	Assert(TransactionIdIsNormal(xid)); \
--	if (!TransactionIdIsValid(((PageHeader) (page))->pd_prune_xid) || \
--		TransactionIdPrecedes(xid, ((PageHeader) (page))->pd_prune_xid)) \
--		((PageHeader) (page))->pd_prune_xid = (xid); \
--} while (0)
++ * Set pd_prune_xid from a full XID.  Hints must not constrain the page's
++ * tuple bases: they can differ between the primary and WAL replay.  If a
++ * hint cannot be represented, use FrozenTransactionId to allow a future
++ * pruning attempt.  Tuple visibility checks still determine removability.
++ */
  #define PageClearPrunable(page) \
  	(((PageHeader) (page))->pd_prune_xid = InvalidTransactionId)
 +static inline void
@@ -15759,18 +15832,28 @@ index abc2cf2a02..c2df78e55e 100644
 +	TransactionId	base;
 +	PageHeader		pagehdr = (PageHeader) page;
 +
-+	if (HeapPageIsDoubleXmax(page))
-+		return;
-+
 +	if (!TransactionIdIsNormal(xid))
 +	{
 +		pagehdr->pd_prune_xid = xid;
 +		return;
 +	}
- 
-+	base = PageGetSpecialXidBase(page);
-+	pagehdr->pd_prune_xid = NormalTransactionIdToShort(base, xid, false);
 +
++	/* Double-xmax pages have no base; the hint itself is still 32 bits. */
++	if (HeapPageIsDoubleXmax(page))
++	{
++		pagehdr->pd_prune_xid = xid <= PG_UINT32_MAX ?
++			(ShortTransactionId) xid : FrozenTransactionId;
++		return;
++	}
++
++	base = PageGetSpecialXidBase(page);
++	/* Subtract only after checking the lower bound, avoiding overflow. */
++	if (xid < base || xid - base < FirstNormalTransactionId ||
++		xid - base > MaxShortTransactionId)
++		pagehdr->pd_prune_xid = FrozenTransactionId;
++	else
++		pagehdr->pd_prune_xid = (ShortTransactionId) (xid - base);
+ 
 +	Assert(pagehdr->pd_prune_xid <= MaxShortTransactionId);
 +}
 +
@@ -15791,15 +15874,19 @@ index abc2cf2a02..c2df78e55e 100644
 +									  ((PageHeader) (page))->pd_prune_xid);
 +}
 +
++/* Keep PG19's accessor returning a full heap-page hint XID. */
++static inline TransactionId
++PageGetPruneXid(const PageData *page)
++{
++	return HeapPageGetPruneXid((Page) page);
++}
++
 +static inline void
 +PageSetPrunable(Page page, TransactionId xid)
 +{
 +	TransactionId	prune_xid;
 +
 +	Assert(TransactionIdIsNormal(xid));
-+
-+	if (HeapPageIsDoubleXmax(page))
-+		return;
 +
 +	prune_xid = HeapPageGetPruneXid(page);
 +	if ((!TransactionIdIsValid(prune_xid) ||
@@ -15841,7 +15928,7 @@ index abc2cf2a02..c2df78e55e 100644
  
  /* ----------------------------------------------------------------
   *		extern declarations
-@@ -484,6 +697,20 @@ do { \
+@@ -517,6 +743,20 @@ do { \
  StaticAssertDecl(BLCKSZ == ((BLCKSZ / sizeof(size_t)) * sizeof(size_t)),
  				 "BLCKSZ has to be a multiple of sizeof(size_t)");
  
@@ -15862,7 +15949,7 @@ index abc2cf2a02..c2df78e55e 100644
  extern void PageInit(Page page, Size pageSize, Size specialSize);
  extern bool PageIsVerified(PageData *page, BlockNumber blkno, int flags,
  						   bool *checksum_failure_p);
-@@ -493,7 +720,7 @@ extern Page PageGetTempPage(const PageData *page);
+@@ -526,7 +766,7 @@ extern Page PageGetTempPage(const PageData *page);
  extern Page PageGetTempPageCopy(const PageData *page);
  extern Page PageGetTempPageCopySpecial(const PageData *page);
  extern void PageRestoreTempPage(Page tempPage, Page oldPage);

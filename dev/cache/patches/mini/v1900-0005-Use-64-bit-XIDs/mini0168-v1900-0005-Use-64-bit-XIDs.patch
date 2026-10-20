@@ -1,5 +1,5 @@
 diff --git a/src/include/storage/bufpage.h b/src/include/storage/bufpage.h
-index abc2cf2a02..c2df78e55e 100644
+index 634e1e49ee5..ffe213a4847 100644
 --- a/src/include/storage/bufpage.h
 +++ b/src/include/storage/bufpage.h
 @@ -14,9 +14,12 @@
@@ -15,7 +15,18 @@ index abc2cf2a02..c2df78e55e 100644
  
  /* GUC variable */
  extern PGDLLIMPORT bool ignore_checksum_failure;
-@@ -166,12 +169,43 @@ typedef struct PageHeaderData
+@@ -165,7 +168,9 @@ PageXLogRecPtrSet(volatile PageXLogRecPtr *ptr, XLogRecPtr lsn)
+  * there are no flag bits relating to checksums.
+  *
+  * pd_prune_xid is a hint field that helps determine whether pruning will be
+- * useful.  It is currently unused in index pages.
++ * useful.  On heap pages, FrozenTransactionId means that the full hint XID
++ * could not be represented and pruning should be reconsidered conservatively.
++ * It is currently unused in index pages.
+  *
+  * The page version number and page size are packed together into a single
+  * uint16 field.  This is for historical reasons: before PostgreSQL 7.3,
+@@ -192,12 +197,43 @@ typedef struct PageHeaderData
  	LocationIndex pd_upper;		/* offset to end of free space */
  	LocationIndex pd_special;	/* offset to start of special space */
  	uint16		pd_pagesize_version;
@@ -60,20 +71,20 @@ index abc2cf2a02..c2df78e55e 100644
  /*
   * pd_flags contains the following flag bits.  Undefined bits are initialized
   * to zero and may be used in the future.
-@@ -203,7 +237,7 @@ typedef PageHeaderData *PageHeader;
+@@ -229,7 +265,7 @@ typedef PageHeaderData *PageHeader;
   * As of Release 9.3, the checksum version must also be considered when
   * handling pages.
   */
 -#define PG_PAGE_LAYOUT_VERSION		4
 +#define PG_PAGE_LAYOUT_VERSION		5
- #define PG_DATA_CHECKSUM_VERSION	1
  
  /* ----------------------------------------------------------------
-@@ -442,18 +476,197 @@ PageClearAllVisible(Page page)
+  *						page support functions
+@@ -467,25 +503,215 @@ PageClearAllVisible(Page page)
+ 	((PageHeader) page)->pd_flags &= ~PD_ALL_VISIBLE;
  }
  
- /*
-- * These two require "access/transam.h", so left as macros.
++/*
 + * Check if page is in "double xmax" format.
 + */
 +static inline bool
@@ -117,9 +128,11 @@ index abc2cf2a02..c2df78e55e 100644
 +/*
 + * Get pd_xid_base from page based on size of the special area.
 + */
-+static inline TransactionId
+ static inline TransactionId
+-PageGetPruneXid(const PageData *page)
 +PageGetSpecialXidBase(Page page)
-+{
+ {
+-	return ((const PageHeaderData *) page)->pd_prune_xid;
 +	int		pd_special = ((PageHeader) page)->pd_special;
 +
 +	if (pd_special == HeapPageSpecialOffset)
@@ -131,9 +144,18 @@ index abc2cf2a02..c2df78e55e 100644
 +	elog(PANIC, "invalid page pd_special %d", pd_special);
 +
 +	return InvalidTransactionId;	/* keep compiler quiet */
-+}
-+
-+/*
+ }
+ 
+ /*
+- * These two require "access/transam.h", so left as macros.
+- */
+-#define PageSetPrunable(page, xid) \
+-do { \
+-	Assert(TransactionIdIsNormal(xid)); \
+-	if (!TransactionIdIsValid(((PageHeader) (page))->pd_prune_xid) || \
+-		TransactionIdPrecedes(xid, ((PageHeader) (page))->pd_prune_xid)) \
+-		((PageHeader) (page))->pd_prune_xid = (xid); \
+-} while (0)
 + * Convert short xid from/to full xid.  Assertion should fail if we full xid
 + * doesn't fit to xid base.
 + */
@@ -176,15 +198,11 @@ index abc2cf2a02..c2df78e55e 100644
 +}
 +
 +/*
-+ * Set pd_prune_xid.
-  */
--#define PageSetPrunable(page, xid) \
--do { \
--	Assert(TransactionIdIsNormal(xid)); \
--	if (!TransactionIdIsValid(((PageHeader) (page))->pd_prune_xid) || \
--		TransactionIdPrecedes(xid, ((PageHeader) (page))->pd_prune_xid)) \
--		((PageHeader) (page))->pd_prune_xid = (xid); \
--} while (0)
++ * Set pd_prune_xid from a full XID.  Hints must not constrain the page's
++ * tuple bases: they can differ between the primary and WAL replay.  If a
++ * hint cannot be represented, use FrozenTransactionId to allow a future
++ * pruning attempt.  Tuple visibility checks still determine removability.
++ */
  #define PageClearPrunable(page) \
  	(((PageHeader) (page))->pd_prune_xid = InvalidTransactionId)
 +static inline void
@@ -193,18 +211,28 @@ index abc2cf2a02..c2df78e55e 100644
 +	TransactionId	base;
 +	PageHeader		pagehdr = (PageHeader) page;
 +
-+	if (HeapPageIsDoubleXmax(page))
-+		return;
-+
 +	if (!TransactionIdIsNormal(xid))
 +	{
 +		pagehdr->pd_prune_xid = xid;
 +		return;
 +	}
- 
-+	base = PageGetSpecialXidBase(page);
-+	pagehdr->pd_prune_xid = NormalTransactionIdToShort(base, xid, false);
 +
++	/* Double-xmax pages have no base; the hint itself is still 32 bits. */
++	if (HeapPageIsDoubleXmax(page))
++	{
++		pagehdr->pd_prune_xid = xid <= PG_UINT32_MAX ?
++			(ShortTransactionId) xid : FrozenTransactionId;
++		return;
++	}
++
++	base = PageGetSpecialXidBase(page);
++	/* Subtract only after checking the lower bound, avoiding overflow. */
++	if (xid < base || xid - base < FirstNormalTransactionId ||
++		xid - base > MaxShortTransactionId)
++		pagehdr->pd_prune_xid = FrozenTransactionId;
++	else
++		pagehdr->pd_prune_xid = (ShortTransactionId) (xid - base);
+ 
 +	Assert(pagehdr->pd_prune_xid <= MaxShortTransactionId);
 +}
 +
@@ -225,15 +253,19 @@ index abc2cf2a02..c2df78e55e 100644
 +									  ((PageHeader) (page))->pd_prune_xid);
 +}
 +
++/* Keep PG19's accessor returning a full heap-page hint XID. */
++static inline TransactionId
++PageGetPruneXid(const PageData *page)
++{
++	return HeapPageGetPruneXid((Page) page);
++}
++
 +static inline void
 +PageSetPrunable(Page page, TransactionId xid)
 +{
 +	TransactionId	prune_xid;
 +
 +	Assert(TransactionIdIsNormal(xid));
-+
-+	if (HeapPageIsDoubleXmax(page))
-+		return;
 +
 +	prune_xid = HeapPageGetPruneXid(page);
 +	if ((!TransactionIdIsValid(prune_xid) ||
@@ -275,7 +307,7 @@ index abc2cf2a02..c2df78e55e 100644
  
  /* ----------------------------------------------------------------
   *		extern declarations
-@@ -484,6 +697,20 @@ do { \
+@@ -517,6 +743,20 @@ do { \
  StaticAssertDecl(BLCKSZ == ((BLCKSZ / sizeof(size_t)) * sizeof(size_t)),
  				 "BLCKSZ has to be a multiple of sizeof(size_t)");
  
@@ -296,7 +328,7 @@ index abc2cf2a02..c2df78e55e 100644
  extern void PageInit(Page page, Size pageSize, Size specialSize);
  extern bool PageIsVerified(PageData *page, BlockNumber blkno, int flags,
  						   bool *checksum_failure_p);
-@@ -493,7 +720,7 @@ extern Page PageGetTempPage(const PageData *page);
+@@ -526,7 +766,7 @@ extern Page PageGetTempPage(const PageData *page);
  extern Page PageGetTempPageCopy(const PageData *page);
  extern Page PageGetTempPageCopySpecial(const PageData *page);
  extern void PageRestoreTempPage(Page tempPage, Page oldPage);

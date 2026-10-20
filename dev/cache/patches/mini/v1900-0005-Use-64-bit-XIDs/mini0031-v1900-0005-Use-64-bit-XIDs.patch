@@ -1,19 +1,28 @@
 diff --git a/src/backend/access/heap/heapam_xlog.c b/src/backend/access/heap/heapam_xlog.c
-index fbda931522c..642d8e98861 100644
+index fbda931522c..32d4c4d4176 100644
 --- a/src/backend/access/heap/heapam_xlog.c
 +++ b/src/backend/access/heap/heapam_xlog.c
-@@ -169,7 +169,9 @@ heap_xlog_prune_freeze(XLogReaderState *record)
- 									(xlrec.flags & XLHP_CLEANUP_LOCK) == 0,
- 									redirected, nredirected,
- 									nowdead, ndead,
--									nowunused, nunused);
-+									nowunused, nunused,
-+									(xlrec.flags & XLHP_REPAIR_FRAGMENTATION) != 0,
-+									(xlrec.flags & XLHP_TOAST_RELATION) != 0);
+@@ -161,17 +161,9 @@ heap_xlog_prune_freeze(XLogReaderState *record)
+ 		Assert(do_prune || nplans > 0 || vmflags & VISIBILITYMAP_VALID_BITS);
  
- 		/* Freeze tuples */
+ 		/*
+-		 * Update all line pointers per the record, and repair fragmentation
+-		 * if needed.
++		 * As on the primary, freeze before compaction chooses bases for a
++		 * double-xmax page.  Freeze plans only reference surviving tuples.
+ 		 */
+-		if (do_prune)
+-			heap_page_prune_execute(buffer,
+-									(xlrec.flags & XLHP_CLEANUP_LOCK) == 0,
+-									redirected, nredirected,
+-									nowdead, ndead,
+-									nowunused, nunused);
+-
+-		/* Freeze tuples */
  		for (int p = 0; p < nplans; p++)
-@@ -188,13 +190,13 @@ heap_xlog_prune_freeze(XLogReaderState *record)
+ 		{
+ 			HeapTupleFreeze frz;
+@@ -188,16 +180,29 @@ heap_xlog_prune_freeze(XLogReaderState *record)
  
  			for (int i = 0; i < plans[p].ntuples; i++)
  			{
@@ -30,7 +39,23 @@ index fbda931522c..642d8e98861 100644
  			}
  		}
  
-@@ -326,9 +328,6 @@ fix_infomask_from_infobits(uint8 infobits, uint16 *infomask, uint16 *infomask2)
++		/*
++		 * Update all line pointers per the record, and repair fragmentation
++		 * if needed.
++		 */
++		if (do_prune)
++			heap_page_prune_execute(buffer,
++									(xlrec.flags & XLHP_CLEANUP_LOCK) == 0,
++									redirected, nredirected,
++									nowdead, ndead,
++									nowunused, nunused,
++									(xlrec.flags & XLHP_REPAIR_FRAGMENTATION) != 0,
++									(xlrec.flags & XLHP_TOAST_RELATION) != 0);
++
+ 		/* There should be no more data */
+ 		Assert((char *) frz_offsets == dataptr + datalen);
+ 
+@@ -326,9 +331,6 @@ fix_infomask_from_infobits(uint8 infobits, uint16 *infomask, uint16 *infomask2)
  		*infomask2 |= HEAP_KEYS_UPDATED;
  }
  
@@ -40,7 +65,7 @@ index fbda931522c..642d8e98861 100644
  static void
  heap_xlog_delete(XLogReaderState *record)
  {
-@@ -359,6 +358,8 @@ heap_xlog_delete(XLogReaderState *record)
+@@ -359,6 +361,8 @@ heap_xlog_delete(XLogReaderState *record)
  	if (XLogReadBufferForRedo(record, HEAP_DELETE_BLKREF_HEAP,
  							  &buffer) == BLK_NEEDS_REDO)
  	{
@@ -49,7 +74,7 @@ index fbda931522c..642d8e98861 100644
  		page = BufferGetPage(buffer);
  
  		if (xlrec->offnum < 1 || xlrec->offnum > PageGetMaxOffsetNumber(page))
-@@ -374,10 +375,12 @@ heap_xlog_delete(XLogReaderState *record)
+@@ -374,10 +378,12 @@ heap_xlog_delete(XLogReaderState *record)
  		HeapTupleHeaderClearHotUpdated(htup);
  		fix_infomask_from_infobits(xlrec->infobits_set,
  								   &htup->t_infomask, &htup->t_infomask2);
@@ -64,7 +89,7 @@ index fbda931522c..642d8e98861 100644
  		HeapTupleHeaderSetCmax(htup, FirstCommandId, false);
  
  		/* Mark the page as a candidate for pruning */
-@@ -398,14 +401,11 @@ heap_xlog_delete(XLogReaderState *record)
+@@ -398,14 +404,11 @@ heap_xlog_delete(XLogReaderState *record)
  		UnlockReleaseBuffer(buffer);
  }
  
@@ -80,7 +105,7 @@ index fbda931522c..642d8e98861 100644
  	Buffer		buffer;
  	Page		page;
  	union
-@@ -421,6 +421,20 @@ heap_xlog_insert(XLogReaderState *record)
+@@ -421,6 +424,20 @@ heap_xlog_insert(XLogReaderState *record)
  	BlockNumber blkno;
  	ItemPointerData target_tid;
  	XLogRedoAction action;
@@ -101,7 +126,7 @@ index fbda931522c..642d8e98861 100644
  
  	XLogRecGetBlockTag(record, HEAP_INSERT_BLKREF_HEAP, &target_locator, NULL,
  					   &blkno);
-@@ -443,11 +457,28 @@ heap_xlog_insert(XLogReaderState *record)
+@@ -443,11 +460,28 @@ heap_xlog_insert(XLogReaderState *record)
  	 * If we inserted the first and only tuple on the page, re-initialize the
  	 * page from scratch.
  	 */
@@ -132,7 +157,7 @@ index fbda931522c..642d8e98861 100644
  		action = BLK_NEEDS_REDO;
  	}
  	else
-@@ -457,6 +488,7 @@ heap_xlog_insert(XLogReaderState *record)
+@@ -457,6 +491,7 @@ heap_xlog_insert(XLogReaderState *record)
  	{
  		Size		datalen;
  		char	   *data;
@@ -140,7 +165,7 @@ index fbda931522c..642d8e98861 100644
  
  		page = BufferGetPage(buffer);
  
-@@ -480,7 +512,8 @@ heap_xlog_insert(XLogReaderState *record)
+@@ -480,7 +515,8 @@ heap_xlog_insert(XLogReaderState *record)
  		htup->t_infomask2 = xlhdr.t_infomask2;
  		htup->t_infomask = xlhdr.t_infomask;
  		htup->t_hoff = xlhdr.t_hoff;
@@ -150,7 +175,7 @@ index fbda931522c..642d8e98861 100644
  		HeapTupleHeaderSetCmin(htup, FirstCommandId);
  		htup->t_ctid = target_tid;
  
-@@ -521,7 +554,7 @@ heap_xlog_insert(XLogReaderState *record)
+@@ -521,7 +557,7 @@ heap_xlog_insert(XLogReaderState *record)
  }
  
  /*
@@ -159,7 +184,7 @@ index fbda931522c..642d8e98861 100644
   */
  static void
  heap_xlog_multi_insert(XLogReaderState *record)
-@@ -544,12 +577,22 @@ heap_xlog_multi_insert(XLogReaderState *record)
+@@ -544,12 +580,22 @@ heap_xlog_multi_insert(XLogReaderState *record)
  	bool		isinit = (XLogRecGetInfo(record) & XLOG_HEAP_INIT_PAGE) != 0;
  	XLogRedoAction action;
  	Buffer		vmbuffer = InvalidBuffer;
@@ -183,7 +208,7 @@ index fbda931522c..642d8e98861 100644
  
  	XLogRecGetBlockTag(record, HEAP_MULTI_INSERT_BLKREF_HEAP, &rlocator, NULL,
  					   &blkno);
-@@ -575,7 +618,22 @@ heap_xlog_multi_insert(XLogReaderState *record)
+@@ -575,7 +621,22 @@ heap_xlog_multi_insert(XLogReaderState *record)
  	{
  		buffer = XLogInitBufferForRedo(record, HEAP_MULTI_INSERT_BLKREF_HEAP);
  		page = BufferGetPage(buffer);
@@ -207,7 +232,7 @@ index fbda931522c..642d8e98861 100644
  		action = BLK_NEEDS_REDO;
  	}
  	else
-@@ -598,6 +656,7 @@ heap_xlog_multi_insert(XLogReaderState *record)
+@@ -598,6 +659,7 @@ heap_xlog_multi_insert(XLogReaderState *record)
  		{
  			OffsetNumber offnum;
  			xl_multi_insert_tuple *xlhdr;
@@ -215,7 +240,7 @@ index fbda931522c..642d8e98861 100644
  
  			/*
  			 * If we're reinitializing the page, the tuples are stored in
-@@ -628,7 +687,8 @@ heap_xlog_multi_insert(XLogReaderState *record)
+@@ -628,7 +690,8 @@ heap_xlog_multi_insert(XLogReaderState *record)
  			htup->t_infomask2 = xlhdr->t_infomask2;
  			htup->t_infomask = xlhdr->t_infomask;
  			htup->t_hoff = xlhdr->t_hoff;
@@ -225,7 +250,7 @@ index fbda931522c..642d8e98861 100644
  			HeapTupleHeaderSetCmin(htup, FirstCommandId);
  			ItemPointerSetBlockNumber(&htup->t_ctid, blkno);
  			ItemPointerSetOffsetNumber(&htup->t_ctid, offnum);
-@@ -727,14 +787,14 @@ heap_xlog_multi_insert(XLogReaderState *record)
+@@ -727,14 +790,14 @@ heap_xlog_multi_insert(XLogReaderState *record)
  }
  
  /*
@@ -242,7 +267,7 @@ index fbda931522c..642d8e98861 100644
  	BlockNumber oldblk;
  	BlockNumber newblk;
  	ItemPointerData newtid;
-@@ -762,6 +822,20 @@ heap_xlog_update(XLogReaderState *record, bool hot_update)
+@@ -762,6 +825,20 @@ heap_xlog_update(XLogReaderState *record, bool hot_update)
  	XLogRedoAction oldaction;
  	XLogRedoAction newaction;
  	Relation	reln = NULL;
@@ -263,7 +288,7 @@ index fbda931522c..642d8e98861 100644
  
  	/* initialize to keep the compiler quiet */
  	oldtup.t_data = NULL;
-@@ -878,6 +952,8 @@ heap_xlog_update(XLogReaderState *record, bool hot_update)
+@@ -878,6 +955,8 @@ heap_xlog_update(XLogReaderState *record, bool hot_update)
  
  		oldtup.t_data = htup;
  		oldtup.t_len = ItemIdGetLength(lp);
@@ -272,7 +297,7 @@ index fbda931522c..642d8e98861 100644
  
  		htup->t_infomask &= ~(HEAP_XMAX_BITS | HEAP_MOVED);
  		htup->t_infomask2 &= ~HEAP_KEYS_UPDATED;
-@@ -887,7 +963,7 @@ heap_xlog_update(XLogReaderState *record, bool hot_update)
+@@ -887,7 +966,7 @@ heap_xlog_update(XLogReaderState *record, bool hot_update)
  			HeapTupleHeaderClearHotUpdated(htup);
  		fix_infomask_from_infobits(xlrec->old_infobits_set, &htup->t_infomask,
  								   &htup->t_infomask2);
@@ -281,7 +306,7 @@ index fbda931522c..642d8e98861 100644
  		HeapTupleHeaderSetCmax(htup, FirstCommandId, false);
  		/* Set forward chain link in t_ctid */
  		htup->t_ctid = newtid;
-@@ -910,11 +986,17 @@ heap_xlog_update(XLogReaderState *record, bool hot_update)
+@@ -910,11 +989,17 @@ heap_xlog_update(XLogReaderState *record, bool hot_update)
  		nbuffer = obuffer;
  		newaction = oldaction;
  	}
@@ -301,7 +326,7 @@ index fbda931522c..642d8e98861 100644
  		newaction = BLK_NEEDS_REDO;
  	}
  	else
-@@ -928,6 +1010,7 @@ heap_xlog_update(XLogReaderState *record, bool hot_update)
+@@ -928,6 +1013,7 @@ heap_xlog_update(XLogReaderState *record, bool hot_update)
  		char	   *recdata_end;
  		Size		datalen;
  		Size		tuplen;
@@ -309,7 +334,7 @@ index fbda931522c..642d8e98861 100644
  
  		recdata = XLogRecGetBlockData(record, HEAP_UPDATE_BLKREF_HEAP_NEW,
  									  &datalen);
-@@ -1007,9 +1090,10 @@ heap_xlog_update(XLogReaderState *record, bool hot_update)
+@@ -1007,9 +1093,10 @@ heap_xlog_update(XLogReaderState *record, bool hot_update)
  		htup->t_infomask = xlhdr.t_infomask;
  		htup->t_hoff = xlhdr.t_hoff;
  
@@ -322,7 +347,7 @@ index fbda931522c..642d8e98861 100644
  		/* Make sure there is no forward chain link in t_ctid */
  		htup->t_ctid = newtid;
  
-@@ -1053,9 +1137,6 @@ heap_xlog_update(XLogReaderState *record, bool hot_update)
+@@ -1053,9 +1140,6 @@ heap_xlog_update(XLogReaderState *record, bool hot_update)
  		XLogRecordPageWithFreeSpace(rlocator, newblk, freespace);
  }
  
@@ -332,7 +357,7 @@ index fbda931522c..642d8e98861 100644
  static void
  heap_xlog_confirm(XLogReaderState *record)
  {
-@@ -1092,9 +1173,6 @@ heap_xlog_confirm(XLogReaderState *record)
+@@ -1092,9 +1176,6 @@ heap_xlog_confirm(XLogReaderState *record)
  		UnlockReleaseBuffer(buffer);
  }
  
@@ -342,7 +367,7 @@ index fbda931522c..642d8e98861 100644
  static void
  heap_xlog_lock(XLogReaderState *record)
  {
-@@ -1126,6 +1204,8 @@ heap_xlog_lock(XLogReaderState *record)
+@@ -1126,6 +1207,8 @@ heap_xlog_lock(XLogReaderState *record)
  	if (XLogReadBufferForRedo(record, HEAP_LOCK_BLKREF_HEAP,
  							  &buffer) == BLK_NEEDS_REDO)
  	{
@@ -351,7 +376,7 @@ index fbda931522c..642d8e98861 100644
  		page = BufferGetPage(buffer);
  
  		offnum = xlrec->offnum;
-@@ -1154,7 +1234,9 @@ heap_xlog_lock(XLogReaderState *record)
+@@ -1154,7 +1237,9 @@ heap_xlog_lock(XLogReaderState *record)
  						   BufferGetBlockNumber(buffer),
  						   offnum);
  		}
@@ -362,7 +387,7 @@ index fbda931522c..642d8e98861 100644
  		HeapTupleHeaderSetCmax(htup, FirstCommandId, false);
  		PageSetLSN(page, lsn);
  		MarkBufferDirty(buffer);
-@@ -1163,9 +1245,6 @@ heap_xlog_lock(XLogReaderState *record)
+@@ -1163,9 +1248,6 @@ heap_xlog_lock(XLogReaderState *record)
  		UnlockReleaseBuffer(buffer);
  }
  
@@ -372,7 +397,7 @@ index fbda931522c..642d8e98861 100644
  static void
  heap_xlog_lock_updated(XLogReaderState *record)
  {
-@@ -1199,6 +1278,8 @@ heap_xlog_lock_updated(XLogReaderState *record)
+@@ -1199,6 +1281,8 @@ heap_xlog_lock_updated(XLogReaderState *record)
  	if (XLogReadBufferForRedo(record, HEAP_LOCK_BLKREF_HEAP,
  							  &buffer) == BLK_NEEDS_REDO)
  	{
@@ -381,7 +406,7 @@ index fbda931522c..642d8e98861 100644
  		page = BufferGetPage(buffer);
  
  		offnum = xlrec->offnum;
-@@ -1214,7 +1295,8 @@ heap_xlog_lock_updated(XLogReaderState *record)
+@@ -1214,7 +1298,8 @@ heap_xlog_lock_updated(XLogReaderState *record)
  		htup->t_infomask2 &= ~HEAP_KEYS_UPDATED;
  		fix_infomask_from_infobits(xlrec->infobits_set, &htup->t_infomask,
  								   &htup->t_infomask2);
@@ -391,7 +416,7 @@ index fbda931522c..642d8e98861 100644
  
  		PageSetLSN(page, lsn);
  		MarkBufferDirty(buffer);
-@@ -1223,9 +1305,6 @@ heap_xlog_lock_updated(XLogReaderState *record)
+@@ -1223,9 +1308,6 @@ heap_xlog_lock_updated(XLogReaderState *record)
  		UnlockReleaseBuffer(buffer);
  }
  
@@ -401,7 +426,7 @@ index fbda931522c..642d8e98861 100644
  static void
  heap_xlog_inplace(XLogReaderState *record)
  {
-@@ -1364,6 +1443,10 @@ heap_mask(char *pagedata, BlockNumber blkno)
+@@ -1364,6 +1446,10 @@ heap_mask(char *pagedata, BlockNumber blkno)
  	mask_page_lsn_and_checksum(page);
  
  	mask_page_hint_bits(page);

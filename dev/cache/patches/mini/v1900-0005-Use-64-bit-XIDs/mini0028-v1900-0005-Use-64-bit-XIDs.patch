@@ -1,5 +1,5 @@
 diff --git a/src/backend/access/heap/heapam.c b/src/backend/access/heap/heapam.c
-index 20e30a749b0..4f2aaeb2432 100644
+index 20e30a749b0..5730e0e92e9 100644
 --- a/src/backend/access/heap/heapam.c
 +++ b/src/backend/access/heap/heapam.c
 @@ -40,12 +40,14 @@
@@ -1471,7 +1471,7 @@ index 20e30a749b0..4f2aaeb2432 100644
  			break;
  		case HEAPTUPLE_DEAD:
  			Assert(!visible);
-@@ -9531,3 +9771,515 @@ HeapCheckForSerializableConflictOut(bool visible, Relation relation,
+@@ -9531,3 +9771,519 @@ HeapCheckForSerializableConflictOut(bool visible, Relation relation,
  
  	CheckForSerializableConflictOut(relation, xid, snapshot);
  }
@@ -1583,6 +1583,7 @@ index 20e30a749b0..4f2aaeb2432 100644
 +{
 +	TransactionId	   *xid_base,
 +					   *multi_base;
++	TransactionId		prune_xid = HeapPageGetPruneXid(page);
 +	OffsetNumber		offnum,
 +						maxoff;
 +	ItemId				itemid;
@@ -1646,7 +1647,10 @@ index 20e30a749b0..4f2aaeb2432 100644
 +
 +	/* Apply xid shift to base as well */
 +	if (!multi)
++	{
 +		*xid_base += delta;
++		HeapPageSetPruneXid(page, prune_xid);
++	}
 +	else
 +		*multi_base += delta;
 +
@@ -1987,51 +1991,3 @@ index 20e30a749b0..4f2aaeb2432 100644
 +			elog(PANIC, "heap3_redo: unknown op code %u", info);
 +	}
 +}
-diff --git a/src/backend/access/heap/heapam_indexscan.c b/src/backend/access/heap/heapam_indexscan.c
-index 33d14f1de7d..50f72a3de3e 100644
---- a/src/backend/access/heap/heapam_indexscan.c
-+++ b/src/backend/access/heap/heapam_indexscan.c
-@@ -113,6 +113,8 @@ heap_hot_search_buffer(ItemPointer tid, Relation relation, Buffer buffer,
- 	Assert(TransactionIdIsValid(RecentXmin));
- 	Assert(BufferGetBlockNumber(buffer) == blkno);
- 
-+	heapTuple->t_self = *tid;
-+
- 	/* Scan through possible multiple members of HOT-chain */
- 	for (;;)
- 	{
-@@ -148,6 +150,7 @@ heap_hot_search_buffer(ItemPointer tid, Relation relation, Buffer buffer,
- 		heapTuple->t_data = (HeapTupleHeader) PageGetItem(page, lp);
- 		heapTuple->t_len = ItemIdGetLength(lp);
- 		heapTuple->t_tableOid = RelationGetRelid(relation);
-+		HeapTupleCopyXidsFromPage(buffer, heapTuple, page);
- 		ItemPointerSet(&heapTuple->t_self, blkno, offnum);
- 
- 		/*
-@@ -162,7 +165,7 @@ heap_hot_search_buffer(ItemPointer tid, Relation relation, Buffer buffer,
- 		 */
- 		if (TransactionIdIsValid(prev_xmax) &&
- 			!TransactionIdEquals(prev_xmax,
--								 HeapTupleHeaderGetXmin(heapTuple->t_data)))
-+								 HeapTupleGetXmin(heapTuple)))
- 			break;
- 
- 		/*
-@@ -183,7 +186,7 @@ heap_hot_search_buffer(ItemPointer tid, Relation relation, Buffer buffer,
- 			{
- 				ItemPointerSetOffsetNumber(tid, offnum);
- 				PredicateLockTID(relation, &heapTuple->t_self, snapshot,
--								 HeapTupleHeaderGetXmin(heapTuple->t_data));
-+								 HeapTupleGetXmin(heapTuple));
- 				if (all_dead)
- 					*all_dead = false;
- 				return true;
-@@ -218,7 +221,7 @@ heap_hot_search_buffer(ItemPointer tid, Relation relation, Buffer buffer,
- 				   blkno);
- 			offnum = ItemPointerGetOffsetNumber(&heapTuple->t_data->t_ctid);
- 			at_chain_start = false;
--			prev_xmax = HeapTupleHeaderGetUpdateXid(heapTuple->t_data);
-+			prev_xmax = HeapTupleGetUpdateXidAny(heapTuple);
- 		}
- 		else
- 			break;				/* end of chain */
