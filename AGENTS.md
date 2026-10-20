@@ -423,31 +423,80 @@ pages or a separate tuple-XID payload to prune WAL.
   file is touched by this probe; utility/TAP/full-build tests remain pending
   until remaining 0005 headers/definitions, including segresize.c, are applied.
 
-## IMPORTANT: paused before mini0122(check.c)
+## IMPORTANT: upgrade fixes completed; stop before mini0126(pg_upgrade.c)
 
-- New upgrade logic topic under the user's stop rule; mini0122(check.c)
-  remains unapplied. The original patch's post-upgrade hook calls
-  invalidate_spgist_indexes/invalidate_gin_indexes/invalidate_external_indexes
-  with **(&old_cluster, true)**. The old cluster is normally stopped here;
-  the hook starts the new cluster. The helper in mini0131(version.c) writes
-  REINDEX scripts and updates pg_index.indisvalid only when check_mode=false.
-  Current calls can target a stopped server and never perform that work.
-- Proposed correction: keep the pre-upgrade (&old_cluster, true) checks;
-  change only the post-upgrade calls to **(&new_cluster, false)**. This
-  follows the existing hash-index upgrade pattern. Validate target selection,
-  emitted REINDEX instructions and index invalidation before accepting it.
-- **Tantor 18 follow-up: "needed for fix rebase into Tantor 18".** The bad
-  post-upgrade calls originate in the original PG18 xid64 patch, not vanilla
-  PostgreSQL. Backport the correction once implemented and validated; task
-  recorded in codex_todo.txt. Compare with later user-provided fixes first.
-- The new is_xid_wraparound() query also extracts low bits with
-  **tx % 4294967295**, which is not low-32-bit extraction. For full XID
-  4294967396 it gives 101 instead of 100; for 12884901913 it gives 28 instead
-  of 25. Proposed modulus is **4294967296**. Arithmetic and source flow are
-  checked; no live pg_upgrade reproduction has been run.
-- Trace the wraparound result through mini0126(pg_upgrade.c)'s
-  set_frozenxids choice before finalizing the correction. Also review the
-  forthcoming placeholder XID_FORMATCHANGE_CAT_VER=999999999 and how old
-  32-bit versus already-xid64 clusters are recognized. Do not claim those
-  upgrade cases supported from context application alone. Resolve these
-  findings with the user before applying mini0122(check.c).
+- **The supplied PG18 patch 0012 already fixes the index bug.** Its check.c
+  hunk changes post-upgrade invalidation to **(&new_cluster, false)**. Ported
+  into mini0122(check.c), source `20fbaf54942`; pre-upgrade checks remain
+  **(&old_cluster, true)**. The old server is stopped after restore; the new
+  server must receive pg_index.indisvalid=false updates and REINDEX scripts.
+  This defect came from the original xid64 patch, not vanilla PostgreSQL.
+- **"needed for fix rebase into Tantor 18":** verify the destination branch
+  includes supplied 0012; do not backport the same index correction twice.
+  The full patch also fixes MultiXact horizon preservation, still to be
+  incorporated when mini0126(pg_upgrade.c) is adapted.
+- Ported supplied patch 0005's format detection: get_db_infos() reads the
+  built-in pg_catalog.xid's typlen, validated as 4 or 8. Detection uses that
+  width for PG15–17 and PG19, preserving the supplied PG18 catalog-prefix
+  rule. No placeholder XID_FORMATCHANGE_CAT_VER is added. Helpers live in
+  version.c beside the checks; PG19 protocol negotiation is preserved.
+- Applied mini0127(pg_upgrade.h) early, `749ee9e8477`, and
+  mini0131(version.c) plus supporting info.c, `9a7fe213315`. Preserve PG19's
+  existing uint64 MultiXactOffset, catalog threshold and native rewrite API.
+  **Skip replaying mini0127(pg_upgrade.h) and mini0131(version.c).** Their
+  saved patches remain part of 0005; info.c has a supplemental saved patch
+  `pg19-upgrade-xid-format-info.patch` in the same mini directory.
+- mini0122(check.c) also uses the existing manual datatype-check hook:
+  original threshold=1100 wrongly skipped ordinary PG18/19 xid columns.
+  Remove the inaccurate claim that vanilla PG18 changed xid size. Replace
+  the previously discussed wraparound-query modulus 4294967295 with
+  **4294967296**, and skip this raw-32-bit horizon query for xid64 sources.
+  Preserve PG19 encoding/global-name, btree_gist and logical-slot checks.
+- mini0123(controldata.c), `b0edc882a7c`: retain full checkpoint XIDs from
+  decimal and epoch:xid / epoch/xid output; shift a uint64 value before OR.
+  Preserve native uint64 offsets and checksum-in-progress rejection.
+  mini0124(file.c), `c882783856d`: incorporate supplied 0007's all-zero
+  FSM/VM page handling; leave zero pages untouched, reject nonzero corrupt
+  uninitialized pages, update initialized headers before checksums. Its
+  relfilenumber.c conversion guard awaits mini0128(relfilenumber.c).
+  mini0125(meson.build), `82bde87a9e1`: add segresize.c while preserving
+  PG19 multixact readers/rewriter, slru_io and tests.
+- Validation: `dev/tests/xid64_upgrade_indexes/check.py` compiles actual
+  format/index functions with SQL/connection fixtures: 11 supported scenarios,
+  3 rejected formats, actual REINDEX file contents and invalidation queries.
+  `dev/tests/xid64_upgrade_pages/check.py` tests actual parser/rewrite functions:
+  15 decimal/epoch XID cases, three-page zero/initialized/zero files with
+  checksums on/off, 5 corrupt/truncated-file rejections. Both use UBSan;
+  page checksums are stubbed to check invocation/order, not the checksum
+  algorithm. No backend, live pg_upgrade, TAP or recovery run is claimed.
+  Seven changed aggregate sections replay on `8ca324058af` and match source;
+  all seven saved patches reverse-check. Saved artifacts/probes in Baloo
+  `0553668`, parent `db7f8b9ae19`. Aggregate remains partly adapted.
+
+### NEW LOGIC DECISION: PG19 MultiXact conversion
+
+**mini0126(pg_upgrade.c) remains unapplied under the user's stop rule.**
+XID width alone does not identify a source MultiXact layout:
+
+| Source | Member XID bytes | Offset bytes |
+| --- | ---: | ---: |
+| Vanilla PG18 | 4 | 4 |
+| Vanilla PG19 | 4 | 8 |
+| xid64 target | 8 | 8 |
+
+- The PG18 converter in mini0129(segresize.c) uses uint32 oldbuf entries and
+  four-byte offset indexing. On this host an eight-byte offset 4294967301
+  would be read as two entries 5 and 1. It also assumes short source segment
+  names, unlike PG19's long MultiXact segment names. This is a source/layout
+  finding; no cluster files were changed to demonstrate it.
+- Keeping PG19's native "offset format unchanged => copy" branch also fails:
+  member XIDs still need conversion to eight bytes, including group layout.
+  Its pre-v19 native reader cannot read a PG19 offsets file as-is either.
+- Proposed adaptation: select readers by actual source XID/offset format;
+  retain PG19's uint64 offsets and long names, convert member XIDs/groups,
+  and treat 32-bit MultiXact-ID wrap independently from offset width. Keep
+  native old-version semantics and supplied 0012's restored-horizon fix.
+  This requires a substantive conversion change; discuss before applying.
+- After approval, test all three formats, wrapped MXIDs, nonzero epochs,
+  offsets above UINT32_MAX, SLRU boundaries/names, counters and catalog
+  horizons; then live cross-version upgrades after the series builds.
