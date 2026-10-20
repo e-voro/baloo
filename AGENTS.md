@@ -225,7 +225,7 @@ pages or a separate tuple-XID payload to prune WAL.
   applies mini0096(bufpage.c) and mini0168(bufpage.h) early, and updates
   mini0028(heapam.c), mini0031(heapam_xlog.c), and mini0034(pruneheap.c).
   Saved patches/tests: Baloo `ae6b71a`, parent `0999d101da0`.
-  **Skip mini0168(bufpage.h) later. Next unapplied: mini0097(arrayfuncs.c).**
+  **Skip mini0168(bufpage.h) later. Subsequent checkpoint is below.**
 - **Pruning hint:** double-xmax pages store pd_prune_xid directly; normal xid64
   pages interpret it relative to the page base. Copying raw 1000 with new base
   997 incorrectly yielded 1997. Conversion now reads the full hint and
@@ -263,3 +263,36 @@ pages or a separate tuple-XID payload to prune WAL.
 - Backport the pruning-hint fix to Tantor 18 as requested. Keep the separate
   audit of replacement xmax ranges on already-normal pages in codex_todo.txt;
   changing conversion order does not establish that those paths are correct.
+
+## IMPORTANT: ADT checkpoint and binary xid receive bug (2026-10-20)
+
+- Applied mini0097(arrayfuncs.c), `a296d743a35`: use TYPALIGN_XID for XID
+  arrays. PG19 Datum is always uint64, so retain elmbyval=true and omit the
+  original patch's obsolete 32-bit-Datum branch. PG19 numeric alignment
+  helpers already map TYPALIGN_XID through typalign_to_alignby().
+- Applied mini0098(enum.c), `96b9c8a83f8`: read cached full xmin;
+  mini0099(jsonfuncs.c), `31fd3a7b0f8`: initialize both composite wrappers;
+  mini0101(pgstatfuncs.c), `d06bf35df8c`: include access/xact.h;
+  mini0102(rowtypes.c), `15bb0db3afa`: initialize all 12 composite wrappers.
+  PG19-only JSON, statistics, allocation and record-hashing changes were
+  reviewed and preserved. Syscache XID-copy ownership remains in the final
+  call-chain audit, with mini0105(catcache.c) still forthcoming.
+- Skipped already-applied mini0100(lockfuncs.c); its reverse check passed.
+  Saved five minis and refreshed aggregate in Baloo `9feea4d`, parent
+  `71d68115043`. Their aggregate sections replay on `8ca324058af` and match
+  source exactly; mini reverse and source whitespace checks pass. No full
+  build/runtime claim: remaining 0005 headers/typedefs are still required.
+- **Paused before mini0103(xid.c), under the user's stop-on-new-logic rule.**
+  Its xidrecv() calls pq_getmsgint(buf, sizeof(TransactionId)) twice. After
+  widening TransactionId, each requests 8 bytes, but pq_getmsgint() accepts
+  only 1, 2 or 4 and raises "unsupported integer size 8". This defect exists
+  in the original PG18 xid64 patch; PG19's xid.c changes are just copyright
+  and output-format cleanup. This finding follows directly from source;
+  no live binary-input reproduction has been run.
+- **Proposed correction, not applied:** read sizeof(lo) and sizeof(hi), both
+  uint32, preserving the sender's low-half-first, high-half-second format.
+  Each half is in network byte order. For 0x0102030405060708 the patch sends
+  05 06 07 08 01 02 03 04; pq_getmsgint64() would change its interpretation.
+  This concerns SQL xid binary I/O, separate from Hot Standby Feedback.
+  Resolve with the user before applying mini0103(xid.c), then check high-bit
+  round trips and short-input errors and later test binary COPY in a backend.
