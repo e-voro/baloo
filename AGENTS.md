@@ -172,29 +172,41 @@ pages or a separate tuple-XID payload to prune WAL.
   of 0005. Saved affected aggregate sections were applied to 8ca324058af in a
   scratch directory and matched the intended files exactly.
 
-## IMPORTANT: apply-lock XID truncation; paused before mini0092(lmgr.c) (2026-10-19)
+## IMPORTANT: full-XID apply-lock fix (2026-10-20)
 
-- Source now includes mini0090(procarray.c), commit `47c4fc82545`, and
-  mini0091(standby.c), commit `f19bebb709a`. PG19 recovery-conflict atomic flags,
-  GlobalVis `allow_update`, snapshot allocation cleanup, and slot checks remain.
-  The standby change preserves the full horizon and removes stale truncation
-  wording; it retains the original half-range guard.
-- **Stop under the user's rule for new logic decisions:**
-  `SET_LOCKTAG_APPLY_TRANSACTION` still assigns a full remote XID to uint32
-  `locktag_field3`. A compiled probe using the actual PG19 `locktag.h` gives
-  identical 16-byte tags for XIDs 100 and 4294967396, with the other IDs equal.
-  Parallel logical apply uses these keys for stream/transaction waits, so this
-  can make unrelated transactions contend. No runtime deadlock/data-loss claim
-  has been established. The omission also exists in the original PG18 patch.
-- Decide the full-width apply-lock representation before implementing it;
-  account for database/subscription IDs and stream/transaction subtype, then
-  audit producers, consumers, hashing/padding, diagnostics, and pg_locks.
-  Current LOCKTAG has no spare 32-bit field while retaining those identifiers.
-  Details and related output-field omissions are in root `codex_todo.txt`.
-- PG19 moved lock tags to `storage/locktag.h`; future mini0170(lock.h) must
-  target that header. Original mini0170 does not handle apply-transaction tags.
-  mini0092(lmgr.c) and later minis remain unapplied.
-- Validation: mini0091 reverse check and source whitespace checks passed;
-  aggregate procarray.c/standby.c sections applied to `8ca324058af` in scratch
-  and reproduced the working files exactly. Full build/recovery testing still
-  awaits remaining 0005 definitions. The lock-tag probe tests encoding only.
+- User authorized the fix after the pause before mini0092(lmgr.c). Source
+  commit `2e6c3ab42ff` applies mini0092(lmgr.c), mini0093(lock.c), and the
+  required mini0100(lockfuncs.c) and mini0170(locktag.h) early. Skip the latter
+  two when reaching their numbers. Next unapplied: mini0094(predicate.c).
+- **Cause:** SET_LOCKTAG_APPLY_TRANSACTION assigned a full remote XID to uint32
+  field3. XIDs 100 and 4294967396 therefore shared a lock key for the same
+  database, subscription and subtype. Parallel apply uses these keys for
+  stream/transaction waits; unrelated transactions could contend. This was
+  inherited from the PG18 xid64 patch, not introduced by PG19.
+- **Fix:** append uint32 locktag_field5 for the high XID half; field3 keeps the
+  low half. Preserve database/subscription IDs, subtype, type and method.
+  Every other constructor explicitly zeroes field5. LOCKTAG grows from 16 to
+  20 bytes; a static assertion enforces no padding in the bytewise hash key.
+  PG19 moved these definitions from lock.h to locktag.h.
+- Hash tables, key copies and two-phase lock records use sizeof(LOCKTAG), so
+  they include the new field. TwoPhaseLockRecord grows from 20 to 24 bytes;
+  pre-fix persisted records are not compatible. Apply locks themselves are
+  session locks and are not persisted at PREPARE. Validate ordinary prepared
+  transaction recovery after the complete series; old-state compatibility is
+  not established by this fix.
+- DescribeLockTag and pg_locks reconstruct the full remote XID; pg_locks uses
+  TransactionIdGetDatum instead of ObjectIdGetDatum. Also correct virtual-XID
+  diagnostics and speculative-token XID/token decoding to match the original
+  xid64 tag layout. Debug messages include field5; wait probes append it as
+  arg6, keeping existing argument positions. Probe documentation is updated.
+- Validation: dev/tests/xid64_locktags/check.py compiles actual constructors,
+  extracted production hashing, descriptions and pg_locks decoding with
+  fixed-width fixtures, -Werror and undefined-behavior sanitization. High-bit
+  separation, all 11 constructors, 28 decoder cases, record copying and probe
+  arity pass. All six aggregate sections replay on 8ca324058af and match the
+  source exactly; four adapted minis pass reverse checks. These are focused
+  checks, not live backend contention/recovery tests. Full build still awaits
+  later 0005 typedefs and PGPROC definitions.
+- Backport this fix to pg18xid64 and Tantor 18 as requested; see codex_todo.txt.
+  zzz0002-Logical-replication-support.patch does not fix lock keys. Its separate
+  BEGIN PREPARE length heuristic remains unapplied and needs protocol review.
