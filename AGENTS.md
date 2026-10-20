@@ -436,6 +436,10 @@ pages or a separate tuple-XID payload to prune WAL.
   change only the post-upgrade calls to **(&new_cluster, false)**. This
   follows the existing hash-index upgrade pattern. Validate target selection,
   emitted REINDEX instructions and index invalidation before accepting it.
+- **Tantor 18 follow-up: "needed for fix rebase into Tantor 18".** The bad
+  post-upgrade calls originate in the original PG18 xid64 patch, not vanilla
+  PostgreSQL. Backport the correction once implemented and validated; task
+  recorded in codex_todo.txt. Compare with later user-provided fixes first.
 - The new is_xid_wraparound() query also extracts low bits with
   **tx % 4294967295**, which is not low-32-bit extraction. For full XID
   4294967396 it gives 101 instead of 100; for 12884901913 it gives 28 instead
