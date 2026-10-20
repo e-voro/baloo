@@ -1,0 +1,136 @@
+diff --git a/src/include/storage/locktag.h b/src/include/storage/locktag.h
+index 6b122497ec6..1a315ee1e12 100644
+--- a/src/include/storage/locktag.h
++++ b/src/include/storage/locktag.h
+@@ -54,9 +54,10 @@ typedef enum LockTagType
+ extern PGDLLIMPORT const char *const LockTagTypeNames[];
+ 
+ /*
+- * The LOCKTAG struct is defined with malice aforethought to fit into 16
+- * bytes with no padding.  Note that this would need adjustment if we were
+- * to widen Oid, BlockNumber, or TransactionId to more than 32 bits.
++ * LOCKTAG must have no padding, since all its bytes participate in hashing
++ * and equality comparisons.  The fifth field holds the high half of an apply
++ * transaction's XID; the other fields retain the database, subscription, low
++ * XID half, and lock subtype.  Other lock types must set the fifth field to zero.
+  *
+  * We include lockmethodid in the locktag so that a single hash table in
+  * shared memory can store locks of different lockmethods.
+@@ -69,8 +70,11 @@ typedef struct LOCKTAG
+ 	uint16		locktag_field4; /* a 16-bit ID field */
+ 	uint8		locktag_type;	/* see enum LockTagType */
+ 	uint8		locktag_lockmethodid;	/* lockmethod indicator */
++	uint32		locktag_field5; /* high XID half for apply-transaction locks */
+ } LOCKTAG;
+ 
++StaticAssertDecl(sizeof(LOCKTAG) == 20, "LOCKTAG must not contain padding");
++
+ /*
+  * These macros define how we map logical IDs of lockable objects into
+  * the physical fields of LOCKTAG.  Use these to set up LOCKTAG values,
+@@ -83,6 +87,7 @@ typedef struct LOCKTAG
+ 	 (locktag).locktag_field2 = (reloid), \
+ 	 (locktag).locktag_field3 = 0, \
+ 	 (locktag).locktag_field4 = 0, \
++	 (locktag).locktag_field5 = 0, \
+ 	 (locktag).locktag_type = LOCKTAG_RELATION, \
+ 	 (locktag).locktag_lockmethodid = DEFAULT_LOCKMETHOD)
+ 
+@@ -92,6 +97,7 @@ typedef struct LOCKTAG
+ 	 (locktag).locktag_field2 = (reloid), \
+ 	 (locktag).locktag_field3 = 0, \
+ 	 (locktag).locktag_field4 = 0, \
++	 (locktag).locktag_field5 = 0, \
+ 	 (locktag).locktag_type = LOCKTAG_RELATION_EXTEND, \
+ 	 (locktag).locktag_lockmethodid = DEFAULT_LOCKMETHOD)
+ 
+@@ -101,6 +107,7 @@ typedef struct LOCKTAG
+ 	 (locktag).locktag_field2 = 0, \
+ 	 (locktag).locktag_field3 = 0, \
+ 	 (locktag).locktag_field4 = 0, \
++	 (locktag).locktag_field5 = 0, \
+ 	 (locktag).locktag_type = LOCKTAG_DATABASE_FROZEN_IDS, \
+ 	 (locktag).locktag_lockmethodid = DEFAULT_LOCKMETHOD)
+ 
+@@ -110,6 +117,7 @@ typedef struct LOCKTAG
+ 	 (locktag).locktag_field2 = (reloid), \
+ 	 (locktag).locktag_field3 = (blocknum), \
+ 	 (locktag).locktag_field4 = 0, \
++	 (locktag).locktag_field5 = 0, \
+ 	 (locktag).locktag_type = LOCKTAG_PAGE, \
+ 	 (locktag).locktag_lockmethodid = DEFAULT_LOCKMETHOD)
+ 
+@@ -119,24 +127,27 @@ typedef struct LOCKTAG
+ 	 (locktag).locktag_field2 = (reloid), \
+ 	 (locktag).locktag_field3 = (blocknum), \
+ 	 (locktag).locktag_field4 = (offnum), \
++	 (locktag).locktag_field5 = 0, \
+ 	 (locktag).locktag_type = LOCKTAG_TUPLE, \
+ 	 (locktag).locktag_lockmethodid = DEFAULT_LOCKMETHOD)
+ 
+ /* ID info for a transaction is its TransactionId */
+ #define SET_LOCKTAG_TRANSACTION(locktag,xid) \
+-	((locktag).locktag_field1 = (xid), \
+-	 (locktag).locktag_field2 = 0, \
++	((locktag).locktag_field1 = (uint32) (xid), \
++	 (locktag).locktag_field2 = (uint32) ((uint64) (xid) >> 32), \
+ 	 (locktag).locktag_field3 = 0, \
+ 	 (locktag).locktag_field4 = 0, \
++	 (locktag).locktag_field5 = 0, \
+ 	 (locktag).locktag_type = LOCKTAG_TRANSACTION, \
+ 	 (locktag).locktag_lockmethodid = DEFAULT_LOCKMETHOD)
+ 
+ /* ID info for a virtual transaction is its VirtualTransactionId */
+ #define SET_LOCKTAG_VIRTUALTRANSACTION(locktag,vxid) \
+ 	((locktag).locktag_field1 = (vxid).procNumber, \
+-	 (locktag).locktag_field2 = (vxid).localTransactionId, \
+-	 (locktag).locktag_field3 = 0, \
++	 (locktag).locktag_field2 = (uint32) (vxid).localTransactionId, \
++	 (locktag).locktag_field3 = (uint32) ((uint64) (vxid).localTransactionId >> 32), \
+ 	 (locktag).locktag_field4 = 0, \
++	 (locktag).locktag_field5 = 0, \
+ 	 (locktag).locktag_type = LOCKTAG_VIRTUALTRANSACTION, \
+ 	 (locktag).locktag_lockmethodid = DEFAULT_LOCKMETHOD)
+ 
+@@ -145,10 +156,11 @@ typedef struct LOCKTAG
+  * its speculative insert counter.
+  */
+ #define SET_LOCKTAG_SPECULATIVE_INSERTION(locktag,xid,token) \
+-	((locktag).locktag_field1 = (xid), \
+-	 (locktag).locktag_field2 = (token),		\
+-	 (locktag).locktag_field3 = 0, \
++	((locktag).locktag_field1 = (uint32) (xid), \
++	 (locktag).locktag_field2 = (uint32) ((uint64) (xid) >> 32), \
++	 (locktag).locktag_field3 = (token), \
+ 	 (locktag).locktag_field4 = 0, \
++	 (locktag).locktag_field5 = 0, \
+ 	 (locktag).locktag_type = LOCKTAG_SPECULATIVE_TOKEN, \
+ 	 (locktag).locktag_lockmethodid = DEFAULT_LOCKMETHOD)
+ 
+@@ -164,6 +176,7 @@ typedef struct LOCKTAG
+ 	 (locktag).locktag_field2 = (classoid), \
+ 	 (locktag).locktag_field3 = (objoid), \
+ 	 (locktag).locktag_field4 = (objsubid), \
++	 (locktag).locktag_field5 = 0, \
+ 	 (locktag).locktag_type = LOCKTAG_OBJECT, \
+ 	 (locktag).locktag_lockmethodid = DEFAULT_LOCKMETHOD)
+ 
+@@ -172,6 +185,7 @@ typedef struct LOCKTAG
+ 	 (locktag).locktag_field2 = (id2), \
+ 	 (locktag).locktag_field3 = (id3), \
+ 	 (locktag).locktag_field4 = (id4), \
++	 (locktag).locktag_field5 = 0, \
+ 	 (locktag).locktag_type = LOCKTAG_ADVISORY, \
+ 	 (locktag).locktag_lockmethodid = USER_LOCKMETHOD)
+ 
+@@ -182,8 +196,9 @@ typedef struct LOCKTAG
+ #define SET_LOCKTAG_APPLY_TRANSACTION(locktag,dboid,suboid,xid,objid) \
+ 	((locktag).locktag_field1 = (dboid), \
+ 	 (locktag).locktag_field2 = (suboid), \
+-	 (locktag).locktag_field3 = (xid), \
++	 (locktag).locktag_field3 = (uint32) (xid), \
+ 	 (locktag).locktag_field4 = (objid), \
++	 (locktag).locktag_field5 = (uint32) ((uint64) (xid) >> 32), \
+ 	 (locktag).locktag_type = LOCKTAG_APPLY_TRANSACTION, \
+ 	 (locktag).locktag_lockmethodid = DEFAULT_LOCKMETHOD)
+ 

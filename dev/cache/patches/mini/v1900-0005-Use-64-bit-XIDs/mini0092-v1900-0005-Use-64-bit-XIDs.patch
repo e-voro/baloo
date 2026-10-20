@@ -1,0 +1,55 @@
+diff --git a/src/backend/storage/lmgr/lmgr.c b/src/backend/storage/lmgr/lmgr.c
+index 2ccf7237fee..b2bfbb557e8 100644
+--- a/src/backend/storage/lmgr/lmgr.c
++++ b/src/backend/storage/lmgr/lmgr.c
+@@ -1283,21 +1283,29 @@ DescribeLockTag(StringInfo buf, const LOCKTAG *tag)
+ 							 tag->locktag_field1);
+ 			break;
+ 		case LOCKTAG_TRANSACTION:
+-			appendStringInfo(buf,
+-							 _("transaction %u"),
+-							 tag->locktag_field1);
+-			break;
++			{
++				uint64		xid;
++
++				xid = (uint64) tag->locktag_field2 << 32;
++				xid += tag->locktag_field1;
++
++				appendStringInfo(buf, _("transaction %llu"),
++								 (unsigned long long) xid);
++				break;
++			}
+ 		case LOCKTAG_VIRTUALTRANSACTION:
+ 			appendStringInfo(buf,
+-							 _("virtual transaction %d/%u"),
++							 _("virtual transaction %d/%llu"),
+ 							 tag->locktag_field1,
+-							 tag->locktag_field2);
++							 (unsigned long long) (((uint64) tag->locktag_field3 << 32) |
++												   tag->locktag_field2));
+ 			break;
+ 		case LOCKTAG_SPECULATIVE_TOKEN:
+ 			appendStringInfo(buf,
+-							 _("speculative token %u of transaction %u"),
+-							 tag->locktag_field2,
+-							 tag->locktag_field1);
++							 _("speculative token %u of transaction %llu"),
++							 tag->locktag_field3,
++							 (unsigned long long) (((uint64) tag->locktag_field2 << 32) |
++												   tag->locktag_field1));
+ 			break;
+ 		case LOCKTAG_OBJECT:
+ 			appendStringInfo(buf,
+@@ -1324,8 +1332,9 @@ DescribeLockTag(StringInfo buf, const LOCKTAG *tag)
+ 			break;
+ 		case LOCKTAG_APPLY_TRANSACTION:
+ 			appendStringInfo(buf,
+-							 _("remote transaction %u of subscription %u of database %u"),
+-							 tag->locktag_field3,
++							 _("remote transaction %llu of subscription %u of database %u"),
++							 (unsigned long long) (((uint64) tag->locktag_field5 << 32) |
++												   tag->locktag_field3),
+ 							 tag->locktag_field2,
+ 							 tag->locktag_field1);
+ 			break;

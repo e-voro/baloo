@@ -1,0 +1,57 @@
+diff --git a/src/backend/utils/adt/lockfuncs.c b/src/backend/utils/adt/lockfuncs.c
+index c3107f0d5a9..79bf2a84315 100644
+--- a/src/backend/utils/adt/lockfuncs.c
++++ b/src/backend/utils/adt/lockfuncs.c
+@@ -78,7 +78,7 @@ VXIDGetDatum(ProcNumber procNumber, LocalTransactionId lxid)
+ 	 * decimal respectively.  Note that elog.c also knows how to format a
+ 	 * vxid.
+ 	 */
+-	char		vxidstr[32];
++	char		vxidstr[64];
+ 
+ 	snprintf(vxidstr, sizeof(vxidstr), "%d/%llu", procNumber,
+ 			 (unsigned long long) lxid);
+@@ -293,7 +293,9 @@ pg_lock_status(PG_FUNCTION_ARGS)
+ 				break;
+ 			case LOCKTAG_TRANSACTION:
+ 				values[6] =
+-					TransactionIdGetDatum(instance->locktag.locktag_field1);
++					TransactionIdGetDatum(
++										  (uint64) instance->locktag.locktag_field1 |
++										  ((uint64) instance->locktag.locktag_field2 << 32));
+ 				nulls[1] = true;
+ 				nulls[2] = true;
+ 				nulls[3] = true;
+@@ -305,7 +307,8 @@ pg_lock_status(PG_FUNCTION_ARGS)
+ 				break;
+ 			case LOCKTAG_VIRTUALTRANSACTION:
+ 				values[5] = VXIDGetDatum(instance->locktag.locktag_field1,
+-										 instance->locktag.locktag_field2);
++										 (uint64) instance->locktag.locktag_field2 |
++										 ((uint64) instance->locktag.locktag_field3 << 32));
+ 				nulls[1] = true;
+ 				nulls[2] = true;
+ 				nulls[3] = true;
+@@ -317,8 +320,9 @@ pg_lock_status(PG_FUNCTION_ARGS)
+ 				break;
+ 			case LOCKTAG_SPECULATIVE_TOKEN:
+ 				values[6] =
+-					TransactionIdGetDatum(instance->locktag.locktag_field1);
+-				values[8] = ObjectIdGetDatum(instance->locktag.locktag_field2);
++					TransactionIdGetDatum((uint64) instance->locktag.locktag_field1 |
++										  ((uint64) instance->locktag.locktag_field2 << 32));
++				values[8] = ObjectIdGetDatum(instance->locktag.locktag_field3);
+ 				nulls[1] = true;
+ 				nulls[2] = true;
+ 				nulls[3] = true;
+@@ -330,7 +334,9 @@ pg_lock_status(PG_FUNCTION_ARGS)
+ 			case LOCKTAG_APPLY_TRANSACTION:
+ 				values[1] = ObjectIdGetDatum(instance->locktag.locktag_field1);
+ 				values[8] = ObjectIdGetDatum(instance->locktag.locktag_field2);
+-				values[6] = ObjectIdGetDatum(instance->locktag.locktag_field3);
++				values[6] =
++					TransactionIdGetDatum((uint64) instance->locktag.locktag_field3 |
++										  ((uint64) instance->locktag.locktag_field5 << 32));
+ 				values[9] = Int16GetDatum(instance->locktag.locktag_field4);
+ 				nulls[2] = true;
+ 				nulls[3] = true;

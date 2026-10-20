@@ -47,6 +47,7 @@ Discussion: https://postgr.es/m/CAJ7c6TPDOYBYrnCAeyndkBktO0WG2xSdYduTF0nxq%2Bvfk
  contrib/postgres_fdw/expected/postgres_fdw.out | 55 +-
  contrib/postgres_fdw/postgres_fdw.c | 9 +-
  contrib/postgres_fdw/sql/postgres_fdw.sql | 15 +-
+ doc/src/sgml/monitoring.sgml | 8 +-
  src/backend/access/common/heaptuple.c | 10 +-
  src/backend/access/common/reloptions.c | 118 +-
  src/backend/access/heap/heapam.c | 992 +-
@@ -111,15 +112,15 @@ Discussion: https://postgr.es/m/CAJ7c6TPDOYBYrnCAeyndkBktO0WG2xSdYduTF0nxq%2Bvfk
  src/backend/storage/buffer/meson.build | 1 +
  src/backend/storage/ipc/procarray.c | 183 +-
  src/backend/storage/ipc/standby.c | 17 +-
- src/backend/storage/lmgr/lmgr.c | 14 +-
- src/backend/storage/lmgr/lock.c | 4 +-
+ src/backend/storage/lmgr/lmgr.c | 31 +-
+ src/backend/storage/lmgr/lock.c | 40 +-
  src/backend/storage/lmgr/predicate.c | 36 +-
  src/backend/storage/lmgr/proc.c | 12 +-
  src/backend/storage/page/bufpage.c | 253 +-
  src/backend/utils/adt/arrayfuncs.c | 6 +-
  src/backend/utils/adt/enum.c | 2 +-
  src/backend/utils/adt/jsonfuncs.c | 2 +
- src/backend/utils/adt/lockfuncs.c | 9 +-
+ src/backend/utils/adt/lockfuncs.c | 18 +-
  src/backend/utils/adt/pgstatfuncs.c | 1 +
  src/backend/utils/adt/rowtypes.c | 12 +
  src/backend/utils/adt/xid.c | 43 +-
@@ -131,6 +132,7 @@ Discussion: https://postgr.es/m/CAJ7c6TPDOYBYrnCAeyndkBktO0WG2xSdYduTF0nxq%2Bvfk
  src/backend/utils/misc/guc_parameters.dat | 36 +-
  src/backend/utils/misc/pg_controldata.c | 2 +-
  src/backend/utils/misc/postgresql.conf.sample | 4 +-
+ src/backend/utils/probes.d | 4 +-
  src/backend/utils/sort/tuplesortvariants.c | 14 +-
  src/backend/utils/time/combocid.c | 32 +-
  src/backend/utils/time/snapmgr.c | 22 +-
@@ -191,7 +193,7 @@ Discussion: https://postgr.es/m/CAJ7c6TPDOYBYrnCAeyndkBktO0WG2xSdYduTF0nxq%2Bvfk
  src/include/storage/bufmgr.h | 9 +
  src/include/storage/bufpage.h | 249 +-
  src/include/storage/itemid.h | 2 +
- src/include/storage/lock.h | 14 +-
+ src/include/storage/locktag.h | 37 +-
  src/include/storage/proc.h | 6 +-
  src/include/storage/relation_extra_data.h | 31 +
  src/include/utils/combocid.h | 2 +-
@@ -237,7 +239,7 @@ Discussion: https://postgr.es/m/CAJ7c6TPDOYBYrnCAeyndkBktO0WG2xSdYduTF0nxq%2Bvfk
  src/test/xid-64/t/006_zeropage.pl | 33 +
  src/test/xid-64/t/007_first_multi.pl | 83 +
  src/tools/pgindent/typedefs.list | 4 +-
- 215 files changed, 6895 insertions(+), 2072 deletions(-)
+ 217 files changed, 6961 insertions(+), 2103 deletions(-)
 
 diff --git a/contrib/amcheck/verify_heapam.c b/contrib/amcheck/verify_heapam.c
 index e5ea68b801..14ce47cf80 100644
@@ -1558,6 +1560,32 @@ index 9a8f9e2813..a216352470 100644
  
  -- Test errors thrown on remote side during update
  ALTER TABLE "S 1"."T 1" ADD CONSTRAINT c2positive CHECK (c2 >= 0);
+diff --git a/doc/src/sgml/monitoring.sgml b/doc/src/sgml/monitoring.sgml
+index d60b6710bfd..08039e34120 100644
+--- a/doc/src/sgml/monitoring.sgml
++++ b/doc/src/sgml/monitoring.sgml
+@@ -8552,16 +8552,18 @@ FROM pg_stat_get_backend_idset() AS backendid;
+     </row>
+     <row>
+      <entry><literal>lock-wait-start</literal></entry>
+-     <entry><literal>(unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, LOCKMODE)</literal></entry>
++     <entry><literal>(unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, LOCKMODE, unsigned int)</literal></entry>
+      <entry>Probe that fires when a request for a heavyweight lock (lmgr lock)
+       has begun to wait because the lock is not available.
+       arg0 through arg3 are the tag fields identifying the object being
+       locked.  arg4 indicates the type of object being locked.
+-      arg5 indicates the lock type being requested.</entry>
++      arg5 indicates the lock type being requested.
++      arg6 is the fifth tag field, containing the high 32 bits of the remote
++      transaction ID for logical replication apply locks.</entry>
+     </row>
+     <row>
+      <entry><literal>lock-wait-done</literal></entry>
+-     <entry><literal>(unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, LOCKMODE)</literal></entry>
++     <entry><literal>(unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, LOCKMODE, unsigned int)</literal></entry>
+      <entry>Probe that fires when a request for a heavyweight lock (lmgr lock)
+       has finished waiting (i.e., has acquired the lock).
+       The arguments are the same as for <literal>lock-wait-start</literal>.</entry>
 diff --git a/src/backend/access/common/heaptuple.c b/src/backend/access/common/heaptuple.c
 index 74a52d8706..81d640225b 100644
 --- a/src/backend/access/common/heaptuple.c
@@ -9951,10 +9979,10 @@ index 73607e224fa..38e0c241c0c 100644
  											locator);
  	}
 diff --git a/src/backend/storage/lmgr/lmgr.c b/src/backend/storage/lmgr/lmgr.c
-index 4798eb7900..a49e92e362 100644
+index 2ccf7237fee..b2bfbb557e8 100644
 --- a/src/backend/storage/lmgr/lmgr.c
 +++ b/src/backend/storage/lmgr/lmgr.c
-@@ -1283,10 +1283,16 @@ DescribeLockTag(StringInfo buf, const LOCKTAG *tag)
+@@ -1283,21 +1283,29 @@ DescribeLockTag(StringInfo buf, const LOCKTAG *tag)
  							 tag->locktag_field1);
  			break;
  		case LOCKTAG_TRANSACTION:
@@ -9963,9 +9991,9 @@ index 4798eb7900..a49e92e362 100644
 -							 tag->locktag_field1);
 -			break;
 +			{
-+				TransactionId xid;
++				uint64		xid;
 +
-+				xid = (TransactionId) tag->locktag_field2 << 32;
++				xid = (uint64) tag->locktag_field2 << 32;
 +				xid += tag->locktag_field1;
 +
 +				appendStringInfo(buf, _("transaction %llu"),
@@ -9974,12 +10002,143 @@ index 4798eb7900..a49e92e362 100644
 +			}
  		case LOCKTAG_VIRTUALTRANSACTION:
  			appendStringInfo(buf,
- 							 _("virtual transaction %d/%u"),
+-							 _("virtual transaction %d/%u"),
++							 _("virtual transaction %d/%llu"),
+ 							 tag->locktag_field1,
+-							 tag->locktag_field2);
++							 (unsigned long long) (((uint64) tag->locktag_field3 << 32) |
++												   tag->locktag_field2));
+ 			break;
+ 		case LOCKTAG_SPECULATIVE_TOKEN:
+ 			appendStringInfo(buf,
+-							 _("speculative token %u of transaction %u"),
+-							 tag->locktag_field2,
+-							 tag->locktag_field1);
++							 _("speculative token %u of transaction %llu"),
++							 tag->locktag_field3,
++							 (unsigned long long) (((uint64) tag->locktag_field2 << 32) |
++												   tag->locktag_field1));
+ 			break;
+ 		case LOCKTAG_OBJECT:
+ 			appendStringInfo(buf,
+@@ -1324,8 +1332,9 @@ DescribeLockTag(StringInfo buf, const LOCKTAG *tag)
+ 			break;
+ 		case LOCKTAG_APPLY_TRANSACTION:
+ 			appendStringInfo(buf,
+-							 _("remote transaction %u of subscription %u of database %u"),
+-							 tag->locktag_field3,
++							 _("remote transaction %llu of subscription %u of database %u"),
++							 (unsigned long long) (((uint64) tag->locktag_field5 << 32) |
++												   tag->locktag_field3),
+ 							 tag->locktag_field2,
+ 							 tag->locktag_field1);
+ 			break;
 diff --git a/src/backend/storage/lmgr/lock.c b/src/backend/storage/lmgr/lock.c
-index 4cc7f645c3..777e4df2e8 100644
+index 8d246ed5a4e..ac0b1f702fe 100644
 --- a/src/backend/storage/lmgr/lock.c
 +++ b/src/backend/storage/lmgr/lock.c
-@@ -4215,7 +4215,7 @@ GetRunningTransactionLocks(int *nlocks)
+@@ -382,13 +382,14 @@ LOCK_PRINT(const char *where, const LOCK *lock, LOCKMODE type)
+ {
+ 	if (LOCK_DEBUG_ENABLED(&lock->tag))
+ 		elog(LOG,
+-			 "%s: lock(%p) id(%u,%u,%u,%u,%u,%u) grantMask(%x) "
++			 "%s: lock(%p) id(%u,%u,%u,%u,%u,%u,%u) grantMask(%x) "
+ 			 "req(%d,%d,%d,%d,%d,%d,%d)=%d "
+ 			 "grant(%d,%d,%d,%d,%d,%d,%d)=%d wait(%d) type(%s)",
+ 			 where, lock,
+ 			 lock->tag.locktag_field1, lock->tag.locktag_field2,
+ 			 lock->tag.locktag_field3, lock->tag.locktag_field4,
+ 			 lock->tag.locktag_type, lock->tag.locktag_lockmethodid,
++			 lock->tag.locktag_field5,
+ 			 lock->grantMask,
+ 			 lock->requested[1], lock->requested[2], lock->requested[3],
+ 			 lock->requested[4], lock->requested[5], lock->requested[6],
+@@ -709,8 +710,10 @@ LockHasWaiters(const LOCKTAG *locktag, LOCKMODE lockmode, bool sessionLock)
+ 
+ #ifdef LOCK_DEBUG
+ 	if (LOCK_DEBUG_ENABLED(locktag))
+-		elog(LOG, "LockHasWaiters: lock [%u,%u] %s",
++		elog(LOG, "LockHasWaiters: lock [%u,%u,%u,%u,%u] %s",
+ 			 locktag->locktag_field1, locktag->locktag_field2,
++			 locktag->locktag_field3, locktag->locktag_field4,
++			 locktag->locktag_field5,
+ 			 lockMethodTable->lockModeNames[lockmode]);
+ #endif
+ 
+@@ -870,8 +873,10 @@ LockAcquireExtended(const LOCKTAG *locktag,
+ 
+ #ifdef LOCK_DEBUG
+ 	if (LOCK_DEBUG_ENABLED(locktag))
+-		elog(LOG, "LockAcquire: lock [%u,%u] %s",
++		elog(LOG, "LockAcquire: lock [%u,%u,%u,%u,%u] %s",
+ 			 locktag->locktag_field1, locktag->locktag_field2,
++			 locktag->locktag_field3, locktag->locktag_field4,
++			 locktag->locktag_field5,
+ 			 lockMethodTable->lockModeNames[lockmode]);
+ #endif
+ 
+@@ -1426,11 +1431,12 @@ SetupLockInTable(LockMethod lockMethodTable, PGPROC *proc,
+ 					if (i >= (int) lockmode)
+ 						break;	/* safe: we have a lock >= req level */
+ 					elog(LOG, "deadlock risk: raising lock level"
+-						 " from %s to %s on object %u/%u/%u",
++						 " from %s to %s on object %u/%u/%u/%u/%u",
+ 						 lockMethodTable->lockModeNames[i],
+ 						 lockMethodTable->lockModeNames[lockmode],
+ 						 lock->tag.locktag_field1, lock->tag.locktag_field2,
+-						 lock->tag.locktag_field3);
++						 lock->tag.locktag_field3, lock->tag.locktag_field4,
++						 lock->tag.locktag_field5);
+ 					break;
+ 				}
+ 			}
+@@ -1452,10 +1458,11 @@ SetupLockInTable(LockMethod lockMethodTable, PGPROC *proc,
+ 	 * broken.
+ 	 */
+ 	if (proclock->holdMask & LOCKBIT_ON(lockmode))
+-		elog(ERROR, "lock %s on object %u/%u/%u is already held",
++		elog(ERROR, "lock %s on object %u/%u/%u/%u/%u is already held",
+ 			 lockMethodTable->lockModeNames[lockmode],
+ 			 lock->tag.locktag_field1, lock->tag.locktag_field2,
+-			 lock->tag.locktag_field3);
++			 lock->tag.locktag_field3, lock->tag.locktag_field4,
++			 lock->tag.locktag_field5);
+ 
+ 	return proclock;
+ }
+@@ -1947,7 +1954,8 @@ WaitOnLock(LOCALLOCK *locallock, ResourceOwner owner)
+ 									 locallock->tag.lock.locktag_field3,
+ 									 locallock->tag.lock.locktag_field4,
+ 									 locallock->tag.lock.locktag_type,
+-									 locallock->tag.mode);
++									 locallock->tag.mode,
++									 locallock->tag.lock.locktag_field5);
+ 
+ 	/* Setup error traceback support for ereport() */
+ 	waiterrcontext.callback = waitonlock_error_callback;
+@@ -2013,7 +2021,8 @@ WaitOnLock(LOCALLOCK *locallock, ResourceOwner owner)
+ 									locallock->tag.lock.locktag_field3,
+ 									locallock->tag.lock.locktag_field4,
+ 									locallock->tag.lock.locktag_type,
+-									locallock->tag.mode);
++									locallock->tag.mode,
++									locallock->tag.lock.locktag_field5);
+ 
+ 	return result;
+ }
+@@ -2126,8 +2135,10 @@ LockRelease(const LOCKTAG *locktag, LOCKMODE lockmode, bool sessionLock)
+ 
+ #ifdef LOCK_DEBUG
+ 	if (LOCK_DEBUG_ENABLED(locktag))
+-		elog(LOG, "LockRelease: lock [%u,%u] %s",
++		elog(LOG, "LockRelease: lock [%u,%u,%u,%u,%u] %s",
+ 			 locktag->locktag_field1, locktag->locktag_field2,
++			 locktag->locktag_field3, locktag->locktag_field4,
++			 locktag->locktag_field5,
+ 			 lockMethodTable->lockModeNames[lockmode]);
+ #endif
+ 
+@@ -4195,7 +4206,7 @@ GetRunningTransactionLocks(int *nlocks)
  		{
  			PGPROC	   *proc = proclock->tag.myProc;
  			LOCK	   *lock = proclock->tag.myLock;
@@ -9988,7 +10147,21 @@ index 4cc7f645c3..777e4df2e8 100644
  
  			/*
  			 * Don't record locks for transactions if we know they have
-@@ -4835,7 +4835,7 @@ VirtualXactLock(VirtualTransactionId vxid, bool wait)
+@@ -4484,10 +4495,11 @@ lock_twophase_recover(FullTransactionId fxid, uint16 info,
+ 	 * We shouldn't already hold the desired lock.
+ 	 */
+ 	if (proclock->holdMask & LOCKBIT_ON(lockmode))
+-		elog(ERROR, "lock %s on object %u/%u/%u is already held",
++		elog(ERROR, "lock %s on object %u/%u/%u/%u/%u is already held",
+ 			 lockMethodTable->lockModeNames[lockmode],
+ 			 lock->tag.locktag_field1, lock->tag.locktag_field2,
+-			 lock->tag.locktag_field3);
++			 lock->tag.locktag_field3, lock->tag.locktag_field4,
++			 lock->tag.locktag_field5);
+ 
+ 	/*
+ 	 * We ignore any possible conflicts and just grant ourselves the lock. Not
+@@ -4815,7 +4827,7 @@ VirtualXactLock(VirtualTransactionId vxid, bool wait)
  	 * so we won't save an XID of a different VXID.  It doesn't matter whether
  	 * we save this before or after setting up the primary lock table entry.
  	 */
@@ -10515,7 +10688,7 @@ index 8898f0f90a..51ba819680 100644
  
  	tuplestore_puttuple(state->tuple_store, &tuple);
 diff --git a/src/backend/utils/adt/lockfuncs.c b/src/backend/utils/adt/lockfuncs.c
-index cdf29057f2..7bc3714875 100644
+index c3107f0d5a9..79bf2a84315 100644
 --- a/src/backend/utils/adt/lockfuncs.c
 +++ b/src/backend/utils/adt/lockfuncs.c
 @@ -78,7 +78,7 @@ VXIDGetDatum(ProcNumber procNumber, LocalTransactionId lxid)
@@ -10527,25 +10700,48 @@ index cdf29057f2..7bc3714875 100644
  
  	snprintf(vxidstr, sizeof(vxidstr), "%d/%llu", procNumber,
  			 (unsigned long long) lxid);
-@@ -292,7 +292,9 @@ pg_lock_status(PG_FUNCTION_ARGS)
+@@ -293,7 +293,9 @@ pg_lock_status(PG_FUNCTION_ARGS)
  				break;
  			case LOCKTAG_TRANSACTION:
  				values[6] =
 -					TransactionIdGetDatum(instance->locktag.locktag_field1);
 +					TransactionIdGetDatum(
-+										  (TransactionId) instance->locktag.locktag_field1 |
-+										  ((TransactionId) instance->locktag.locktag_field2 << 32));
++										  (uint64) instance->locktag.locktag_field1 |
++										  ((uint64) instance->locktag.locktag_field2 << 32));
  				nulls[1] = true;
  				nulls[2] = true;
  				nulls[3] = true;
-@@ -304,7 +306,8 @@ pg_lock_status(PG_FUNCTION_ARGS)
+@@ -305,7 +307,8 @@ pg_lock_status(PG_FUNCTION_ARGS)
  				break;
  			case LOCKTAG_VIRTUALTRANSACTION:
  				values[5] = VXIDGetDatum(instance->locktag.locktag_field1,
 -										 instance->locktag.locktag_field2);
-+										 (TransactionId) instance->locktag.locktag_field2 |
-+										 ((TransactionId) instance->locktag.locktag_field3 << 32));
++										 (uint64) instance->locktag.locktag_field2 |
++										 ((uint64) instance->locktag.locktag_field3 << 32));
  				nulls[1] = true;
+ 				nulls[2] = true;
+ 				nulls[3] = true;
+@@ -317,8 +320,9 @@ pg_lock_status(PG_FUNCTION_ARGS)
+ 				break;
+ 			case LOCKTAG_SPECULATIVE_TOKEN:
+ 				values[6] =
+-					TransactionIdGetDatum(instance->locktag.locktag_field1);
+-				values[8] = ObjectIdGetDatum(instance->locktag.locktag_field2);
++					TransactionIdGetDatum((uint64) instance->locktag.locktag_field1 |
++										  ((uint64) instance->locktag.locktag_field2 << 32));
++				values[8] = ObjectIdGetDatum(instance->locktag.locktag_field3);
+ 				nulls[1] = true;
+ 				nulls[2] = true;
+ 				nulls[3] = true;
+@@ -330,7 +334,9 @@ pg_lock_status(PG_FUNCTION_ARGS)
+ 			case LOCKTAG_APPLY_TRANSACTION:
+ 				values[1] = ObjectIdGetDatum(instance->locktag.locktag_field1);
+ 				values[8] = ObjectIdGetDatum(instance->locktag.locktag_field2);
+-				values[6] = ObjectIdGetDatum(instance->locktag.locktag_field3);
++				values[6] =
++					TransactionIdGetDatum((uint64) instance->locktag.locktag_field3 |
++										  ((uint64) instance->locktag.locktag_field5 << 32));
+ 				values[9] = Int16GetDatum(instance->locktag.locktag_field4);
  				nulls[2] = true;
  				nulls[3] = true;
 diff --git a/src/backend/utils/adt/pgstatfuncs.c b/src/backend/utils/adt/pgstatfuncs.c
@@ -11171,6 +11367,21 @@ index dc9e2255f8..4208d0b1d4 100644
  #autovacuum_multixact_freeze_max_age = 400000000        # maximum multixact age
                                                          # before forced vacuum
                                                          # (change requires restart)
+diff --git a/src/backend/utils/probes.d b/src/backend/utils/probes.d
+index 1929521c6a5..446aa9fc543 100644
+--- a/src/backend/utils/probes.d
++++ b/src/backend/utils/probes.d
+@@ -37,8 +37,8 @@ provider postgresql {
+ 	probe lwlock__acquire__or__wait(const char *, LWLockMode);
+ 	probe lwlock__acquire__or__wait__fail(const char *, LWLockMode);
+ 
+-	probe lock__wait__start(unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, LOCKMODE);
+-	probe lock__wait__done(unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, LOCKMODE);
++	probe lock__wait__start(unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, LOCKMODE, unsigned int);
++	probe lock__wait__done(unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, LOCKMODE, unsigned int);
+ 
+ 	probe query__parse__start(const char *);
+ 	probe query__parse__done(const char *);
 diff --git a/src/backend/utils/sort/tuplesortvariants.c b/src/backend/utils/sort/tuplesortvariants.c
 index 41ac4afbf4..a7ced80d61 100644
 --- a/src/backend/utils/sort/tuplesortvariants.c
@@ -15618,45 +15829,142 @@ index bbe48aa732..a2d1f1e537 100644
  /*
   * ItemIdIsValid
   *		True iff item identifier is valid.
-diff --git a/src/include/storage/lock.h b/src/include/storage/lock.h
-index 826cf28fdb..64f5d8747f 100644
---- a/src/include/storage/lock.h
-+++ b/src/include/storage/lock.h
-@@ -226,8 +226,8 @@ typedef struct LOCKTAG
+diff --git a/src/include/storage/locktag.h b/src/include/storage/locktag.h
+index 6b122497ec6..1a315ee1e12 100644
+--- a/src/include/storage/locktag.h
++++ b/src/include/storage/locktag.h
+@@ -54,9 +54,10 @@ typedef enum LockTagType
+ extern PGDLLIMPORT const char *const LockTagTypeNames[];
+ 
+ /*
+- * The LOCKTAG struct is defined with malice aforethought to fit into 16
+- * bytes with no padding.  Note that this would need adjustment if we were
+- * to widen Oid, BlockNumber, or TransactionId to more than 32 bits.
++ * LOCKTAG must have no padding, since all its bytes participate in hashing
++ * and equality comparisons.  The fifth field holds the high half of an apply
++ * transaction's XID; the other fields retain the database, subscription, low
++ * XID half, and lock subtype.  Other lock types must set the fifth field to zero.
+  *
+  * We include lockmethodid in the locktag so that a single hash table in
+  * shared memory can store locks of different lockmethods.
+@@ -69,8 +70,11 @@ typedef struct LOCKTAG
+ 	uint16		locktag_field4; /* a 16-bit ID field */
+ 	uint8		locktag_type;	/* see enum LockTagType */
+ 	uint8		locktag_lockmethodid;	/* lockmethod indicator */
++	uint32		locktag_field5; /* high XID half for apply-transaction locks */
+ } LOCKTAG;
+ 
++StaticAssertDecl(sizeof(LOCKTAG) == 20, "LOCKTAG must not contain padding");
++
+ /*
+  * These macros define how we map logical IDs of lockable objects into
+  * the physical fields of LOCKTAG.  Use these to set up LOCKTAG values,
+@@ -83,6 +87,7 @@ typedef struct LOCKTAG
+ 	 (locktag).locktag_field2 = (reloid), \
+ 	 (locktag).locktag_field3 = 0, \
+ 	 (locktag).locktag_field4 = 0, \
++	 (locktag).locktag_field5 = 0, \
+ 	 (locktag).locktag_type = LOCKTAG_RELATION, \
+ 	 (locktag).locktag_lockmethodid = DEFAULT_LOCKMETHOD)
+ 
+@@ -92,6 +97,7 @@ typedef struct LOCKTAG
+ 	 (locktag).locktag_field2 = (reloid), \
+ 	 (locktag).locktag_field3 = 0, \
+ 	 (locktag).locktag_field4 = 0, \
++	 (locktag).locktag_field5 = 0, \
+ 	 (locktag).locktag_type = LOCKTAG_RELATION_EXTEND, \
+ 	 (locktag).locktag_lockmethodid = DEFAULT_LOCKMETHOD)
+ 
+@@ -101,6 +107,7 @@ typedef struct LOCKTAG
+ 	 (locktag).locktag_field2 = 0, \
+ 	 (locktag).locktag_field3 = 0, \
+ 	 (locktag).locktag_field4 = 0, \
++	 (locktag).locktag_field5 = 0, \
+ 	 (locktag).locktag_type = LOCKTAG_DATABASE_FROZEN_IDS, \
+ 	 (locktag).locktag_lockmethodid = DEFAULT_LOCKMETHOD)
+ 
+@@ -110,6 +117,7 @@ typedef struct LOCKTAG
+ 	 (locktag).locktag_field2 = (reloid), \
+ 	 (locktag).locktag_field3 = (blocknum), \
+ 	 (locktag).locktag_field4 = 0, \
++	 (locktag).locktag_field5 = 0, \
+ 	 (locktag).locktag_type = LOCKTAG_PAGE, \
+ 	 (locktag).locktag_lockmethodid = DEFAULT_LOCKMETHOD)
+ 
+@@ -119,24 +127,27 @@ typedef struct LOCKTAG
+ 	 (locktag).locktag_field2 = (reloid), \
+ 	 (locktag).locktag_field3 = (blocknum), \
+ 	 (locktag).locktag_field4 = (offnum), \
++	 (locktag).locktag_field5 = 0, \
+ 	 (locktag).locktag_type = LOCKTAG_TUPLE, \
+ 	 (locktag).locktag_lockmethodid = DEFAULT_LOCKMETHOD)
  
  /* ID info for a transaction is its TransactionId */
  #define SET_LOCKTAG_TRANSACTION(locktag,xid) \
 -	((locktag).locktag_field1 = (xid), \
 -	 (locktag).locktag_field2 = 0, \
-+	((locktag).locktag_field1 = (uint32)((xid) & 0xFFFFFFFF), \
-+	 (locktag).locktag_field2 = (uint32)((xid) >> 32), \
++	((locktag).locktag_field1 = (uint32) (xid), \
++	 (locktag).locktag_field2 = (uint32) ((uint64) (xid) >> 32), \
  	 (locktag).locktag_field3 = 0, \
  	 (locktag).locktag_field4 = 0, \
++	 (locktag).locktag_field5 = 0, \
  	 (locktag).locktag_type = LOCKTAG_TRANSACTION, \
-@@ -236,8 +236,8 @@ typedef struct LOCKTAG
+ 	 (locktag).locktag_lockmethodid = DEFAULT_LOCKMETHOD)
+ 
  /* ID info for a virtual transaction is its VirtualTransactionId */
  #define SET_LOCKTAG_VIRTUALTRANSACTION(locktag,vxid) \
  	((locktag).locktag_field1 = (vxid).procNumber, \
 -	 (locktag).locktag_field2 = (vxid).localTransactionId, \
 -	 (locktag).locktag_field3 = 0, \
-+	 (locktag).locktag_field2 = (uint32) ((vxid).localTransactionId & 0xFFFFFFFF), \
-+	 (locktag).locktag_field3 = (uint32) ((vxid).localTransactionId >> 32), \
++	 (locktag).locktag_field2 = (uint32) (vxid).localTransactionId, \
++	 (locktag).locktag_field3 = (uint32) ((uint64) (vxid).localTransactionId >> 32), \
  	 (locktag).locktag_field4 = 0, \
++	 (locktag).locktag_field5 = 0, \
  	 (locktag).locktag_type = LOCKTAG_VIRTUALTRANSACTION, \
  	 (locktag).locktag_lockmethodid = DEFAULT_LOCKMETHOD)
-@@ -247,9 +247,9 @@ typedef struct LOCKTAG
+ 
+@@ -145,10 +156,11 @@ typedef struct LOCKTAG
   * its speculative insert counter.
   */
  #define SET_LOCKTAG_SPECULATIVE_INSERTION(locktag,xid,token) \
 -	((locktag).locktag_field1 = (xid), \
 -	 (locktag).locktag_field2 = (token),		\
 -	 (locktag).locktag_field3 = 0, \
-+	((locktag).locktag_field1 = (uint32)((xid) & 0xFFFFFFFF), \
-+	 (locktag).locktag_field2 = (uint32)((xid) >> 32), \
-+	 (locktag).locktag_field3 = (token),		\
++	((locktag).locktag_field1 = (uint32) (xid), \
++	 (locktag).locktag_field2 = (uint32) ((uint64) (xid) >> 32), \
++	 (locktag).locktag_field3 = (token), \
  	 (locktag).locktag_field4 = 0, \
++	 (locktag).locktag_field5 = 0, \
  	 (locktag).locktag_type = LOCKTAG_SPECULATIVE_TOKEN, \
  	 (locktag).locktag_lockmethodid = DEFAULT_LOCKMETHOD)
+ 
+@@ -164,6 +176,7 @@ typedef struct LOCKTAG
+ 	 (locktag).locktag_field2 = (classoid), \
+ 	 (locktag).locktag_field3 = (objoid), \
+ 	 (locktag).locktag_field4 = (objsubid), \
++	 (locktag).locktag_field5 = 0, \
+ 	 (locktag).locktag_type = LOCKTAG_OBJECT, \
+ 	 (locktag).locktag_lockmethodid = DEFAULT_LOCKMETHOD)
+ 
+@@ -172,6 +185,7 @@ typedef struct LOCKTAG
+ 	 (locktag).locktag_field2 = (id2), \
+ 	 (locktag).locktag_field3 = (id3), \
+ 	 (locktag).locktag_field4 = (id4), \
++	 (locktag).locktag_field5 = 0, \
+ 	 (locktag).locktag_type = LOCKTAG_ADVISORY, \
+ 	 (locktag).locktag_lockmethodid = USER_LOCKMETHOD)
+ 
+@@ -182,8 +196,9 @@ typedef struct LOCKTAG
+ #define SET_LOCKTAG_APPLY_TRANSACTION(locktag,dboid,suboid,xid,objid) \
+ 	((locktag).locktag_field1 = (dboid), \
+ 	 (locktag).locktag_field2 = (suboid), \
+-	 (locktag).locktag_field3 = (xid), \
++	 (locktag).locktag_field3 = (uint32) (xid), \
+ 	 (locktag).locktag_field4 = (objid), \
++	 (locktag).locktag_field5 = (uint32) ((uint64) (xid) >> 32), \
+ 	 (locktag).locktag_type = LOCKTAG_APPLY_TRANSACTION, \
+ 	 (locktag).locktag_lockmethodid = DEFAULT_LOCKMETHOD)
+ 
 diff --git a/src/include/storage/proc.h b/src/include/storage/proc.h
 index c6f5ebceef..2cf9a53b3e 100644
 --- a/src/include/storage/proc.h

@@ -1,0 +1,178 @@
+diff --git a/doc/src/sgml/monitoring.sgml b/doc/src/sgml/monitoring.sgml
+index d60b6710bfd..08039e34120 100644
+--- a/doc/src/sgml/monitoring.sgml
++++ b/doc/src/sgml/monitoring.sgml
+@@ -8552,16 +8552,18 @@ FROM pg_stat_get_backend_idset() AS backendid;
+     </row>
+     <row>
+      <entry><literal>lock-wait-start</literal></entry>
+-     <entry><literal>(unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, LOCKMODE)</literal></entry>
++     <entry><literal>(unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, LOCKMODE, unsigned int)</literal></entry>
+      <entry>Probe that fires when a request for a heavyweight lock (lmgr lock)
+       has begun to wait because the lock is not available.
+       arg0 through arg3 are the tag fields identifying the object being
+       locked.  arg4 indicates the type of object being locked.
+-      arg5 indicates the lock type being requested.</entry>
++      arg5 indicates the lock type being requested.
++      arg6 is the fifth tag field, containing the high 32 bits of the remote
++      transaction ID for logical replication apply locks.</entry>
+     </row>
+     <row>
+      <entry><literal>lock-wait-done</literal></entry>
+-     <entry><literal>(unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, LOCKMODE)</literal></entry>
++     <entry><literal>(unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, LOCKMODE, unsigned int)</literal></entry>
+      <entry>Probe that fires when a request for a heavyweight lock (lmgr lock)
+       has finished waiting (i.e., has acquired the lock).
+       The arguments are the same as for <literal>lock-wait-start</literal>.</entry>
+diff --git a/src/backend/storage/lmgr/lock.c b/src/backend/storage/lmgr/lock.c
+index 8d246ed5a4e..ac0b1f702fe 100644
+--- a/src/backend/storage/lmgr/lock.c
++++ b/src/backend/storage/lmgr/lock.c
+@@ -382,13 +382,14 @@ LOCK_PRINT(const char *where, const LOCK *lock, LOCKMODE type)
+ {
+ 	if (LOCK_DEBUG_ENABLED(&lock->tag))
+ 		elog(LOG,
+-			 "%s: lock(%p) id(%u,%u,%u,%u,%u,%u) grantMask(%x) "
++			 "%s: lock(%p) id(%u,%u,%u,%u,%u,%u,%u) grantMask(%x) "
+ 			 "req(%d,%d,%d,%d,%d,%d,%d)=%d "
+ 			 "grant(%d,%d,%d,%d,%d,%d,%d)=%d wait(%d) type(%s)",
+ 			 where, lock,
+ 			 lock->tag.locktag_field1, lock->tag.locktag_field2,
+ 			 lock->tag.locktag_field3, lock->tag.locktag_field4,
+ 			 lock->tag.locktag_type, lock->tag.locktag_lockmethodid,
++			 lock->tag.locktag_field5,
+ 			 lock->grantMask,
+ 			 lock->requested[1], lock->requested[2], lock->requested[3],
+ 			 lock->requested[4], lock->requested[5], lock->requested[6],
+@@ -709,8 +710,10 @@ LockHasWaiters(const LOCKTAG *locktag, LOCKMODE lockmode, bool sessionLock)
+ 
+ #ifdef LOCK_DEBUG
+ 	if (LOCK_DEBUG_ENABLED(locktag))
+-		elog(LOG, "LockHasWaiters: lock [%u,%u] %s",
++		elog(LOG, "LockHasWaiters: lock [%u,%u,%u,%u,%u] %s",
+ 			 locktag->locktag_field1, locktag->locktag_field2,
++			 locktag->locktag_field3, locktag->locktag_field4,
++			 locktag->locktag_field5,
+ 			 lockMethodTable->lockModeNames[lockmode]);
+ #endif
+ 
+@@ -870,8 +873,10 @@ LockAcquireExtended(const LOCKTAG *locktag,
+ 
+ #ifdef LOCK_DEBUG
+ 	if (LOCK_DEBUG_ENABLED(locktag))
+-		elog(LOG, "LockAcquire: lock [%u,%u] %s",
++		elog(LOG, "LockAcquire: lock [%u,%u,%u,%u,%u] %s",
+ 			 locktag->locktag_field1, locktag->locktag_field2,
++			 locktag->locktag_field3, locktag->locktag_field4,
++			 locktag->locktag_field5,
+ 			 lockMethodTable->lockModeNames[lockmode]);
+ #endif
+ 
+@@ -1426,11 +1431,12 @@ SetupLockInTable(LockMethod lockMethodTable, PGPROC *proc,
+ 					if (i >= (int) lockmode)
+ 						break;	/* safe: we have a lock >= req level */
+ 					elog(LOG, "deadlock risk: raising lock level"
+-						 " from %s to %s on object %u/%u/%u",
++						 " from %s to %s on object %u/%u/%u/%u/%u",
+ 						 lockMethodTable->lockModeNames[i],
+ 						 lockMethodTable->lockModeNames[lockmode],
+ 						 lock->tag.locktag_field1, lock->tag.locktag_field2,
+-						 lock->tag.locktag_field3);
++						 lock->tag.locktag_field3, lock->tag.locktag_field4,
++						 lock->tag.locktag_field5);
+ 					break;
+ 				}
+ 			}
+@@ -1452,10 +1458,11 @@ SetupLockInTable(LockMethod lockMethodTable, PGPROC *proc,
+ 	 * broken.
+ 	 */
+ 	if (proclock->holdMask & LOCKBIT_ON(lockmode))
+-		elog(ERROR, "lock %s on object %u/%u/%u is already held",
++		elog(ERROR, "lock %s on object %u/%u/%u/%u/%u is already held",
+ 			 lockMethodTable->lockModeNames[lockmode],
+ 			 lock->tag.locktag_field1, lock->tag.locktag_field2,
+-			 lock->tag.locktag_field3);
++			 lock->tag.locktag_field3, lock->tag.locktag_field4,
++			 lock->tag.locktag_field5);
+ 
+ 	return proclock;
+ }
+@@ -1947,7 +1954,8 @@ WaitOnLock(LOCALLOCK *locallock, ResourceOwner owner)
+ 									 locallock->tag.lock.locktag_field3,
+ 									 locallock->tag.lock.locktag_field4,
+ 									 locallock->tag.lock.locktag_type,
+-									 locallock->tag.mode);
++									 locallock->tag.mode,
++									 locallock->tag.lock.locktag_field5);
+ 
+ 	/* Setup error traceback support for ereport() */
+ 	waiterrcontext.callback = waitonlock_error_callback;
+@@ -2013,7 +2021,8 @@ WaitOnLock(LOCALLOCK *locallock, ResourceOwner owner)
+ 									locallock->tag.lock.locktag_field3,
+ 									locallock->tag.lock.locktag_field4,
+ 									locallock->tag.lock.locktag_type,
+-									locallock->tag.mode);
++									locallock->tag.mode,
++									locallock->tag.lock.locktag_field5);
+ 
+ 	return result;
+ }
+@@ -2126,8 +2135,10 @@ LockRelease(const LOCKTAG *locktag, LOCKMODE lockmode, bool sessionLock)
+ 
+ #ifdef LOCK_DEBUG
+ 	if (LOCK_DEBUG_ENABLED(locktag))
+-		elog(LOG, "LockRelease: lock [%u,%u] %s",
++		elog(LOG, "LockRelease: lock [%u,%u,%u,%u,%u] %s",
+ 			 locktag->locktag_field1, locktag->locktag_field2,
++			 locktag->locktag_field3, locktag->locktag_field4,
++			 locktag->locktag_field5,
+ 			 lockMethodTable->lockModeNames[lockmode]);
+ #endif
+ 
+@@ -4195,7 +4206,7 @@ GetRunningTransactionLocks(int *nlocks)
+ 		{
+ 			PGPROC	   *proc = proclock->tag.myProc;
+ 			LOCK	   *lock = proclock->tag.myLock;
+-			TransactionId xid = proc->xid;
++			TransactionId xid = pg_atomic_read_u64(&proc->xid);
+ 
+ 			/*
+ 			 * Don't record locks for transactions if we know they have
+@@ -4484,10 +4495,11 @@ lock_twophase_recover(FullTransactionId fxid, uint16 info,
+ 	 * We shouldn't already hold the desired lock.
+ 	 */
+ 	if (proclock->holdMask & LOCKBIT_ON(lockmode))
+-		elog(ERROR, "lock %s on object %u/%u/%u is already held",
++		elog(ERROR, "lock %s on object %u/%u/%u/%u/%u is already held",
+ 			 lockMethodTable->lockModeNames[lockmode],
+ 			 lock->tag.locktag_field1, lock->tag.locktag_field2,
+-			 lock->tag.locktag_field3);
++			 lock->tag.locktag_field3, lock->tag.locktag_field4,
++			 lock->tag.locktag_field5);
+ 
+ 	/*
+ 	 * We ignore any possible conflicts and just grant ourselves the lock. Not
+@@ -4815,7 +4827,7 @@ VirtualXactLock(VirtualTransactionId vxid, bool wait)
+ 	 * so we won't save an XID of a different VXID.  It doesn't matter whether
+ 	 * we save this before or after setting up the primary lock table entry.
+ 	 */
+-	xid = proc->xid;
++	xid = pg_atomic_read_u64(&proc->xid);
+ 
+ 	/* Done with proc->fpLockBits */
+ 	LWLockRelease(&proc->fpInfoLock);
+diff --git a/src/backend/utils/probes.d b/src/backend/utils/probes.d
+index 1929521c6a5..446aa9fc543 100644
+--- a/src/backend/utils/probes.d
++++ b/src/backend/utils/probes.d
+@@ -37,8 +37,8 @@ provider postgresql {
+ 	probe lwlock__acquire__or__wait(const char *, LWLockMode);
+ 	probe lwlock__acquire__or__wait__fail(const char *, LWLockMode);
+ 
+-	probe lock__wait__start(unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, LOCKMODE);
+-	probe lock__wait__done(unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, LOCKMODE);
++	probe lock__wait__start(unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, LOCKMODE, unsigned int);
++	probe lock__wait__done(unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, LOCKMODE, unsigned int);
+ 
+ 	probe query__parse__start(const char *);
+ 	probe query__parse__done(const char *);
