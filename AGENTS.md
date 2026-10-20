@@ -359,7 +359,7 @@ pages or a separate tuple-XID payload to prune WAL.
   Full backend, binary COPY and recovery validation remain deferred until
   the remaining 0005 declarations/typedefs are applied.
 
-## IMPORTANT: paused before mini0115(004_verify_heapam.pl)
+## IMPORTANT: completed mini0115(004_verify_heapam.pl) helper fixes
 
 - New logic topic under the user's stop rule: the original patch's corruption
   test helpers mishandle reserved XIDs and page selection. PG19 changes to
@@ -372,9 +372,22 @@ pages or a separate tuple-XID payload to prune WAL.
   synthetic two-page file showed fixup_page(page 0) also changing page 1's
   tuple from raw xmin/xmax 10/20 to 110/120. The existing test passes only
   page-0 offsets, so this particular selection defect is latent there.
-- Reproduced both with the original patch's actual Perl helpers in scratch
-  files, not a server. **mini0115(004_verify_heapam.pl) remains unapplied.**
-  Proposed fix: preserve reserved IDs while decoding/rebasing, and skip an
-  offset when it is below page_start OR at/above page_end. Also audit the
-  manually shifted page's pruning hint using the earlier approved hint rules.
-  Obtain the user's decision before changing these test-helper semantics.
+- User authorized fixing the test. Applied mini0115(004_verify_heapam.pl) in
+  source `ed941fe56fb`; saved patch/probe in Baloo `4cd114e`, parent
+  `28e8a9b4534`. Reserved 0/1/2 remain unchanged during decoding, encoding
+  and rebasing. Normal xmin/xmax use the ordinary base; MultiXact xmax uses
+  the MultiXact base. The page filter now uses OR with an exclusive upper
+  bound; tuples crossing into special data or another page are rejected.
+- Preserve pd_prune_xid's full value when shifting the ordinary base. Keep
+  reserved hints unchanged; use FrozenTransactionId for conservative retry
+  when an exact hint exceeds MaxShortTransactionId, matching the earlier
+  backend fix. Normal tuple rebases that cannot fit are rejected. Writing
+  copies the input hash so repeated writes retain the caller's full XIDs.
+- Validation: `dev/tests/xid64_amcheck_helpers/check.py` extracts the actual
+  Perl helpers and exercises synthetic three-page files: 212 assertions
+  cover reserved IDs, XIDs above 32 bits, MultiXacts, unchanged neighbouring
+  pages and boundary rejection, exact repeated-write round trips, hints and
+  same-base no-ops. Perl syntax check passes. Mini reverse check and aggregate
+  replay on `8ca324058af` match source exactly. Full pg_amcheck TAP execution
+  remains pending until the full series builds; this is helper validation,
+  not a live corruption-diagnostic run. Next: mini0116(pg_controldata.c).
