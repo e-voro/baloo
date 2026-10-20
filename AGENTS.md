@@ -177,7 +177,7 @@ pages or a separate tuple-XID payload to prune WAL.
 - User authorized the fix after the pause before mini0092(lmgr.c). Source
   commit `2e6c3ab42ff` applies mini0092(lmgr.c), mini0093(lock.c), and the
   required mini0100(lockfuncs.c) and mini0170(locktag.h) early. Skip the latter
-  two when reaching their numbers. Next unapplied: mini0094(predicate.c).
+  two when reaching their numbers. Subsequent checkpoint is below.
 - **Cause:** SET_LOCKTAG_APPLY_TRANSACTION assigned a full remote XID to uint32
   field3. XIDs 100 and 4294967396 therefore shared a lock key for the same
   database, subscription and subtype. Parallel apply uses these keys for
@@ -210,3 +210,33 @@ pages or a separate tuple-XID payload to prune WAL.
 - Backport this fix to pg18xid64 and Tantor 18 as requested; see codex_todo.txt.
   zzz0002-Logical-replication-support.patch does not fix lock keys. Its separate
   BEGIN PREPARE length heuristic remains unapplied and needs protocol review.
+
+## IMPORTANT: pause before mini0096(bufpage.c) (2026-10-20)
+
+- Applied mini0094(predicate.c), source `99282376e6c`: preserve PG19 SLRU
+  callbacks, widen the new error diagnostic and the existing half-range test.
+  Applied mini0095(proc.c), source `82f96a6a762`: initialize XID atomics for
+  every PGPROC, including prepared-transaction dummy entries; preserve PG19
+  shared-memory callbacks. Baloo `cb4fdac`, parent `019ebcf3d18`.
+- Saved minis reverse-apply; their aggregate sections replay on `8ca324058af`
+  and match source. Predicate comparator assertions pass with the forthcoming
+  xid64 comparator at six block sizes under UBSan. Full build remains deferred.
+- **mini0096(bufpage.c) is unapplied. Stop under the user's new-logic rule.**
+  Its double-xmax conversion copies raw pd_prune_xid while adding a new base.
+  mini0168(bufpage.h) then decodes that hint relative to the base: raw 100
+  becomes 1097 with base 997. The hint setter does nothing before conversion,
+  and the AIO converter can preserve a nonzero legacy hint. Clear or correctly
+  re-encode it; do not let unlogged hints determine tuple bases during redo.
+- **Freeze results also need to fit the chosen bases.** Primary pruneheap.c
+  and heapam_xlog.c redo compact before applying freeze plans. mini0096(bufpage.c)
+  scans current xmax/MultiXact values only. With only MultiXact xmax values it chooses
+  ordinary XID base 0, but a freeze plan can replace a MultiXact with updater
+  XID 4294967396. The mini0136(heapam.h) / mini0140(htup_details.h) store then
+  reaches mini0168(bufpage.h)'s PANIC range guard (maximum short XID 2147483647).
+  Newly allocated replacement MultiXacts require the same range check.
+- This is source-trace evidence, not a backend reproduction. PG18 already
+  compacted before freezing; the ordering issue is inherited. Review a solution
+  that coordinates conversion with planned xmax values on both primary and
+  redo, including the case where their range cannot fit a short-XID page.
+  Validate high-XID MultiXact collapse/replacement and prune hints with WAL
+  consistency checking after the full series is buildable. No fix chosen yet.
