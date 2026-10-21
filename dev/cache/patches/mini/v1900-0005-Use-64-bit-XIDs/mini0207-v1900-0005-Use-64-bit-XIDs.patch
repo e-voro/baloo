@@ -1,0 +1,22 @@
+diff --git a/src/test/xid-64/meson.build b/src/test/xid-64/meson.build
+new file mode 100644
+index 00000000000..63a780b69e8
+--- /dev/null
++++ b/src/test/xid-64/meson.build
+@@ -0,0 +1,16 @@
++tests += {
++  'name': 'xid-64',
++  'sd': meson.current_source_dir(),
++  'bd': meson.current_build_dir(),
++  'tap': {
++    'tests': [
++      't/001_test_large_xids.pl',
++      't/002_test_gucs.pl',
++      't/003_test_integrity.pl',
++      't/004_test_relminmxid.pl',
++      't/005_stream_subxact.pl',
++      't/006_zeropage.pl',
++      't/007_first_multi.pl',
++    ],
++  },
++}

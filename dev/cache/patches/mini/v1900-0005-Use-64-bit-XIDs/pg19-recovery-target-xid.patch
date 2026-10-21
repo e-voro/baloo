@@ -1,0 +1,27 @@
+diff --git a/src/backend/access/transam/xlogrecovery.c b/src/backend/access/transam/xlogrecovery.c
+index 0641e10092b..999eabde163 100644
+--- a/src/backend/access/transam/xlogrecovery.c
++++ b/src/backend/access/transam/xlogrecovery.c
+@@ -5075,9 +5075,7 @@ check_recovery_target_xid(char **newval, void **extra, GucSource source)
+ 		while (isspace((unsigned char) *val))
+ 			val++;
+ 
+-		/*
+-		 * This cast will remove the epoch, if any
+-		 */
++		/* Parse the full-width transaction ID. */
+ 		xid = (TransactionId) strtou64(val, &endp, 0);
+ 
+ 		if (*endp != '\0' || errno == EINVAL || errno == ERANGE || *val == '-')
+@@ -5089,9 +5087,9 @@ check_recovery_target_xid(char **newval, void **extra, GucSource source)
+ 
+ 		if (xid < FirstNormalTransactionId)
+ 		{
+-			GUC_check_errdetail("\"%s\" without epoch must be greater than or equal to %u.",
++			GUC_check_errdetail("\"%s\" must be greater than or equal to %llu.",
+ 								"recovery_target_xid",
+-								FirstNormalTransactionId);
++								(unsigned long long) FirstNormalTransactionId);
+ 			return false;
+ 		}
+ 

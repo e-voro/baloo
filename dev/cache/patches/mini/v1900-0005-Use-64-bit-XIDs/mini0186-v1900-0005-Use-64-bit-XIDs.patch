@@ -1,0 +1,26 @@
+diff --git a/src/test/recovery/t/003_recovery_targets.pl b/src/test/recovery/t/003_recovery_targets.pl
+index 047eb13293a..3af5b409f60 100644
+--- a/src/test/recovery/t/003_recovery_targets.pl
++++ b/src/test/recovery/t/003_recovery_targets.pl
+@@ -55,9 +55,9 @@ sub test_recovery_standby
+ my $node_primary = PostgreSQL::Test::Cluster->new('primary');
+ $node_primary->init(has_archiving => 1, allows_streaming => 1);
+ 
+-# Bump the transaction ID epoch.  This is useful to stress the portability
+-# of recovery_target_xid parsing.
+-system_or_bail('pg_resetwal', '--epoch' => '1', $node_primary->data_dir);
++# The xid64 test setup uses high starting transaction IDs to exercise
++# full-width recovery_target_xid parsing.
++system_or_bail('pg_resetwal', $node_primary->data_dir);
+ 
+ # Start it
+ $node_primary->start;
+@@ -231,7 +231,7 @@ like(
+ 	"ALTER SYSTEM SET recovery_target_xid TO '0'");
+ like(
+ 	$stderr,
+-	qr/without epoch must be greater than or equal to 3/,
++	qr/must be greater than or equal to 3/,
+ 	"invalid recovery_target_xid (lower bound check)");
+ 
+ done_testing();

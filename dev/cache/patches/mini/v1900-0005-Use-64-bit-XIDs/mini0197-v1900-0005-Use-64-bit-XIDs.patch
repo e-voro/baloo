@@ -1,0 +1,13 @@
+diff --git a/src/test/regress/parallel_schedule b/src/test/regress/parallel_schedule
+index 8fa0a6c47fb..105e7a2467b 100644
+--- a/src/test/regress/parallel_schedule
++++ b/src/test/regress/parallel_schedule
+@@ -28,7 +28,7 @@ test: strings md5 numerology point lseg line box path polygon circle date time t
+ # geometry depends on point, lseg, line, box, path, polygon, circle
+ # horology depends on date, time, timetz, timestamp, timestamptz, interval
+ # ----------
+-test: geometry horology tstypes regex type_sanity opr_sanity misc_sanity comments expressions unicode xid mvcc database stats_import pg_ndistinct pg_dependencies oid8 encoding euc_kr
++test: geometry horology tstypes regex type_sanity opr_sanity misc_sanity comments expressions unicode xid xid64 mvcc database stats_import pg_ndistinct pg_dependencies oid8 encoding euc_kr
+ 
+ # ----------
+ # Load huge amounts of data

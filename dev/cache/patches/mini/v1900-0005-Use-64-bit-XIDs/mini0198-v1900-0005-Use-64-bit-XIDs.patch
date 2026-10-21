@@ -1,4 +1,5 @@
 diff --git a/src/test/regress/regress.c b/src/test/regress/regress.c
+index 90bb2a7e881..51739cfaef8 100644
 --- a/src/test/regress/regress.c
 +++ b/src/test/regress/regress.c
 @@ -20,6 +20,8 @@
@@ -27,7 +28,7 @@ diff --git a/src/test/regress/regress.c b/src/test/regress/regress.c
  #include "utils/typcache.h"
  
  /* define our text domain for translations */
-@@ -369,6 +373,7 @@
+@@ -369,6 +373,7 @@ make_tuple_indirect(PG_FUNCTION_ARGS)
  	tuple.t_len = HeapTupleHeaderGetDatumLength(rec);
  	ItemPointerSetInvalid(&(tuple.t_self));
  	tuple.t_tableOid = InvalidOid;
@@ -35,7 +36,7 @@ diff --git a/src/test/regress/regress.c b/src/test/regress/regress.c
  	tuple.t_data = rec;
  
  	values = (Datum *) palloc(ncolumns * sizeof(Datum));
-@@ -1498,3 +1503,303 @@
+@@ -1498,3 +1503,303 @@ test_pglz_decompress(PG_FUNCTION_ARGS)
  	SET_VARSIZE(result, dlen + VARHDRSZ);
  	PG_RETURN_BYTEA_P(result);
  }

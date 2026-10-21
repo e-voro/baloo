@@ -1,0 +1,22 @@
+diff --git a/src/tools/pgindent/typedefs.list b/src/tools/pgindent/typedefs.list
+index 032ca27daa0..833bcbba20b 100644
+--- a/src/tools/pgindent/typedefs.list
++++ b/src/tools/pgindent/typedefs.list
+@@ -1400,6 +1400,8 @@ IsoConnInfo
+ IspellDict
+ ItemArray
+ ItemId
++ItemIdCompact
++ItemIdCompactData
+ ItemIdData
+ ItemPointer
+ ItemPointerData
+@@ -3906,8 +3908,6 @@ intset_node
+ intvKEY
+ io_callback_fn
+ io_stat_col
+-itemIdCompact
+-itemIdCompactData
+ iterator
+ jmp_buf
+ join_path_setup_hook_type
