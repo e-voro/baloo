@@ -737,7 +737,7 @@ XID width alone does not identify a source MultiXact layout:
   **`110d56b05c0`**. No full build, live TAP, WAL replay or upgrade run;
   remaining 0005 definitions and later initdb switches are still absent.
 
-### NEW LOGIC FINDING: TOAST xmax reader assertion (not applied)
+### Historical finding: TOAST xmax reader assertion (fixed below)
 
 **First unapplied: mini0140(htup_details.h). Stop for discussion under the
 user's instruction to pause on a new logic correction.**
@@ -774,3 +774,26 @@ user's instruction to pause on a new logic correction.**
   No production fix or mini0140 application has been made. After approval,
   extend checks across heap/TOAST/double-xmax and MultiXact layouts, then
   validate actual backend paths once the complete series builds.
+
+
+## IMPORTANT: TOAST xmax reader fixed; mini0140(htup_details.h) applied
+
+- User approved the existing PageGetSpecialXidBase() accessor correction.
+  Source **`5b47a85077c`** applies mini0140(htup_details.h) with the
+  non-MultiXact raw-xmax branch selecting the heap or TOAST XID base by
+  page layout. MultiXact and double-xmax branches retain their behavior.
+- Preserve PG19 uint8 tuple bitmaps and removal of redundant xmin setters.
+  Tuple decoding/storage helpers use full in-memory XIDs and short on-page
+  fields as specified by the original patch; no visibility rule is changed.
+- The existing page-conversion fixture now extracts tuple helpers directly
+  from applied htup_details.h. Added **68 accessor cases per page size**:
+  heap/TOAST layouts, distinct XID/MultiXact bases, reserved IDs, high/full
+  boundaries, double-xmax splitting, and writer/reader round trips. All six
+  supported page sizes pass with warnings as errors and UBSan; existing
+  hint/conversion/freeze/base-shift checks pass too. These are fixed-width
+  fixtures, not a complete backend build or live concurrent TOAST test.
+- Saved mini0140 reverse-checks; its aggregate section replays on
+  `8ca324058af` and matches committed source. Baloo **`e1ae5c7`**, parent
+  **`11db8aead20`**. TODO explicitly marks the inherited bug **needed for
+  rebase to Tantor 18**. Full series build/recovery checks remain pending.
+- Next unapplied at this checkpoint: **mini0141(multixact.h)**.
