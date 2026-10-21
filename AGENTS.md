@@ -1050,3 +1050,37 @@ that the original PG18 caller used the wrong PG18 API.**
 - These cleanup-lock findings and changed patch 0007 semantics must be reviewed
   with the user later and considered for pg18xid64/Tantor 18. Do not reapply the
   original shared-page zeroing on top of the adapted masking solution.
+
+### Main series complete through 0012; continuing supplied fixes and audit
+
+- 0009, fe80a516e7a: preserve PG19 pg_getopt/optctx, checkpoint fields and
+  native initial MultiXact offset=1. initdb rejects offset zero and negative
+  strtoull inputs, including negative values that wrap into small unsigned
+  numbers. Initialize starting CLOG/SUBTRANS/MultiXact SLRU pages. initdb TAP
+  passes all 93 assertions; large-XID/relminmxid TAP passes 24 assertions.
+- 0010, 52507090d0e: portable PRI?64 formats, including PG19-only diagnostics,
+  wrapped-MultiXact upgrade, full apply-lock keys and VM/prune descriptions.
+  Keep safe parser temporaries and signed base-shift delta formatting.
+  world-bin and actual multixact.c with MULTIXACT_DEBUG/-Werror=format pass.
+- 0011 is explicitly superseded by the already-authorized supplied AIO fix
+  0008. Do not restore conversion-time GenericXLog/WAL insertion in workers.
+  The saved .skip note tracks the remaining supplied0015 override/marker case.
+- 0012, 60a08afaf2e: rename only reserved union member _int64 -> _int_64 and
+  map it explicitly in gen_guc_tables.pl. Preserve GUC type name "int64",
+  PGC_INT64 and parser semantics. Linux world-bin passes; MSVC not executed.
+- All main-series steps are applied/superseded. Saved 0005-0010 patches replay
+  exactly on 8ca324058af across 253 source files. Full core regression passes
+  all 246 tests, including xid64, on the assertion build through 0012. Full
+  check-world, streaming and cross-version upgrade validation remain pending.
+- Visibility audit has found a correction to the earlier b29c7c726fb decision:
+  HeapTupleSatisfiesVacuumHorizon() must not decode an unconverted legacy
+  page through HeapTupleCopyXidsFromPage(). Legacy and double-xmax both have
+  no special space; that helper treats a legacy page as double-xmax, can
+  overwrite the converter's already-expanded wrapped MultiXact, and asserts
+  a content lock unavailable to AIO completion. Current-format pages must
+  still decode, including real double-xmax pages; use page layout version,
+  not special-space size, to distinguish them. The converter already prepares
+  header XIDs and expands source MultiXacts before calling visibility.
+  This correction is being implemented and requires dense legacy-page/AIO
+  and wrapped-MultiXact validation. Ordinary prune callers rely on Horizon
+  to initialize their tuple cache; do not remove that ownership globally.
