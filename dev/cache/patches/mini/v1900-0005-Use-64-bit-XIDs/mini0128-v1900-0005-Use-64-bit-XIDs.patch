@@ -1,0 +1,165 @@
+diff --git a/src/bin/pg_upgrade/relfilenumber.c b/src/bin/pg_upgrade/relfilenumber.c
+index d5088447e0d..b35ac9cd759 100644
+--- a/src/bin/pg_upgrade/relfilenumber.c
++++ b/src/bin/pg_upgrade/relfilenumber.c
+@@ -18,7 +18,7 @@
+ #include "pg_upgrade.h"
+ 
+ static void transfer_single_new_db(FileNameMap *maps, int size, char *old_tablespace, char *new_tablespace);
+-static void transfer_relfile(FileNameMap *map, const char *type_suffix, bool vm_must_add_frozenbit);
++static void transfer_relfile(FileNameMap *map, const char *type_suffix, bool vm_must_add_frozenbit, bool update_version);
+ 
+ /*
+  * The following set of sync_queue_* functions are used for --swap to reduce
+@@ -337,6 +337,68 @@ parse_relfilenumber(const char *filename)
+ 	return (RelFileNumber) n;
+ }
+ 
++/*
++ * Rewrite a moved auxiliary fork without modifying its original file until
++ * the replacement is complete.  The caller synchronizes the directory after
++ * all replacements; newly written files must be synchronized before rename.
++ */
++static void
++rewrite_swap_fork(FileNameMap *map, const char *new_db_dir, const char *fork)
++{
++	for (int segno = 0;; segno++)
++	{
++		char	   *path,
++				   *temporary;
++		struct stat st;
++
++		if (segno == 0)
++			path = psprintf("%s/%u%s", new_db_dir, map->relfilenumber, fork);
++		else
++			path = psprintf("%s/%u%s.%d", new_db_dir, map->relfilenumber, fork, segno);
++		if (stat(path, &st) != 0)
++		{
++			if (errno != ENOENT)
++				pg_fatal("could not stat file \"%s\": %m", path);
++			pg_free(path);
++			break;
++		}
++		if (st.st_size == 0)
++		{
++			pg_free(path);
++			continue;
++		}
++
++		temporary = psprintf("%s.pg_upgrade", path);
++		updateSegmentPagesVersion(path, temporary, map->nspname, map->relname,
++								  (BlockNumber) segno * new_cluster.controldata.largesz);
++		if (user_opts.do_sync && fsync_fname(temporary, false) != 0)
++			pg_fatal("could not synchronize file \"%s\": %m", temporary);
++		if (rename(temporary, path) != 0)
++			pg_fatal("could not rename file \"%s\" to \"%s\": %m", temporary, path);
++		pg_free(temporary);
++		pg_free(path);
++	}
++}
++
++/* Process only mapped user relations in the database/tablespace just moved. */
++static void
++rewrite_swap_auxiliary_files(FileNameMap *maps, int size, const char *new_db_dir)
++{
++	for (int i = 0; i < size; i++)
++	{
++		FileNameMap *map = &maps[i];
++		char	   *mapped_dir = psprintf("%s%s/%u", map->new_tablespace,
++										  map->new_tablespace_suffix, map->db_oid);
++
++		if (strcmp(mapped_dir, new_db_dir) == 0)
++		{
++			rewrite_swap_fork(map, new_db_dir, "_fsm");
++			rewrite_swap_fork(map, new_db_dir, "_vm");
++		}
++		pg_free(mapped_dir);
++	}
++}
++
+ /*
+  * swap_catalog_files()
+  *
+@@ -426,7 +488,11 @@ swap_catalog_files(FileNameMap *maps, int size, const char *old_catalog_dir,
+ 		pg_fatal("could not read directory \"%s\": %m", moved_db_dir);
+ 	(void) closedir(dir);
+ 
+-	/* Ensure the directory entries are persisted to disk. */
++	/* Auxiliary pages have no tuple XIDs, but need the target page version. */
++	if (cluster_is_xid32(&old_cluster) && cluster_is_xid64(&new_cluster))
++		rewrite_swap_auxiliary_files(maps, size, new_db_dir);
++
++	/* Ensure catalog and rewritten auxiliary directory entries are persisted. */
+ 	if (fsync_fname(new_db_dir, true) != 0)
+ 		pg_fatal("could not synchronize directory \"%s\": %m", new_db_dir);
+ 	if (fsync_parent_path(new_db_dir) != 0)
+@@ -497,6 +563,7 @@ transfer_single_new_db(FileNameMap *maps, int size,
+ {
+ 	int			mapnum;
+ 	bool		vm_must_add_frozenbit = false;
++	bool		update_version = false;
+ 
+ 	/*
+ 	 * Do we need to rewrite visibilitymap?
+@@ -519,19 +586,28 @@ transfer_single_new_db(FileNameMap *maps, int size,
+ 		return;
+ 	}
+ 
++	/*
++	 * Need to update FSM and VM pages version to avoid lazy conversion.
++	 */
++	if (cluster_is_xid32(&old_cluster) && cluster_is_xid64(&new_cluster))
++		update_version = true;
++
+ 	for (mapnum = 0; mapnum < size; mapnum++)
+ 	{
+ 		if (old_tablespace == NULL ||
+ 			strcmp(maps[mapnum].old_tablespace, old_tablespace) == 0)
+ 		{
+ 			/* transfer primary file */
+-			transfer_relfile(&maps[mapnum], "", vm_must_add_frozenbit);
++			transfer_relfile(&maps[mapnum], "", vm_must_add_frozenbit,
++							 update_version);
+ 
+ 			/*
+ 			 * Copy/link any fsm and vm files, if they exist
+ 			 */
+-			transfer_relfile(&maps[mapnum], "_fsm", vm_must_add_frozenbit);
+-			transfer_relfile(&maps[mapnum], "_vm", vm_must_add_frozenbit);
++			transfer_relfile(&maps[mapnum], "_fsm", vm_must_add_frozenbit,
++							 update_version);
++			transfer_relfile(&maps[mapnum], "_vm", vm_must_add_frozenbit,
++							 update_version);
+ 		}
+ 	}
+ }
+@@ -545,7 +621,8 @@ transfer_single_new_db(FileNameMap *maps, int size,
+  * mode.
+  */
+ static void
+-transfer_relfile(FileNameMap *map, const char *type_suffix, bool vm_must_add_frozenbit)
++transfer_relfile(FileNameMap *map, const char *type_suffix,
++				 bool vm_must_add_frozenbit, bool update_version)
+ {
+ 	char		old_file[MAXPGPATH];
+ 	char		new_file[MAXPGPATH];
+@@ -609,7 +686,18 @@ transfer_relfile(FileNameMap *map, const char *type_suffix, bool vm_must_add_fro
+ 			/* Need to rewrite visibility map format */
+ 			pg_log(PG_VERBOSE, "rewriting \"%s\" to \"%s\"",
+ 				   old_file, new_file);
+-			rewriteVisibilityMap(old_file, new_file, map->nspname, map->relname);
++			rewriteVisibilityMap(old_file, new_file, map->nspname,
++								 map->relname, update_version);
++		}
++		else if ((update_version && strcmp(type_suffix, "_vm") == 0) ||
++				 (update_version && strcmp(type_suffix, "_fsm") == 0))
++		{
++			/* Need to update pages version */
++			pg_log(PG_VERBOSE, "rewriting \"%s\" to \"%s\"",
++				   old_file, new_file);
++			updateSegmentPagesVersion(old_file, new_file, map->nspname,
++									  map->relname,
++									  (BlockNumber) segno * new_cluster.controldata.largesz);
+ 		}
+ 		else
+ 			switch (user_opts.transfer_mode)

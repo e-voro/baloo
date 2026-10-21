@@ -1,0 +1,35 @@
+diff --git a/src/bin/pg_upgrade/t/002_pg_upgrade.pl b/src/bin/pg_upgrade/t/002_pg_upgrade.pl
+index 0a4121fdc4d..a0a84c260ca 100644
+--- a/src/bin/pg_upgrade/t/002_pg_upgrade.pl
++++ b/src/bin/pg_upgrade/t/002_pg_upgrade.pl
+@@ -356,6 +356,13 @@ if (defined($ENV{oldinstall}))
+ # old node.
+ $oldnode->append_conf('postgresql.conf', 'autovacuum = off');
+ $oldnode->restart;
++$oldnode->safe_psql('regression',
++	"CREATE TABLE public.xid64_upgrade_horizons (id SERIAL NOT NULL PRIMARY KEY, plt text, pln NUMERIC(8, 4));
++	 INSERT INTO public.xid64_upgrade_horizons (plt, pln) SELECT md5(random()::text), random() * 9999 FROM generate_series(1, 1000);");
++my $relfrozenxid = $oldnode->safe_psql('regression',
++	"SELECT relfrozenxid FROM pg_catalog.pg_class WHERE oid = 'public.xid64_upgrade_horizons'::pg_catalog.regclass;");
++my $relminmxid = $oldnode->safe_psql('regression',
++	"SELECT relminmxid FROM pg_catalog.pg_class WHERE oid = 'public.xid64_upgrade_horizons'::pg_catalog.regclass;");
+ 
+ # Test that dump/restore of the regression database roundtrips cleanly.  This
+ # doesn't work well when the nodes are different versions, so skip it in that
+@@ -581,6 +588,16 @@ ok( !-d $newnode->data_dir . "/pg_upgrade_output.d",
+ 
+ $newnode->start;
+ 
++my $relfrozenxid_new = $newnode->safe_psql('regression',
++	"SELECT relfrozenxid FROM pg_catalog.pg_class WHERE oid = 'public.xid64_upgrade_horizons'::pg_catalog.regclass;");
++
++is($relfrozenxid_new, $relfrozenxid, 'old and new relfrozenxid match after pg_upgrade');
++
++my $relminmxid_new = $newnode->safe_psql('regression',
++	"SELECT relminmxid FROM pg_catalog.pg_class WHERE oid = 'public.xid64_upgrade_horizons'::pg_catalog.regclass;");
++
++is($relminmxid_new, $relminmxid, 'old and new relminmxid match after pg_upgrade');
++
+ # Check if there are any logs coming from pg_upgrade, that would only be
+ # retained on failure.
+ my $log_path = $newnode->data_dir . "/pg_upgrade_output.d";

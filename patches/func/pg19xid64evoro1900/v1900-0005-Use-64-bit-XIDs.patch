@@ -145,15 +145,15 @@ Discussion: https://postgr.es/m/CAJ7c6TPDOYBYrnCAeyndkBktO0WG2xSdYduTF0nxq%2Bvfk
  src/bin/pg_upgrade/Makefile                        |    1 
  src/bin/pg_upgrade/check.c                         |   69 +
  src/bin/pg_upgrade/controldata.c                   |   17 
- src/bin/pg_upgrade/file.c                          |  117 ++
+ src/bin/pg_upgrade/file.c                          |  120 ++
  src/bin/pg_upgrade/info.c                          |   14 
  src/bin/pg_upgrade/meson.build                     |    1 
  src/bin/pg_upgrade/multixact_read_v18.c            |  148 +--
  src/bin/pg_upgrade/multixact_read_v18.h            |   19 
  src/bin/pg_upgrade/multixact_rewrite.c             |   45 +
  src/bin/pg_upgrade/pg_upgrade.c                    |  288 ++++--
- src/bin/pg_upgrade/pg_upgrade.h                    |   32 -
- src/bin/pg_upgrade/relfilenumber.c                 |   33 +
+ src/bin/pg_upgrade/pg_upgrade.h                    |   34 +
+ src/bin/pg_upgrade/relfilenumber.c                 |  102 ++
  src/bin/pg_upgrade/segresize.c                     |   48 +
  src/bin/pg_upgrade/t/002_pg_upgrade.pl             |   17 
  src/bin/pg_upgrade/version.c                       |  233 +++++
@@ -242,7 +242,7 @@ Discussion: https://postgr.es/m/CAJ7c6TPDOYBYrnCAeyndkBktO0WG2xSdYduTF0nxq%2Bvfk
  src/test/xid-64/t/006_zeropage.pl                  |   33 +
  src/test/xid-64/t/007_first_multi.pl               |   83 ++
  src/tools/pgindent/typedefs.list                   |    4 
- 220 files changed, 6789 insertions(+), 2310 deletions(-)
+ 220 files changed, 6862 insertions(+), 2311 deletions(-)
 
 diff --git a/contrib/amcheck/verify_heapam.c b/contrib/amcheck/verify_heapam.c
 index e5ea68b801..14ce47cf80 100644
@@ -12558,7 +12558,7 @@ index 28ab5cdc420..d75915a1e67 100644
  		}
  		else if ((p = strstr(bufin, "First log segment after reset:")) != NULL)
 diff --git a/src/bin/pg_upgrade/file.c b/src/bin/pg_upgrade/file.c
-index 5b276008614..654b9ca073d 100644
+index 5b276008614..7100a53d90d 100644
 --- a/src/bin/pg_upgrade/file.c
 +++ b/src/bin/pg_upgrade/file.c
 @@ -214,7 +214,8 @@ linkFile(const char *src, const char *dst,
@@ -12583,7 +12583,7 @@ index 5b276008614..654b9ca073d 100644
  			/* Set new checksum for visibility map page, if enabled */
  			if (new_cluster.controldata.data_checksum_version != PG_DATA_CHECKSUM_OFF)
  				((PageHeader) new_vmbuf.data)->pd_checksum =
-@@ -356,6 +362,115 @@ rewriteVisibilityMap(const char *fromfile, const char *tofile,
+@@ -356,6 +362,118 @@ rewriteVisibilityMap(const char *fromfile, const char *tofile,
  	close(src_fd);
  }
  
@@ -12594,13 +12594,15 @@ index 5b276008614..654b9ca073d 100644
 + * schemaName/relName are relation's SQL name (used for error messages only).
 + *
 + * Read segment pages one by one and set version to PG_PAGE_LAYOUT_VERSION.
++ * first_block supplies the fork-relative block number for page checksums.
 + *
 + * Although FSM and VM formats do not change when switching to 64-bit XIDs, we
 + * must upgrade pages version in order to avoid lazy conversion on first read.
 + */
 +void
 +updateSegmentPagesVersion(const char *fromfile, const char *tofile,
-+						  const char *schemaName, const char *relName)
++						  const char *schemaName, const char *relName,
++						  BlockNumber first_block)
 +{
 +	int			src_fd;
 +	int			dst_fd;
@@ -12627,7 +12629,7 @@ index 5b276008614..654b9ca073d 100644
 +	/* Save old file size */
 +	src_filesize = statbuf.st_size;
 +	totalBytesRead = 0;
-+	blkno = 0;
++	blkno = first_block;
 +
 +	while (totalBytesRead < src_filesize)
 +	{
@@ -12692,7 +12694,8 @@ index 5b276008614..654b9ca073d 100644
 +	}
 +
 +	/* Clean up */
-+	close(dst_fd);
++	if (close(dst_fd) != 0)
++		pg_fatal("could not close file \"%s\": %m", tofile);
 +	close(src_fd);
 +}
 +
@@ -13644,10 +13647,18 @@ index c02e2df9406..93e6ea1741c 100644
   * create_logical_replication_slots()
   *
 diff --git a/src/bin/pg_upgrade/pg_upgrade.h b/src/bin/pg_upgrade/pg_upgrade.h
-index ccd1ac0d013..f709f623513 100644
+index ccd1ac0d013..6cc9c4fbef3 100644
 --- a/src/bin/pg_upgrade/pg_upgrade.h
 +++ b/src/bin/pg_upgrade/pg_upgrade.h
-@@ -238,13 +238,13 @@ typedef struct
+@@ -12,6 +12,7 @@
+ 
+ #include "common/relpath.h"
+ #include "libpq-fe.h"
++#include "storage/block.h"
+ 
+ /* For now, pg_upgrade does not use common/logging.c; use our own pg_fatal */
+ #undef pg_fatal
+@@ -238,13 +239,13 @@ typedef struct
  	uint32		ctrl_ver;
  	uint32		cat_ver;
  	char		nextxlogfile[25];
@@ -13666,7 +13677,7 @@ index ccd1ac0d013..f709f623513 100644
  	uint32		align;
  	uint32		blocksz;
  	uint32		largesz;
-@@ -311,6 +311,7 @@ typedef struct
+@@ -311,6 +312,7 @@ typedef struct
  	int			num_tablespaces;
  	const char *tablespace_suffix;	/* directory specification */
  	int			nsubs;			/* number of subscriptions */
@@ -13674,7 +13685,7 @@ index ccd1ac0d013..f709f623513 100644
  	bool		sub_retain_dead_tuples; /* whether a subscription enables
  										 * retain_dead_tuples. */
  } ClusterInfo;
-@@ -387,7 +388,7 @@ extern OSInfo os_info;
+@@ -387,7 +389,7 @@ extern OSInfo os_info;
  /* check.c */
  
  void		output_check_banner(void);
@@ -13683,7 +13694,7 @@ index ccd1ac0d013..f709f623513 100644
  void		check_new_cluster(void);
  void		report_clusters_compatible(void);
  void		issue_warnings_and_set_wal_level(void);
-@@ -430,7 +431,10 @@ void		copyFileByRange(const char *src, const char *dst,
+@@ -430,7 +432,11 @@ void		copyFileByRange(const char *src, const char *dst,
  void		linkFile(const char *src, const char *dst,
  					 const char *schemaName, const char *relName);
  void		rewriteVisibilityMap(const char *fromfile, const char *tofile,
@@ -13691,11 +13702,12 @@ index ccd1ac0d013..f709f623513 100644
 +								 const char *schemaName, const char *relName,
 +								 bool update_version);
 +void		updateSegmentPagesVersion(const char *fromfile, const char *tofile,
-+									  const char *schemaName, const char *relName);
++									  const char *schemaName, const char *relName,
++									  BlockNumber first_block);
  void		check_file_clone(void);
  void		check_copy_file_range(void);
  void		check_hard_link(transferMode transfer_mode);
-@@ -500,6 +504,10 @@ unsigned int str2uint(const char *str);
+@@ -500,6 +506,10 @@ unsigned int str2uint(const char *str);
  
  /* version.c */
  
@@ -13706,7 +13718,7 @@ index ccd1ac0d013..f709f623513 100644
  bool		jsonb_9_4_check_applicable(ClusterInfo *cluster);
  bool		protocol_negotiation_supported(const ClusterInfo *cluster);
  void		old_9_6_invalidate_hash_indexes(ClusterInfo *cluster,
-@@ -507,8 +515,13 @@ void		old_9_6_invalidate_hash_indexes(ClusterInfo *cluster,
+@@ -507,8 +517,13 @@ void		old_9_6_invalidate_hash_indexes(ClusterInfo *cluster,
  
  void		report_extension_updates(ClusterInfo *cluster);
  
@@ -13721,7 +13733,7 @@ index ccd1ac0d013..f709f623513 100644
  
  /* parallel.c */
  void		parallel_exec_prog(const char *log_file, const char *opt_log_file,
-@@ -538,3 +551,6 @@ typedef struct
+@@ -538,3 +553,6 @@ typedef struct
  	FILE	   *file;
  	char		path[MAXPGPATH];
  } UpgradeTaskReport;
@@ -13729,7 +13741,7 @@ index ccd1ac0d013..f709f623513 100644
 +/* segresize.c */
 +void		convert_xact(const char *olddir, const char *newdir);
 diff --git a/src/bin/pg_upgrade/relfilenumber.c b/src/bin/pg_upgrade/relfilenumber.c
-index 38c17ceabf..41605eb949 100644
+index d5088447e0d..b35ac9cd759 100644
 --- a/src/bin/pg_upgrade/relfilenumber.c
 +++ b/src/bin/pg_upgrade/relfilenumber.c
 @@ -18,7 +18,7 @@
@@ -13741,7 +13753,89 @@ index 38c17ceabf..41605eb949 100644
  
  /*
   * The following set of sync_queue_* functions are used for --swap to reduce
-@@ -497,6 +497,7 @@ transfer_single_new_db(FileNameMap *maps, int size,
+@@ -337,6 +337,68 @@ parse_relfilenumber(const char *filename)
+ 	return (RelFileNumber) n;
+ }
+ 
++/*
++ * Rewrite a moved auxiliary fork without modifying its original file until
++ * the replacement is complete.  The caller synchronizes the directory after
++ * all replacements; newly written files must be synchronized before rename.
++ */
++static void
++rewrite_swap_fork(FileNameMap *map, const char *new_db_dir, const char *fork)
++{
++	for (int segno = 0;; segno++)
++	{
++		char	   *path,
++				   *temporary;
++		struct stat st;
++
++		if (segno == 0)
++			path = psprintf("%s/%u%s", new_db_dir, map->relfilenumber, fork);
++		else
++			path = psprintf("%s/%u%s.%d", new_db_dir, map->relfilenumber, fork, segno);
++		if (stat(path, &st) != 0)
++		{
++			if (errno != ENOENT)
++				pg_fatal("could not stat file \"%s\": %m", path);
++			pg_free(path);
++			break;
++		}
++		if (st.st_size == 0)
++		{
++			pg_free(path);
++			continue;
++		}
++
++		temporary = psprintf("%s.pg_upgrade", path);
++		updateSegmentPagesVersion(path, temporary, map->nspname, map->relname,
++								  (BlockNumber) segno * new_cluster.controldata.largesz);
++		if (user_opts.do_sync && fsync_fname(temporary, false) != 0)
++			pg_fatal("could not synchronize file \"%s\": %m", temporary);
++		if (rename(temporary, path) != 0)
++			pg_fatal("could not rename file \"%s\" to \"%s\": %m", temporary, path);
++		pg_free(temporary);
++		pg_free(path);
++	}
++}
++
++/* Process only mapped user relations in the database/tablespace just moved. */
++static void
++rewrite_swap_auxiliary_files(FileNameMap *maps, int size, const char *new_db_dir)
++{
++	for (int i = 0; i < size; i++)
++	{
++		FileNameMap *map = &maps[i];
++		char	   *mapped_dir = psprintf("%s%s/%u", map->new_tablespace,
++										  map->new_tablespace_suffix, map->db_oid);
++
++		if (strcmp(mapped_dir, new_db_dir) == 0)
++		{
++			rewrite_swap_fork(map, new_db_dir, "_fsm");
++			rewrite_swap_fork(map, new_db_dir, "_vm");
++		}
++		pg_free(mapped_dir);
++	}
++}
++
+ /*
+  * swap_catalog_files()
+  *
+@@ -426,7 +488,11 @@ swap_catalog_files(FileNameMap *maps, int size, const char *old_catalog_dir,
+ 		pg_fatal("could not read directory \"%s\": %m", moved_db_dir);
+ 	(void) closedir(dir);
+ 
+-	/* Ensure the directory entries are persisted to disk. */
++	/* Auxiliary pages have no tuple XIDs, but need the target page version. */
++	if (cluster_is_xid32(&old_cluster) && cluster_is_xid64(&new_cluster))
++		rewrite_swap_auxiliary_files(maps, size, new_db_dir);
++
++	/* Ensure catalog and rewritten auxiliary directory entries are persisted. */
+ 	if (fsync_fname(new_db_dir, true) != 0)
+ 		pg_fatal("could not synchronize directory \"%s\": %m", new_db_dir);
+ 	if (fsync_parent_path(new_db_dir) != 0)
+@@ -497,6 +563,7 @@ transfer_single_new_db(FileNameMap *maps, int size,
  {
  	int			mapnum;
  	bool		vm_must_add_frozenbit = false;
@@ -13749,14 +13843,14 @@ index 38c17ceabf..41605eb949 100644
  
  	/*
  	 * Do we need to rewrite visibilitymap?
-@@ -519,19 +520,28 @@ transfer_single_new_db(FileNameMap *maps, int size,
+@@ -519,19 +586,28 @@ transfer_single_new_db(FileNameMap *maps, int size,
  		return;
  	}
  
 +	/*
 +	 * Need to update FSM and VM pages version to avoid lazy conversion.
 +	 */
-+	if (old_cluster.controldata.cat_ver < new_cluster.controldata.cat_ver)
++	if (cluster_is_xid32(&old_cluster) && cluster_is_xid64(&new_cluster))
 +		update_version = true;
 +
  	for (mapnum = 0; mapnum < size; mapnum++)
@@ -13781,7 +13875,7 @@ index 38c17ceabf..41605eb949 100644
  		}
  	}
  }
-@@ -545,7 +555,8 @@ transfer_single_new_db(FileNameMap *maps, int size,
+@@ -545,7 +621,8 @@ transfer_single_new_db(FileNameMap *maps, int size,
   * mode.
   */
  static void
@@ -13791,7 +13885,7 @@ index 38c17ceabf..41605eb949 100644
  {
  	char		old_file[MAXPGPATH];
  	char		new_file[MAXPGPATH];
-@@ -609,7 +620,17 @@ transfer_relfile(FileNameMap *map, const char *type_suffix, bool vm_must_add_fro
+@@ -609,7 +686,18 @@ transfer_relfile(FileNameMap *map, const char *type_suffix, bool vm_must_add_fro
  			/* Need to rewrite visibility map format */
  			pg_log(PG_VERBOSE, "rewriting \"%s\" to \"%s\"",
  				   old_file, new_file);
@@ -13806,7 +13900,8 @@ index 38c17ceabf..41605eb949 100644
 +			pg_log(PG_VERBOSE, "rewriting \"%s\" to \"%s\"",
 +				   old_file, new_file);
 +			updateSegmentPagesVersion(old_file, new_file, map->nspname,
-+									  map->relname);
++									  map->relname,
++									  (BlockNumber) segno * new_cluster.controldata.largesz);
  		}
  		else
  			switch (user_opts.transfer_mode)
@@ -13865,34 +13960,34 @@ index 00000000000..51743a09339
 +	FreeSlruWrite(writer);
 +}
 diff --git a/src/bin/pg_upgrade/t/002_pg_upgrade.pl b/src/bin/pg_upgrade/t/002_pg_upgrade.pl
-index 823f41e754..dc8326172a 100644
+index 0a4121fdc4d..a0a84c260ca 100644
 --- a/src/bin/pg_upgrade/t/002_pg_upgrade.pl
 +++ b/src/bin/pg_upgrade/t/002_pg_upgrade.pl
-@@ -364,6 +364,13 @@ if (defined($ENV{oldinstall}))
+@@ -356,6 +356,13 @@ if (defined($ENV{oldinstall}))
  # old node.
  $oldnode->append_conf('postgresql.conf', 'autovacuum = off');
  $oldnode->restart;
 +$oldnode->safe_psql('regression',
-+	"CREATE TABLE t1 (id SERIAL NOT NULL PRIMARY KEY, plt text, pln NUMERIC(8, 4));
-+	 INSERT INTO t1 (plt, pln) SELECT md5(random()::text), random() * 9999 FROM generate_series(1, 1000);");
++	"CREATE TABLE public.xid64_upgrade_horizons (id SERIAL NOT NULL PRIMARY KEY, plt text, pln NUMERIC(8, 4));
++	 INSERT INTO public.xid64_upgrade_horizons (plt, pln) SELECT md5(random()::text), random() * 9999 FROM generate_series(1, 1000);");
 +my $relfrozenxid = $oldnode->safe_psql('regression',
-+	"SELECT relfrozenxid FROM pg_class WHERE relname = 't1';");
++	"SELECT relfrozenxid FROM pg_catalog.pg_class WHERE oid = 'public.xid64_upgrade_horizons'::pg_catalog.regclass;");
 +my $relminmxid = $oldnode->safe_psql('regression',
-+	"SELECT relminmxid FROM pg_class WHERE relname = 't1';");
++	"SELECT relminmxid FROM pg_catalog.pg_class WHERE oid = 'public.xid64_upgrade_horizons'::pg_catalog.regclass;");
  
  # Test that dump/restore of the regression database roundtrips cleanly.  This
  # doesn't work well when the nodes are different versions, so skip it in that
-@@ -589,6 +596,16 @@ ok( !-d $newnode->data_dir . "/pg_upgrade_output.d",
+@@ -581,6 +588,16 @@ ok( !-d $newnode->data_dir . "/pg_upgrade_output.d",
  
  $newnode->start;
  
 +my $relfrozenxid_new = $newnode->safe_psql('regression',
-+	"SELECT relfrozenxid FROM pg_class WHERE relname = 't1';");
++	"SELECT relfrozenxid FROM pg_catalog.pg_class WHERE oid = 'public.xid64_upgrade_horizons'::pg_catalog.regclass;");
 +
 +is($relfrozenxid_new, $relfrozenxid, 'old and new relfrozenxid match after pg_upgrade');
 +
 +my $relminmxid_new = $newnode->safe_psql('regression',
-+	"SELECT relminmxid FROM pg_class WHERE relname = 't1';");
++	"SELECT relminmxid FROM pg_catalog.pg_class WHERE oid = 'public.xid64_upgrade_horizons'::pg_catalog.regclass;");
 +
 +is($relminmxid_new, $relminmxid, 'old and new relminmxid match after pg_upgrade');
 +

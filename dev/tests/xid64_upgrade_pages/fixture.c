@@ -51,7 +51,7 @@ int main(int argc, char **argv) {
         printf("%llu\n", (unsigned long long)parse_xid(line, (unsigned)atoi(argv[2])));
     } else {
         new_cluster.controldata.data_checksum_version = (unsigned)atoi(argv[3]);
-        updateSegmentPagesVersion(argv[1], argv[2], "public", "fixture");
+        updateSegmentPagesVersion(argv[1], argv[2], "public", "fixture", 0);
     }
     return 0;
 }

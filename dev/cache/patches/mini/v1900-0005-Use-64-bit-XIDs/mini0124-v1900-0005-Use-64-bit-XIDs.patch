@@ -1,5 +1,5 @@
 diff --git a/src/bin/pg_upgrade/file.c b/src/bin/pg_upgrade/file.c
-index 5b276008614..654b9ca073d 100644
+index 5b276008614..7100a53d90d 100644
 --- a/src/bin/pg_upgrade/file.c
 +++ b/src/bin/pg_upgrade/file.c
 @@ -214,7 +214,8 @@ linkFile(const char *src, const char *dst,
@@ -24,7 +24,7 @@ index 5b276008614..654b9ca073d 100644
  			/* Set new checksum for visibility map page, if enabled */
  			if (new_cluster.controldata.data_checksum_version != PG_DATA_CHECKSUM_OFF)
  				((PageHeader) new_vmbuf.data)->pd_checksum =
-@@ -356,6 +362,115 @@ rewriteVisibilityMap(const char *fromfile, const char *tofile,
+@@ -356,6 +362,118 @@ rewriteVisibilityMap(const char *fromfile, const char *tofile,
  	close(src_fd);
  }
  
@@ -35,13 +35,15 @@ index 5b276008614..654b9ca073d 100644
 + * schemaName/relName are relation's SQL name (used for error messages only).
 + *
 + * Read segment pages one by one and set version to PG_PAGE_LAYOUT_VERSION.
++ * first_block supplies the fork-relative block number for page checksums.
 + *
 + * Although FSM and VM formats do not change when switching to 64-bit XIDs, we
 + * must upgrade pages version in order to avoid lazy conversion on first read.
 + */
 +void
 +updateSegmentPagesVersion(const char *fromfile, const char *tofile,
-+						  const char *schemaName, const char *relName)
++						  const char *schemaName, const char *relName,
++						  BlockNumber first_block)
 +{
 +	int			src_fd;
 +	int			dst_fd;
@@ -68,7 +70,7 @@ index 5b276008614..654b9ca073d 100644
 +	/* Save old file size */
 +	src_filesize = statbuf.st_size;
 +	totalBytesRead = 0;
-+	blkno = 0;
++	blkno = first_block;
 +
 +	while (totalBytesRead < src_filesize)
 +	{
@@ -133,7 +135,8 @@ index 5b276008614..654b9ca073d 100644
 +	}
 +
 +	/* Clean up */
-+	close(dst_fd);
++	if (close(dst_fd) != 0)
++		pg_fatal("could not close file \"%s\": %m", tofile);
 +	close(src_fd);
 +}
 +

@@ -1,8 +1,16 @@
 diff --git a/src/bin/pg_upgrade/pg_upgrade.h b/src/bin/pg_upgrade/pg_upgrade.h
-index ccd1ac0d013..f709f623513 100644
+index ccd1ac0d013..6cc9c4fbef3 100644
 --- a/src/bin/pg_upgrade/pg_upgrade.h
 +++ b/src/bin/pg_upgrade/pg_upgrade.h
-@@ -238,13 +238,13 @@ typedef struct
+@@ -12,6 +12,7 @@
+ 
+ #include "common/relpath.h"
+ #include "libpq-fe.h"
++#include "storage/block.h"
+ 
+ /* For now, pg_upgrade does not use common/logging.c; use our own pg_fatal */
+ #undef pg_fatal
+@@ -238,13 +239,13 @@ typedef struct
  	uint32		ctrl_ver;
  	uint32		cat_ver;
  	char		nextxlogfile[25];
@@ -21,7 +29,7 @@ index ccd1ac0d013..f709f623513 100644
  	uint32		align;
  	uint32		blocksz;
  	uint32		largesz;
-@@ -311,6 +311,7 @@ typedef struct
+@@ -311,6 +312,7 @@ typedef struct
  	int			num_tablespaces;
  	const char *tablespace_suffix;	/* directory specification */
  	int			nsubs;			/* number of subscriptions */
@@ -29,7 +37,7 @@ index ccd1ac0d013..f709f623513 100644
  	bool		sub_retain_dead_tuples; /* whether a subscription enables
  										 * retain_dead_tuples. */
  } ClusterInfo;
-@@ -387,7 +388,7 @@ extern OSInfo os_info;
+@@ -387,7 +389,7 @@ extern OSInfo os_info;
  /* check.c */
  
  void		output_check_banner(void);
@@ -38,7 +46,7 @@ index ccd1ac0d013..f709f623513 100644
  void		check_new_cluster(void);
  void		report_clusters_compatible(void);
  void		issue_warnings_and_set_wal_level(void);
-@@ -430,7 +431,10 @@ void		copyFileByRange(const char *src, const char *dst,
+@@ -430,7 +432,11 @@ void		copyFileByRange(const char *src, const char *dst,
  void		linkFile(const char *src, const char *dst,
  					 const char *schemaName, const char *relName);
  void		rewriteVisibilityMap(const char *fromfile, const char *tofile,
@@ -46,11 +54,12 @@ index ccd1ac0d013..f709f623513 100644
 +								 const char *schemaName, const char *relName,
 +								 bool update_version);
 +void		updateSegmentPagesVersion(const char *fromfile, const char *tofile,
-+									  const char *schemaName, const char *relName);
++									  const char *schemaName, const char *relName,
++									  BlockNumber first_block);
  void		check_file_clone(void);
  void		check_copy_file_range(void);
  void		check_hard_link(transferMode transfer_mode);
-@@ -500,6 +504,10 @@ unsigned int str2uint(const char *str);
+@@ -500,6 +506,10 @@ unsigned int str2uint(const char *str);
  
  /* version.c */
  
@@ -61,7 +70,7 @@ index ccd1ac0d013..f709f623513 100644
  bool		jsonb_9_4_check_applicable(ClusterInfo *cluster);
  bool		protocol_negotiation_supported(const ClusterInfo *cluster);
  void		old_9_6_invalidate_hash_indexes(ClusterInfo *cluster,
-@@ -507,8 +515,13 @@ void		old_9_6_invalidate_hash_indexes(ClusterInfo *cluster,
+@@ -507,8 +517,13 @@ void		old_9_6_invalidate_hash_indexes(ClusterInfo *cluster,
  
  void		report_extension_updates(ClusterInfo *cluster);
  
@@ -76,7 +85,7 @@ index ccd1ac0d013..f709f623513 100644
  
  /* parallel.c */
  void		parallel_exec_prog(const char *log_file, const char *opt_log_file,
-@@ -538,3 +551,6 @@ typedef struct
+@@ -538,3 +553,6 @@ typedef struct
  	FILE	   *file;
  	char		path[MAXPGPATH];
  } UpgradeTaskReport;
