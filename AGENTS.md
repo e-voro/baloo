@@ -797,3 +797,88 @@ user's instruction to pause on a new logic correction.**
   **`11db8aead20`**. TODO explicitly marks the inherited bug **needed for
   rebase to Tantor 18**. Full series build/recovery checks remain pending.
 - Next unapplied at this checkpoint: **mini0141(multixact.h)**.
+
+
+## IMPORTANT: foundational headers and PL adaptation through mini0183(xid_wraparound.c)
+
+- Completed the previously requested TOAST-fix report and **needed for rebase
+  to Tantor 18** TODO entry in source/docs checkpoint **`ca75dc6865e`**.
+- Applied mini0141(multixact.h) through mini0163(autovacuum.h), except
+  mini0148(tupmacs.h), already incorporated by mini0027(tupmacs.h). Preserve
+  its shared TYPALIGN_DOUBLE/TYPALIGN_XID -> ALIGNOF_DOUBLE cases.
+- mini0141(multixact.h) keeps PG19 uint64 offsets, oldestMulti/oldestOffset
+  truncate WAL, GetMultiXactInfo(uint64 *) and the required int64 member
+  pressure threshold. Full MultiXact ID constants are now 64 bits. Clarified
+  the inherited contradictory comment: ID zero is invalid, assignment starts
+  at one. Do not restore the removed MaxMultiXactOffset/wrap-limit API.
+- mini0142(nbtree.h) supplies legacy opaque-field macros used by pageinspect;
+  retain native BTDeletedPageData full safexids. mini0144(rewriteheap.h)
+  matches the already-adapted mapping filename writers and eight-field parser.
+  mini0145(rmgrlist.h) appends Heap3 **after XLOG2**, retaining native IDs.
+  The complete 24-entry pg_waldump expected list matches the header exactly.
+- mini0147(transam.h), **`2782ca29cf0`**, retains PG19 shared-memory APIs,
+  widens comparisons/constants and uses the original full-XID constructor.
+  Applied mini0174(xid8.h) and mini0181(regress_injection.c) early with it;
+  skip their replay. The cutoff helper wraps the full XID directly and keeps
+  PG19's stable-nextXid retry; no epoch reconstruction is needed.
+- mini0149(xact.h)/mini0151(xlogrecord.h) supply full-XID WAL layouts matching
+  earlier writer/parser adaptations; preserve PG19 read-only nest reporting.
+  mini0150(xloginsert.h) defines the converted-buffer flag already used by
+  the adapted writer; keep XLogGetFakeLSN(). mini0152(c.h) widens transaction,
+  local and subtransaction IDs, adds ShortTransactionId and start validators,
+  and retains native uint64 MultiXactOffset, Oid8, C11/C++ and alignment APIs.
+  mini0153(catversion.h) keeps the original development marker 999999999.
+- Catalog/operator/function/type declarations now match full XIDs; preserve
+  PG19 Oid8 catalogs, ACLs, statistics interfaces and catalog-struct markers.
+  Vacuum headers/reloptions retain PG19 pointer APIs, worker accounting,
+  score weights and ternary options while widening freeze ages. The int64
+  list member/prototype is added without changing native cell constructors.
+- mini0161(pg_lfind.h) adds a read-only uint64 search API, matching native
+  const-qualified search inputs. mini0182(test_lfind.c), **`07a65dcfd88`**,
+  retains every native 32-bit test and calls an additional 64-bit helper from
+  the existing SQL entry point. New keys exceed UINT32_MAX and cover unrolled
+  and tail paths; the original mini replaced the 32-bit coverage instead.
+- Applied mini0169(itemid.h), mini0171(proc.h), mini0172(combocid.h),
+  mini0173(rel.h), mini0175(plperl.c), mini0176(pl_exec.c), mini0178(pltcl.c),
+  mini0179(Makefile), mini0180(meson.build). PGPROC xid/xmin/mirrored xids are
+  atomic while preserving PG19 cache-line layout, conflict bitmask, free
+  lists and buffer-lock waiting. Full cached catalog xmin is used by PLs;
+  fabricated PL/pgSQL composite wrappers initialize both XIDs to zero.
+- mini0177(plpy_procedure.c) is superseded: PG19's CachedFunction callbacks
+  replaced its old fn_xmin ownership. Existing adapted funccache.c already
+  uses HeapTupleGetRawXmin at both assignment and validation. No PL/Python
+  source edit is needed. mini0183(xid_wraparound.c) is already incorporated
+  by formatting adaptation 0001. Skip notes record both cases. Earlier AIO,
+  buffer and lock header steps remain applied/superseded; do not replay them.
+- Validation: dev/tests/xid64_transam/check.py compiles actual transam.h,
+  applied ID typedefs, the cutoff helper and uint64-search code with fixed
+  service/tuple scaffolding, warnings as errors and UBSan. Ten high-XID
+  cutoff/retry scenarios, comparison/advance/retreat checks and the actual
+  new high-bit search regression helper pass. pg_waldump Perl syntax passes.
+  **34 saved minis reverse-check; 34 aggregate sections replay on 8ca324058af
+  and match source exactly.** Saved artifacts/probe in Baloo **`2aedb71`**,
+  parent **`d454d1a37e7`**. No full build, live SQL, PL regression, TAP or
+  recovery run is claimed. New xid-64 test directory arrives in later minis;
+  the aggregate is still only partly adapted.
+
+### NEW LOGIC FINDING: mini0184(AdjustUpgrade.pm) assumes a regression table exists
+
+**First unapplied: mini0184(AdjustUpgrade.pm). Paused under the user's rule
+for discussion before new logic corrections. This finding concerns the test
+harness, not PostgreSQL runtime tuple storage or WAL.**
+
+- The original mini unconditionally schedules:
+  `alter table public.tab_core_types drop column xid`.
+  The PG11.22 regression source has no tab_core_types; executing that test
+  adjustment therefore fails before pg_upgrade. PG12.22 has the table, but
+  initial PG12.0/13.0/14.0 tags do not: presence was backpatched, so do not
+  describe it simply as a table introduced in PG12.0.
+- Source evidence: inspected local release-tag SQL. A temporary application
+  of the original mini and actual adjust_database_contents() calls emits
+  the unguarded command for PG11/12/18/19. No live SQL/server was executed.
+- Proposed concrete SQL (not applied):
+  `alter table if exists public.tab_core_types drop column if exists xid`.
+  This tolerates either absent object without relying on a major-version
+  guess; PostgreSQL 9.2 grammar supports both IF EXISTS clauses. Preserve
+  PG19 btree_gist and other native upgrade adjustments. Discuss this test
+  behavior before implementing mini0184(AdjustUpgrade.pm).
