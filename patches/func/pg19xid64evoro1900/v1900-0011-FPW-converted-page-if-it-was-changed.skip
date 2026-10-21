@@ -1,0 +1,12 @@
+Patch 0011 (heap_convert.c): superseded; do not apply the original delta.
+
+The authorized supplied AIO fix 0008 already replaced Relation-based conversion
+and conversion-time GenericXLog with by-value metadata and BM_CONVERTED.
+Every converted buffer is marked for a full image on later WAL registration;
+this covers double-xmax conversion without WAL insertion in an AIO worker.
+Restoring patch 0011 would reintroduce obsolete conversion-time WAL behavior.
+
+Remaining review: supplied fix 0015 ensures converted images override NO_IMAGE
+and preserves conversion markers on NO_CHANGE references. PG19 moved visibility
+logging into prune WAL, so its heap-LSN rule must be adapted in pruneheap.c.
+The original patch remains preserved under pg19xid64v67/.

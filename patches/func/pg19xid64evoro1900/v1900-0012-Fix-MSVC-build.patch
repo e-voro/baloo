@@ -1,0 +1,246 @@
+From 60a08afaf2e53bf561bd42f7cbd24d9cc0cef123 Mon Sep 17 00:00:00 2001
+From: Maxim Orlov <orlovmg@gmail.com>
+Date: Wed, 21 Oct 2026 19:57:40 +0800
+Subject: [PATCH v1900 12/12] Avoid the MSVC reserved _int64 name in generated GUC members
+
+Adapt xid64 patch 0012 by renaming only the union member to _int_64 and mapping it explicitly in the PG19 generator. Keep the int64 GUC type name, enum and parser validation unchanged.
+---
+ src/backend/utils/misc/gen_guc_tables.pl |  4 +-
+ src/backend/utils/misc/guc.c             | 48 ++++++++++++------------
+ src/backend/utils/misc/guc_funcs.c       |  2 +-
+ src/backend/utils/misc/help_config.c     |  6 +--
+ src/include/utils/guc_tables.h           |  2 +-
+ 5 files changed, 32 insertions(+), 30 deletions(-)
+
+diff --git a/src/backend/utils/misc/gen_guc_tables.pl b/src/backend/utils/misc/gen_guc_tables.pl
+index 54256cabb28..a67a77bb12e 100644
+--- a/src/backend/utils/misc/gen_guc_tables.pl
++++ b/src/backend/utils/misc/gen_guc_tables.pl
+@@ -152,7 +152,9 @@ sub print_table
+ 		}
+ 		printf $ofh "\t\t.flags = %s,\n", $entry->{flags} if $entry->{flags};
+ 		printf $ofh "\t\t.vartype = %s,\n", ('PGC_' . uc($entry->{type}));
+-		printf $ofh "\t\t._%s = {\n", $entry->{type};
++		# MSVC reserves _int64; the GUC type name remains "int64".
++		my $member = $entry->{type} eq 'int64' ? 'int_64' : $entry->{type};
++		printf $ofh "\t\t._%s = {\n", $member;
+ 		printf $ofh "\t\t\t.variable = &%s,\n", $entry->{variable};
+ 
+ 		if ($entry->{type} eq 'int64')
+diff --git a/src/backend/utils/misc/guc.c b/src/backend/utils/misc/guc.c
+index 9fb6d1d90ac..9cdeab7d583 100644
+--- a/src/backend/utils/misc/guc.c
++++ b/src/backend/utils/misc/guc.c
+@@ -796,7 +796,7 @@ set_stack_value(struct config_generic *gconf, config_var_value *val)
+ 			val->val.intval = *gconf->_int.variable;
+ 			break;
+ 		case PGC_INT64:
+-			val->val.int64val = *gconf->_int64.variable;
++			val->val.int64val = *gconf->_int_64.variable;
+ 			break;
+ 		case PGC_REAL:
+ 			val->val.realval = *gconf->_real.variable;
+@@ -1349,7 +1349,7 @@ check_GUC_init(const struct config_generic *gconf)
+ 			}
+ 		case PGC_INT64:
+ 			{
+-				const struct config_int64 *conf = &gconf->_int64;
++				const struct config_int64 *conf = &gconf->_int_64;
+ 
+ 				if (*conf->variable != 0 && *conf->variable != conf->boot_val)
+ 				{
+@@ -1589,7 +1589,7 @@ InitializeOneGUCOption(struct config_generic *gconf)
+ 			}
+ 		case PGC_INT64:
+ 			{
+-				struct config_int64 *conf = &gconf->_int64;
++				struct config_int64 *conf = &gconf->_int_64;
+ 				int64		newval = conf->boot_val;
+ 
+ 				Assert(newval >= conf->min);
+@@ -1994,7 +1994,7 @@ ResetAllOptions(void)
+ 				}
+ 			case PGC_INT64:
+ 				{
+-					struct config_int64 *conf = &gconf->_int64;
++					struct config_int64 *conf = &gconf->_int_64;
+ 
+ 					if (conf->assign_hook)
+ 						conf->assign_hook(conf->reset_val,
+@@ -2393,7 +2393,7 @@ AtEOXact_GUC(bool isCommit, int nestLevel)
+ 						}
+ 					case PGC_INT64:
+ 						{
+-							struct config_int64 *conf = &gconf->_int64;
++							struct config_int64 *conf = &gconf->_int_64;
+ 							int64		newval = newvalue.val.int64val;
+ 							void	   *newextra = newvalue.extra;
+ 
+@@ -3223,7 +3223,7 @@ parse_and_validate_value(const struct config_generic *record,
+ 			break;
+ 		case PGC_INT64:
+ 			{
+-				const struct config_int64 *conf = &record->_int64;
++				const struct config_int64 *conf = &record->_int_64;
+ 				const char *hintmsg;
+ 
+ 				if (!parse_int64(value, &newval->int64val,
+@@ -3885,7 +3885,7 @@ set_config_with_handle(const char *name, config_handle *handle,
+ 
+ 		case PGC_INT64:
+ 			{
+-				struct config_int64 *conf = &record->_int64;
++				struct config_int64 *conf = &record->_int_64;
+ 
+ #define newval (newval_union.int64val)
+ 
+@@ -4551,7 +4551,7 @@ GetConfigOption(const char *name, bool missing_ok, bool restrict_privileged)
+ 
+ 		case PGC_INT64:
+ 			snprintf(buffer, sizeof(buffer), "%" PRId64,
+-					 *record->_int64.variable);
++					 *record->_int_64.variable);
+ 			return buffer;
+ 
+ 		case PGC_REAL:
+@@ -4604,7 +4604,7 @@ GetConfigOptionResetString(const char *name)
+ 
+ 		case PGC_INT64:
+ 			snprintf(buffer, sizeof(buffer), "%" PRId64,
+-					 record->_int64.reset_val);
++					 record->_int_64.reset_val);
+ 			return buffer;
+ 
+ 		case PGC_REAL:
+@@ -5393,14 +5393,14 @@ DefineCustomInt64Variable(const char *name,
+ 	struct config_generic *var;
+ 
+ 	var = init_custom_variable(name, short_desc, long_desc, context, flags, PGC_INT64);
+-	var->_int64.variable = valueAddr;
+-	var->_int64.boot_val = bootValue;
+-	var->_int64.reset_val = bootValue;
+-	var->_int64.min = minValue;
+-	var->_int64.max = maxValue;
+-	var->_int64.check_hook = check_hook;
+-	var->_int64.assign_hook = assign_hook;
+-	var->_int64.show_hook = show_hook;
++	var->_int_64.variable = valueAddr;
++	var->_int_64.boot_val = bootValue;
++	var->_int_64.reset_val = bootValue;
++	var->_int_64.min = minValue;
++	var->_int_64.max = maxValue;
++	var->_int_64.check_hook = check_hook;
++	var->_int_64.assign_hook = assign_hook;
++	var->_int_64.show_hook = show_hook;
+ 	define_custom_variable(var);
+ }
+ 
+@@ -5593,7 +5593,7 @@ get_explain_guc_options(int *num)
+ 
+ 			case PGC_INT64:
+ 				{
+-					struct config_int64 *lconf = &conf->_int64;
++					struct config_int64 *lconf = &conf->_int_64;
+ 
+ 					modified = (lconf->boot_val != *(lconf->variable));
+ 				}
+@@ -5733,7 +5733,7 @@ ShowGUCOption(const struct config_generic *record, bool use_units)
+ 
+ 		case PGC_INT64:
+ 			{
+-				const struct config_int64 *conf = &record->_int64;
++				const struct config_int64 *conf = &record->_int_64;
+ 
+ 				if (conf->show_hook)
+ 					val = conf->show_hook();
+@@ -5864,7 +5864,7 @@ write_one_nondefault_variable(FILE *fp, struct config_generic *gconf)
+ 
+ 		case PGC_INT64:
+ 			{
+-				struct config_int64 *conf = &gconf->_int64;
++				struct config_int64 *conf = &gconf->_int_64;
+ 
+ 				fprintf(fp, "%" PRId64, *conf->variable);
+ 			}
+@@ -6144,7 +6144,7 @@ estimate_variable_size(struct config_generic *gconf)
+ 
+ 		case PGC_INT64:
+ 			{
+-				struct config_int64 *conf = &gconf->_int64;
++				struct config_int64 *conf = &gconf->_int_64;
+ 
+ 				/*
+ 				 * Instead of getting the exact display length, use max
+@@ -6327,7 +6327,7 @@ serialize_variable(char **destptr, Size *maxbytes,
+ 
+ 		case PGC_INT64:
+ 			{
+-				struct config_int64 *conf = &gconf->_int64;
++				struct config_int64 *conf = &gconf->_int_64;
+ 
+ 				do_serialize(destptr, maxbytes, "%" PRId64, *conf->variable);
+ 			}
+@@ -7126,7 +7126,7 @@ call_int64_check_hook(const struct config_generic *conf, int64 *newval, void **e
+ 					GucSource source, int elevel)
+ {
+ 	/* Quick success if no hook */
+-	if (!conf->_int64.check_hook)
++	if (!conf->_int_64.check_hook)
+ 		return true;
+ 
+ 	/* Reset variables that might be set by hook */
+@@ -7135,7 +7135,7 @@ call_int64_check_hook(const struct config_generic *conf, int64 *newval, void **e
+ 	GUC_check_errdetail_string = NULL;
+ 	GUC_check_errhint_string = NULL;
+ 
+-	if (!conf->_int64.check_hook(newval, extra, source))
++	if (!conf->_int_64.check_hook(newval, extra, source))
+ 	{
+ 		ereport(elevel,
+ 				(errcode(GUC_check_errcode_value),
+diff --git a/src/backend/utils/misc/guc_funcs.c b/src/backend/utils/misc/guc_funcs.c
+index e49419a075b..21d2a1fd6e3 100644
+--- a/src/backend/utils/misc/guc_funcs.c
++++ b/src/backend/utils/misc/guc_funcs.c
+@@ -706,7 +706,7 @@ GetConfigOptionValues(const struct config_generic *conf, const char **values)
+ 
+ 		case PGC_INT64:
+ 			{
+-				const struct config_int64 *lconf = &conf->_int64;
++				const struct config_int64 *lconf = &conf->_int_64;
+ 
+ 				/* min_val */
+ 				snprintf(buffer, sizeof(buffer), "%" PRId64, lconf->min);
+diff --git a/src/backend/utils/misc/help_config.c b/src/backend/utils/misc/help_config.c
+index ac176af696d..51506aa9256 100644
+--- a/src/backend/utils/misc/help_config.c
++++ b/src/backend/utils/misc/help_config.c
+@@ -92,9 +92,9 @@ printMixedStruct(const struct config_generic *structToPrint)
+ 			break;
+ 		case PGC_INT64:
+ 			printf("INTEGER64\t%" PRIi64 "\t%" PRIi64 "\t%" PRIi64 "\t",
+-				   structToPrint->_int64.reset_val,
+-				   structToPrint->_int64.min,
+-				   structToPrint->_int64.max);
++				   structToPrint->_int_64.reset_val,
++				   structToPrint->_int_64.min,
++				   structToPrint->_int_64.max);
+ 			break;
+ 		case PGC_REAL:
+ 			printf("REAL\t%g\t%g\t%g\t",
+diff --git a/src/include/utils/guc_tables.h b/src/include/utils/guc_tables.h
+index d6e37c85958..a1bc725b1a3 100644
+--- a/src/include/utils/guc_tables.h
++++ b/src/include/utils/guc_tables.h
+@@ -301,7 +301,7 @@ struct config_generic
+ 	{
+ 		struct config_bool _bool;
+ 		struct config_int _int;
+-		struct config_int64 _int64;
++		struct config_int64 _int_64;
+ 		struct config_real _real;
+ 		struct config_string _string;
+ 		struct config_enum _enum;
+-- 
+2.55.0
+

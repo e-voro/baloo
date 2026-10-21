@@ -1,43 +1,37 @@
-From ae059257feffa92d92779a3e056d744387db7e8a Mon Sep 17 00:00:00 2001
+From fe80a516e7ac0078b1111cf2d65e7a1ba3d18c61 Mon Sep 17 00:00:00 2001
 From: Maxim Orlov <m.orlov@postgrespro.ru>
-Date: Wed, 4 May 2022 15:53:36 +0300
-Subject: [PATCH v67 09/12] Add initdb option to initialize cluster with
- non-standard xid/mxid/mxoff.
+Date: Wed, 21 Oct 2026 19:51:20 +0800
+Subject: [PATCH v1900 09/12] Add initdb options for full XID and MultiXact starting
+ counters on PG19
 
-To date testing database cluster wraparund was not easy as initdb has always
-inited it with default xid/mxid/mxoff. The option to specify any valid
-xid/mxid/mxoff at cluster startup will make these things easier.
-
-Author: Maxim Orlov <orlovmg@gmail.com>
-Author: Pavel Borisov <pashkin.elfe@gmail.com>
-Discussion: https://www.postgresql.org/message-id/flat/CACG%3Dezaa4vqYjJ16yoxgrpa-%3DgXnf0Vv3Ey9bjGrRRFN2YyWFQ%40mail.gmail.com
+Adapt xid64 patch 0009 to the reentrant pg_getopt API. Preserve native nonzero MultiXact offsets, reject explicit offset zero and unsigned conversion of negative input, and initialize all relevant SLRU pages. Preserve native bootstrap checkpoint fields and regression harness behavior.
 ---
- src/backend/access/transam/clog.c        |   7 +-
- src/backend/access/transam/multixact.c   |  10 +++
+ src/backend/access/transam/clog.c        |   6 ++
+ src/backend/access/transam/multixact.c   |  10 ++
  src/backend/access/transam/subtrans.c    |   6 ++
- src/backend/access/transam/xlog.c        |  16 ++--
- src/backend/bootstrap/bootstrap.c        |  50 ++++++++++-
+ src/backend/access/transam/xlog.c        |  15 ++-
+ src/backend/bootstrap/bootstrap.c        |  45 ++++++++-
  src/backend/main/main.c                  |   6 ++
- src/backend/postmaster/postmaster.c      |  14 ++-
- src/backend/tcop/postgres.c              |  53 ++++++++++-
- src/bin/initdb/initdb.c                  | 108 ++++++++++++++++++++++-
- src/bin/initdb/t/001_initdb.pl           |  86 ++++++++++++++++++
+ src/backend/postmaster/postmaster.c      |   8 +-
+ src/backend/tcop/postgres.c              |  48 +++++++++-
+ src/bin/initdb/initdb.c                  | 111 ++++++++++++++++++++++-
+ src/bin/initdb/t/001_initdb.pl           |  97 ++++++++++++++++++++
  src/include/access/xlog.h                |   3 +
  src/include/catalog/pg_class.h           |   2 +-
  src/test/regress/pg_regress.c            |   3 +-
- src/test/xid-64/t/001_test_large_xids.pl |  54 ++++++++++++
+ src/test/xid-64/t/001_test_large_xids.pl |  54 +++++++++++
  src/test/xid-64/t/002_test_gucs.pl       |   4 +-
  src/test/xid-64/t/004_test_relminmxid.pl |   2 +-
  src/test/xid-64/t/005_stream_subxact.pl  |   2 +-
  src/test/xid-64/t/006_zeropage.pl        |   2 +-
- 18 files changed, 408 insertions(+), 20 deletions(-)
+ 18 files changed, 405 insertions(+), 19 deletions(-)
  create mode 100644 src/test/xid-64/t/001_test_large_xids.pl
 
 diff --git a/src/backend/access/transam/clog.c b/src/backend/access/transam/clog.c
-index 37954ee9b2..7d7b0f6770 100644
+index ac4695e194a..3c3db763171 100644
 --- a/src/backend/access/transam/clog.c
 +++ b/src/backend/access/transam/clog.c
-@@ -831,8 +831,14 @@ check_transaction_buffers(int *newval, void **extra, GucSource source)
+@@ -850,8 +850,14 @@ check_transaction_buffers(int *newval, void **extra, GucSource source)
  void
  BootStrapCLOG(void)
  {
@@ -52,19 +46,11 @@ index 37954ee9b2..7d7b0f6770 100644
  }
  
  /*
-@@ -1020,7 +1026,6 @@ CLOGPagePrecedes(int64 page1, int64 page2)
- 			TransactionIdPrecedes(xid1, xid2 + CLOG_XACTS_PER_PAGE - 1));
- }
- 
--
- /*
-  * Write a TRUNCATE xlog record
-  *
 diff --git a/src/backend/access/transam/multixact.c b/src/backend/access/transam/multixact.c
-index 41e9f96ffe..0ef37071ed 100644
+index 67520a6ecad..ead17682435 100644
 --- a/src/backend/access/transam/multixact.c
 +++ b/src/backend/access/transam/multixact.c
-@@ -1901,9 +1901,19 @@ check_multixact_member_buffers(int *newval, void **extra, GucSource source)
+@@ -1825,9 +1825,19 @@ check_multixact_member_buffers(int *newval, void **extra, GucSource source)
  void
  BootStrapMultiXact(void)
  {
@@ -85,10 +71,10 @@ index 41e9f96ffe..0ef37071ed 100644
  
  /*
 diff --git a/src/backend/access/transam/subtrans.c b/src/backend/access/transam/subtrans.c
-index a50c968f83..f89300099c 100644
+index 1452eafa445..1ff803a2ad0 100644
 --- a/src/backend/access/transam/subtrans.c
 +++ b/src/backend/access/transam/subtrans.c
-@@ -269,8 +269,14 @@ check_subtrans_buffers(int *newval, void **extra, GucSource source)
+@@ -288,8 +288,14 @@ check_subtrans_buffers(int *newval, void **extra, GucSource source)
  void
  BootStrapSUBTRANS(void)
  {
@@ -104,31 +90,30 @@ index a50c968f83..f89300099c 100644
  
  /*
 diff --git a/src/backend/access/transam/xlog.c b/src/backend/access/transam/xlog.c
-index b2740fbc8e..a8296c4c0e 100644
+index aa2b72184b4..1fdbca9bfc0 100644
 --- a/src/backend/access/transam/xlog.c
 +++ b/src/backend/access/transam/xlog.c
-@@ -138,6 +138,10 @@ int			max_slot_wal_keep_size_mb = -1;
+@@ -143,6 +143,10 @@ int			max_slot_wal_keep_size_mb = -1;
  int			wal_decode_buffer_size = 512 * 1024;
  bool		track_wal_io_timing = false;
  
 +TransactionId		start_xid = FirstNormalTransactionId;
 +MultiXactId			start_mxid = FirstMultiXactId;
-+MultiXactOffset		start_mxoff = 0;
++MultiXactOffset		start_mxoff = 1;
 +
  #ifdef WAL_DEBUG
  bool		XLOG_DEBUG = false;
  #endif
-@@ -5135,13 +5139,15 @@ BootStrapXLOG(uint32 data_checksum_version)
- 	checkPoint.PrevTimeLineID = BootstrapTimeLineID;
+@@ -5499,13 +5503,14 @@ BootStrapXLOG(uint32 data_checksum_version)
  	checkPoint.fullPageWrites = fullPageWrites;
+ 	checkPoint.logicalDecodingEnabled = (wal_level == WAL_LEVEL_LOGICAL);
  	checkPoint.wal_level = wal_level;
 -	checkPoint.nextXid = FullTransactionIdFromXid(FirstNormalTransactionId);
 +	checkPoint.nextXid =
-+		FullTransactionIdFromXid(Max(FirstNormalTransactionId,
-+									 start_xid));
++		FullTransactionIdFromXid(Max(FirstNormalTransactionId, start_xid));
  	checkPoint.nextOid = FirstGenbkiObjectId;
 -	checkPoint.nextMulti = FirstMultiXactId;
--	checkPoint.nextMultiOffset = 0;
+-	checkPoint.nextMultiOffset = 1;
 -	checkPoint.oldestXid = FirstNormalTransactionId;
 +	checkPoint.nextMulti = Max(FirstMultiXactId, start_mxid);
 +	checkPoint.nextMultiOffset = start_mxoff;
@@ -140,19 +125,19 @@ index b2740fbc8e..a8296c4c0e 100644
  	checkPoint.oldestCommitTsXid = InvalidTransactionId;
  	checkPoint.newestCommitTsXid = InvalidTransactionId;
 diff --git a/src/backend/bootstrap/bootstrap.c b/src/backend/bootstrap/bootstrap.c
-index bfe258c7a9..c480f7a7b4 100644
+index b0dcd9876c5..c63bdec9ed6 100644
 --- a/src/backend/bootstrap/bootstrap.c
 +++ b/src/backend/bootstrap/bootstrap.c
-@@ -220,7 +220,7 @@ BootstrapModeMain(int argc, char *argv[], bool check_only)
+@@ -258,7 +258,7 @@ BootstrapModeMain(int argc, char *argv[], bool check_only)
  	argv++;
  	argc--;
  
--	while ((flag = getopt(argc, argv, "B:c:d:D:Fkr:X:-:")) != -1)
-+	while ((flag = getopt(argc, argv, "B:c:d:D:Fkm:o:r:X:x:-:")) != -1)
+-	pg_getopt_start(&optctx, argc, argv, "B:c:d:D:Fkr:X:-:");
++	pg_getopt_start(&optctx, argc, argv, "B:c:d:D:Fkm:o:r:X:x:-:");
+ 	while ((flag = pg_getopt_next(&optctx)) != -1)
  	{
  		switch (flag)
- 		{
-@@ -288,12 +288,60 @@ BootstrapModeMain(int argc, char *argv[], bool check_only)
+@@ -327,6 +327,49 @@ BootstrapModeMain(int argc, char *argv[], bool check_only)
  			case 'k':
  				bootstrap_data_checksum_version = PG_DATA_CHECKSUM_VERSION;
  				break;
@@ -161,15 +146,13 @@ index bfe258c7a9..c480f7a7b4 100644
 +					char	   *endptr;
 +
 +					errno = 0;
-+					start_mxid = strtoull(optarg, &endptr, 0);
-+
-+					if (endptr == optarg || *endptr != '\0' || errno != 0 ||
++					start_mxid = strtoull(optctx.optarg, &endptr, 0);
++					if (endptr == optctx.optarg || *endptr != '\0' || errno != 0 ||
++						strchr(optctx.optarg, '-') != NULL ||
 +						!StartMultiXactIdIsValid(start_mxid))
-+					{
 +						ereport(ERROR,
 +								(errcode(ERRCODE_SYNTAX_ERROR),
 +								 errmsg("invalid initial database cluster multixact id")));
-+					}
 +				}
 +				break;
 +			case 'o':
@@ -177,44 +160,35 @@ index bfe258c7a9..c480f7a7b4 100644
 +					char	   *endptr;
 +
 +					errno = 0;
-+					start_mxoff = strtoull(optarg, &endptr, 0);
-+
-+					if (endptr == optarg || *endptr != '\0' || errno != 0 ||
-+						!StartMultiXactOffsetIsValid(start_mxoff))
-+					{
++					start_mxoff = strtoull(optctx.optarg, &endptr, 0);
++					if (endptr == optctx.optarg || *endptr != '\0' || errno != 0 ||
++						strchr(optctx.optarg, '-') != NULL ||
++						!StartMultiXactOffsetIsValid(start_mxoff) ||
++						start_mxoff == 0)
 +						ereport(ERROR,
 +								(errcode(ERRCODE_SYNTAX_ERROR),
 +								 errmsg("invalid initial database cluster multixact offset")));
-+					}
 +				}
 +				break;
- 			case 'r':
- 				strlcpy(OutputFileName, optarg, MAXPGPATH);
- 				break;
- 			case 'X':
- 				SetConfigOption("wal_segment_size", optarg, PGC_INTERNAL, PGC_S_DYNAMIC_DEFAULT);
- 				break;
 +			case 'x':
 +				{
 +					char	   *endptr;
 +
 +					errno = 0;
-+					start_xid = strtoull(optarg, &endptr, 0);
-+
-+					if (endptr == optarg || *endptr != '\0' || errno != 0 ||
++					start_xid = strtoull(optctx.optarg, &endptr, 0);
++					if (endptr == optctx.optarg || *endptr != '\0' || errno != 0 ||
++						strchr(optctx.optarg, '-') != NULL ||
 +						!StartTransactionIdIsValid(start_xid))
-+					{
 +						ereport(ERROR,
 +								(errcode(ERRCODE_SYNTAX_ERROR),
-+								 errmsg("invalid initial database cluster xid value")));
-+					}
++								 errmsg("invalid initial database cluster xid")));
 +				}
 +				break;
- 			default:
- 				write_stderr("Try \"%s --help\" for more information.\n",
- 							 progname);
+ 			case 'r':
+ 				strlcpy(OutputFileName, optctx.optarg, MAXPGPATH);
+ 				break;
 diff --git a/src/backend/main/main.c b/src/backend/main/main.c
-index 72aaee36a6..567fd1655f 100644
+index 7b9b602f3c4..2e2ed8c5f7a 100644
 --- a/src/backend/main/main.c
 +++ b/src/backend/main/main.c
 @@ -427,12 +427,18 @@ help(const char *progname)
@@ -237,62 +211,45 @@ index 72aaee36a6..567fd1655f 100644
  	printf(_("\nPlease read the documentation for the complete list of run-time\n"
  			 "configuration settings and how to set them on the command line or in\n"
 diff --git a/src/backend/postmaster/postmaster.c b/src/backend/postmaster/postmaster.c
-index 7c064cf9fb..784a49dc15 100644
+index 90c7c4528e8..ca22f2cdb40 100644
 --- a/src/backend/postmaster/postmaster.c
 +++ b/src/backend/postmaster/postmaster.c
-@@ -595,7 +595,7 @@ PostmasterMain(int argc, char *argv[])
+@@ -598,7 +598,7 @@ PostmasterMain(int argc, char *argv[])
  	 * tcop/postgres.c (the option sets should not conflict) and with the
  	 * common help() function in main/main.c.
  	 */
--	while ((opt = getopt(argc, argv, "B:bC:c:D:d:EeFf:h:ijk:lN:OPp:r:S:sTt:W:-:")) != -1)
-+	while ((opt = getopt(argc, argv, "B:bC:c:D:d:EeFf:h:ijk:lm:N:Oo:Pp:r:S:sTt:W:x:-:")) != -1)
+-	pg_getopt_start(&optctx, argc, argv, "B:bC:c:D:d:EeFf:h:ijk:lN:OPp:r:S:sTt:W:-:");
++	pg_getopt_start(&optctx, argc, argv, "B:bC:c:D:d:EeFf:h:ijk:lm:N:Oo:Pp:r:S:sTt:W:x:-:");
+ 	optctx.opterr = 1;
+ 	while ((opt = pg_getopt_next(&optctx)) != -1)
  	{
- 		switch (opt)
- 		{
-@@ -705,10 +705,18 @@ PostmasterMain(int argc, char *argv[])
- 				SetConfigOption("max_connections", optarg, PGC_POSTMASTER, PGC_S_ARGV);
+@@ -706,6 +706,12 @@ PostmasterMain(int argc, char *argv[])
+ 				SetConfigOption("ssl", "true", PGC_POSTMASTER, PGC_S_ARGV);
  				break;
  
 +			case 'm':
-+				/* only used by single-user backend */
-+				break;
-+
- 			case 'O':
- 				SetConfigOption("allow_system_table_mods", "true", PGC_POSTMASTER, PGC_S_ARGV);
- 				break;
- 
 +			case 'o':
-+				/* only used by single-user backend */
-+				break;
-+
- 			case 'P':
- 				SetConfigOption("ignore_system_indexes", "true", PGC_POSTMASTER, PGC_S_ARGV);
- 				break;
-@@ -759,6 +767,10 @@ PostmasterMain(int argc, char *argv[])
- 				SetConfigOption("post_auth_delay", optarg, PGC_POSTMASTER, PGC_S_ARGV);
- 				break;
- 
 +			case 'x':
-+				/* only used by single-user backend */
++				/* Only used by bootstrap and single-user backends. */
 +				break;
 +
- 			default:
- 				write_stderr("Try \"%s --help\" for more information.\n",
- 							 progname);
+ 			case 'N':
+ 				SetConfigOption("max_connections", optctx.optarg, PGC_POSTMASTER, PGC_S_ARGV);
+ 				break;
 diff --git a/src/backend/tcop/postgres.c b/src/backend/tcop/postgres.c
-index 7dd75a490a..a9ea8098af 100644
+index dbef734a93f..06c8d5034af 100644
 --- a/src/backend/tcop/postgres.c
 +++ b/src/backend/tcop/postgres.c
-@@ -3835,7 +3835,7 @@ process_postgres_switches(int argc, char *argv[], GucContext ctx,
+@@ -3902,7 +3902,7 @@ process_postgres_switches(int argc, char *argv[], GucContext ctx,
  	 * postmaster/postmaster.c (the option sets should not conflict) and with
  	 * the common help() function in main/main.c.
  	 */
--	while ((flag = getopt(argc, argv, "B:bC:c:D:d:EeFf:h:ijk:lN:nOPp:r:S:sTt:v:W:-:")) != -1)
-+	while ((flag = getopt(argc, argv, "B:bC:c:D:d:EeFf:h:ijk:lm:N:nOo:Pp:r:S:sTt:v:W:x:-:")) != -1)
- 	{
- 		switch (flag)
- 		{
-@@ -3940,6 +3940,23 @@ process_postgres_switches(int argc, char *argv[], GucContext ctx,
+-	pg_getopt_start(&optctx, argc, argv, "B:bC:c:D:d:EeFf:h:ijk:lN:nOPp:r:S:sTt:v:W:-:");
++	pg_getopt_start(&optctx, argc, argv, "B:bC:c:D:d:EeFf:h:ijk:lm:N:nOo:Pp:r:S:sTt:v:W:x:-:");
+ 
+ 	/*
+ 	 * Turn this off because it's either printed to stderr and not the log
+@@ -4016,6 +4016,21 @@ process_postgres_switches(int argc, char *argv[], GucContext ctx,
  				SetConfigOption("ssl", "true", ctx, gucsource);
  				break;
  
@@ -301,22 +258,20 @@ index 7dd75a490a..a9ea8098af 100644
 +					char	   *endptr;
 +
 +					errno = 0;
-+					start_mxid = strtoull(optarg, &endptr, 0);
-+
-+					if (endptr == optarg || *endptr != '\0' || errno != 0 ||
++					start_mxid = strtoull(optctx.optarg, &endptr, 0);
++					if (endptr == optctx.optarg || *endptr != '\0' || errno != 0 ||
++						strchr(optctx.optarg, '-') != NULL ||
 +						!StartMultiXactIdIsValid(start_mxid))
-+					{
 +						ereport(ERROR,
 +								(errcode(ERRCODE_SYNTAX_ERROR),
 +								 errmsg("invalid initial database cluster multixact id")));
-+					}
 +				}
 +				break;
 +
  			case 'N':
- 				SetConfigOption("max_connections", optarg, ctx, gucsource);
+ 				SetConfigOption("max_connections", optctx.optarg, ctx, gucsource);
  				break;
-@@ -3952,6 +3969,23 @@ process_postgres_switches(int argc, char *argv[], GucContext ctx,
+@@ -4028,6 +4043,22 @@ process_postgres_switches(int argc, char *argv[], GucContext ctx,
  				SetConfigOption("allow_system_table_mods", "true", ctx, gucsource);
  				break;
  
@@ -325,23 +280,22 @@ index 7dd75a490a..a9ea8098af 100644
 +					char	   *endptr;
 +
 +					errno = 0;
-+					start_mxoff = strtoull(optarg, &endptr, 0);
-+
-+					if (endptr == optarg || *endptr != '\0' || errno != 0 ||
-+						!StartMultiXactOffsetIsValid(start_mxoff))
-+					{
++					start_mxoff = strtoull(optctx.optarg, &endptr, 0);
++					if (endptr == optctx.optarg || *endptr != '\0' || errno != 0 ||
++						strchr(optctx.optarg, '-') != NULL ||
++						!StartMultiXactOffsetIsValid(start_mxoff) ||
++						start_mxoff == 0)
 +						ereport(ERROR,
 +								(errcode(ERRCODE_SYNTAX_ERROR),
 +								 errmsg("invalid initial database cluster multixact offset")));
-+					}
 +				}
 +				break;
 +
  			case 'P':
  				SetConfigOption("ignore_system_indexes", "true", ctx, gucsource);
  				break;
-@@ -4006,6 +4040,23 @@ process_postgres_switches(int argc, char *argv[], GucContext ctx,
- 				SetConfigOption("post_auth_delay", optarg, ctx, gucsource);
+@@ -4082,6 +4113,21 @@ process_postgres_switches(int argc, char *argv[], GucContext ctx,
+ 				SetConfigOption("post_auth_delay", optctx.optarg, ctx, gucsource);
  				break;
  
 +			case 'x':
@@ -349,15 +303,13 @@ index 7dd75a490a..a9ea8098af 100644
 +					char	   *endptr;
 +
 +					errno = 0;
-+					start_xid = strtoull(optarg, &endptr, 0);
-+
-+					if (endptr == optarg || *endptr != '\0' || errno != 0 ||
++					start_xid = strtoull(optctx.optarg, &endptr, 0);
++					if (endptr == optctx.optarg || *endptr != '\0' || errno != 0 ||
++						strchr(optctx.optarg, '-') != NULL ||
 +						!StartTransactionIdIsValid(start_xid))
-+					{
 +						ereport(ERROR,
 +								(errcode(ERRCODE_SYNTAX_ERROR),
 +								 errmsg("invalid initial database cluster xid")));
-+					}
 +				}
 +				break;
 +
@@ -365,7 +317,7 @@ index 7dd75a490a..a9ea8098af 100644
  				errs++;
  				break;
 diff --git a/src/bin/initdb/initdb.c b/src/bin/initdb/initdb.c
-index 92fe2f531f..7da841e680 100644
+index 8fba896561b..b131fb1c6f0 100644
 --- a/src/bin/initdb/initdb.c
 +++ b/src/bin/initdb/initdb.c
 @@ -82,7 +82,6 @@
@@ -382,11 +334,11 @@ index 92fe2f531f..7da841e680 100644
  static bool sync_data_files = true;
 +static TransactionId start_xid = 0;
 +static MultiXactId start_mxid = 0;
-+static MultiXactOffset start_mxoff = 0;
++static MultiXactOffset start_mxoff = 1;
  
  
  /* internal vars */
-@@ -1583,6 +1585,11 @@ bootstrap_template1(void)
+@@ -1609,6 +1611,11 @@ bootstrap_template1(void)
  	bki_lines = replace_token(bki_lines, "POSTGRES",
  							  escape_quotes_bki(username));
  
@@ -398,7 +350,7 @@ index 92fe2f531f..7da841e680 100644
  	bki_lines = replace_token(bki_lines, "ENCODING",
  							  encodingid_to_string(encodingid));
  
-@@ -1608,6 +1615,9 @@ bootstrap_template1(void)
+@@ -1634,6 +1641,9 @@ bootstrap_template1(void)
  
  	printfPQExpBuffer(&cmd, "\"%s\" --boot %s %s", backend_exec, boot_options, extra_options);
  	appendPQExpBuffer(&cmd, " -X %d", wal_segment_size_mb * (1024 * 1024));
@@ -408,7 +360,7 @@ index 92fe2f531f..7da841e680 100644
  	if (data_checksums)
  		appendPQExpBufferStr(&cmd, " -k");
  	if (debug)
-@@ -2549,13 +2559,21 @@ usage(const char *progname)
+@@ -2575,13 +2585,21 @@ usage(const char *progname)
  	printf(_("  -d, --debug               generate lots of debugging output\n"));
  	printf(_("      --discard-caches      set debug_discard_caches=1\n"));
  	printf(_("  -L DIRECTORY              where to find the input files\n"));
@@ -430,7 +382,7 @@ index 92fe2f531f..7da841e680 100644
  	printf(_("\nOther options:\n"));
  	printf(_("  -V, --version             output version information, then exit\n"));
  	printf(_("  -?, --help                show this help, then exit\n"));
-@@ -3090,6 +3108,18 @@ initialize_data_directory(void)
+@@ -3118,6 +3136,18 @@ initialize_data_directory(void)
  	/* Now create all the text config files */
  	setup_config();
  
@@ -449,7 +401,7 @@ index 92fe2f531f..7da841e680 100644
  	/* Bootstrap template1 */
  	bootstrap_template1();
  
-@@ -3106,8 +3136,12 @@ initialize_data_directory(void)
+@@ -3134,8 +3164,12 @@ initialize_data_directory(void)
  	fflush(stdout);
  
  	initPQExpBuffer(&cmd);
@@ -464,7 +416,7 @@ index 92fe2f531f..7da841e680 100644
  
  	PG_CMD_OPEN(cmd.data);
  
-@@ -3195,6 +3229,9 @@ main(int argc, char *argv[])
+@@ -3223,6 +3257,9 @@ main(int argc, char *argv[])
  		{"sync-method", required_argument, NULL, 19},
  		{"no-data-checksums", no_argument, NULL, 20},
  		{"no-sync-data-files", no_argument, NULL, 21},
@@ -474,7 +426,7 @@ index 92fe2f531f..7da841e680 100644
  		{NULL, 0, NULL, 0}
  	};
  
-@@ -3236,7 +3273,7 @@ main(int argc, char *argv[])
+@@ -3264,7 +3301,7 @@ main(int argc, char *argv[])
  
  	/* process command-line options */
  
@@ -483,7 +435,7 @@ index 92fe2f531f..7da841e680 100644
  							long_options, &option_index)) != -1)
  	{
  		switch (c)
-@@ -3294,6 +3331,30 @@ main(int argc, char *argv[])
+@@ -3322,6 +3359,31 @@ main(int argc, char *argv[])
  				debug = true;
  				printf(_("Running in debug mode.\n"));
  				break;
@@ -495,6 +447,7 @@ index 92fe2f531f..7da841e680 100644
 +					start_mxid = strtoull(optarg, &endptr, 0);
 +
 +					if (endptr == optarg || *endptr != '\0' || errno != 0 ||
++						strchr(optarg, '-') != NULL ||
 +						!StartMultiXactIdIsValid(start_mxid))
 +					{
 +						pg_log_error("invalid initial database cluster multixact id");
@@ -514,7 +467,7 @@ index 92fe2f531f..7da841e680 100644
  			case 'n':
  				noclean = true;
  				printf(_("Running in no-clean mode.  Mistakes will not be cleaned up.\n"));
-@@ -3301,6 +3362,21 @@ main(int argc, char *argv[])
+@@ -3329,6 +3391,22 @@ main(int argc, char *argv[])
  			case 'N':
  				do_sync = false;
  				break;
@@ -526,7 +479,8 @@ index 92fe2f531f..7da841e680 100644
 +					start_mxoff = strtoull(optarg, &endptr, 0);
 +
 +					if (endptr == optarg || *endptr != '\0' || errno != 0 ||
-+						!StartMultiXactOffsetIsValid(start_mxoff))
++						strchr(optarg, '-') != NULL ||
++						!StartMultiXactOffsetIsValid(start_mxoff) || start_mxoff == 0)
 +					{
 +						pg_log_error("invalid initial database cluster multixact offset");
 +						exit(1);
@@ -536,7 +490,7 @@ index 92fe2f531f..7da841e680 100644
  			case 'S':
  				sync_only = true;
  				break;
-@@ -3392,6 +3468,30 @@ main(int argc, char *argv[])
+@@ -3420,6 +3498,31 @@ main(int argc, char *argv[])
  			case 21:
  				sync_data_files = false;
  				break;
@@ -548,6 +502,7 @@ index 92fe2f531f..7da841e680 100644
 +					start_xid = strtoull(optarg, &endptr, 0);
 +
 +					if (endptr == optarg || *endptr != '\0' || errno != 0 ||
++						strchr(optarg, '-') != NULL ||
 +						!StartTransactionIdIsValid(start_xid))
 +					{
 +						pg_log_error("invalid value for initial database cluster xid");
@@ -568,14 +523,25 @@ index 92fe2f531f..7da841e680 100644
  				/* getopt_long already emitted a complaint */
  				pg_log_error_hint("Try \"%s --help\" for more information.", progname);
 diff --git a/src/bin/initdb/t/001_initdb.pl b/src/bin/initdb/t/001_initdb.pl
-index 1e9543c258..668ddd89fe 100644
+index 081535a22e4..c098bf8326f 100644
 --- a/src/bin/initdb/t/001_initdb.pl
 +++ b/src/bin/initdb/t/001_initdb.pl
-@@ -331,4 +331,90 @@ command_fails(
+@@ -331,4 +331,101 @@ command_fails(
  	[ 'pg_checksums', '--pgdata' => $datadir_nochecksums ],
  	"pg_checksums fails with data checksum disabled");
  
 +# Set non-standard initial mxid/mxoff/xid.
++command_fails_like(
++	[ 'initdb', '--multixact-offset=0', $datadir ],
++	qr/initdb: error: invalid initial database cluster multixact offset/,
++	'PG19 reserves multixact offset zero');
++for my $option ('--xid', '--multixact-id', '--multixact-offset')
++{
++	command_fails_like(
++		[ 'initdb', "$option=-18446744073709551613", $datadir ],
++		qr/initdb: error: invalid/,
++		"reject negative $option even when strtoull wraps to a small value");
++}
 +command_fails_like(
 +	[ 'initdb', '-m', '9223372036854775807', $datadir ],
 +	qr/initdb: error: invalid initial database cluster multixact id/,
@@ -663,24 +629,24 @@ index 1e9543c258..668ddd89fe 100644
 +
  done_testing();
 diff --git a/src/include/access/xlog.h b/src/include/access/xlog.h
-index 605280ed8f..0d3573b321 100644
+index 4dd98624204..03879625d1d 100644
 --- a/src/include/access/xlog.h
 +++ b/src/include/access/xlog.h
-@@ -94,6 +94,9 @@ typedef enum RecoveryState
+@@ -96,6 +96,9 @@ typedef enum RecoveryState
  } RecoveryState;
  
  extern PGDLLIMPORT int wal_level;
 +extern PGDLLIMPORT TransactionId start_xid;
 +extern PGDLLIMPORT MultiXactId start_mxid;
 +extern PGDLLIMPORT MultiXactOffset start_mxoff;
+ extern PGDLLIMPORT bool XLogLogicalInfo;
  
  /* Is WAL archiving enabled (always or only while server is running normally)? */
- #define XLogArchivingActive() \
 diff --git a/src/include/catalog/pg_class.h b/src/include/catalog/pg_class.h
-index 07d182da79..06e9969862 100644
+index ec3d7f42d4f..32bb5a5f179 100644
 --- a/src/include/catalog/pg_class.h
 +++ b/src/include/catalog/pg_class.h
-@@ -126,7 +126,7 @@ CATALOG(pg_class,1259,RelationRelationId) BKI_BOOTSTRAP BKI_ROWTYPE_OID(83,Relat
+@@ -128,7 +128,7 @@ CATALOG(pg_class,1259,RelationRelationId) BKI_BOOTSTRAP BKI_ROWTYPE_OID(83,Relat
  	Oid			relrewrite BKI_DEFAULT(0) BKI_LOOKUP_OPT(pg_class);
  
  	/* all Xids < this are frozen in this rel */
@@ -690,10 +656,10 @@ index 07d182da79..06e9969862 100644
  	/* all multixacts in this rel are >= this; it is really a MultiXactId */
  	TransactionId relminmxid BKI_DEFAULT(1);	/* FirstMultiXactId */
 diff --git a/src/test/regress/pg_regress.c b/src/test/regress/pg_regress.c
-index efc41fca2b..78832c669c 100644
+index b53821dd10c..97b03301e53 100644
 --- a/src/test/regress/pg_regress.c
 +++ b/src/test/regress/pg_regress.c
-@@ -2337,7 +2337,8 @@ regression_main(int argc, char *argv[],
+@@ -2412,7 +2412,8 @@ regression_main(int argc, char *argv[],
  			note("initializing database system by running initdb");
  
  			appendStringInfo(&cmd,
@@ -705,7 +671,7 @@ index efc41fca2b..78832c669c 100644
  							 temp_instance);
 diff --git a/src/test/xid-64/t/001_test_large_xids.pl b/src/test/xid-64/t/001_test_large_xids.pl
 new file mode 100644
-index 0000000000..4c7dbc6cb1
+index 00000000000..4c7dbc6cb16
 --- /dev/null
 +++ b/src/test/xid-64/t/001_test_large_xids.pl
 @@ -0,0 +1,54 @@
@@ -765,7 +731,7 @@ index 0000000000..4c7dbc6cb1
 +done_testing();
 \ No newline at end of file
 diff --git a/src/test/xid-64/t/002_test_gucs.pl b/src/test/xid-64/t/002_test_gucs.pl
-index 9341389233..ff9f2f3052 100644
+index 93413892336..ff9f2f30523 100644
 --- a/src/test/xid-64/t/002_test_gucs.pl
 +++ b/src/test/xid-64/t/002_test_gucs.pl
 @@ -51,7 +51,7 @@ my $imoff = $START_VAL + int(rand($MAX_VAL - $START_VAL));
@@ -785,20 +751,20 @@ index 9341389233..ff9f2f3052 100644
 +done_testing();
 \ No newline at end of file
 diff --git a/src/test/xid-64/t/004_test_relminmxid.pl b/src/test/xid-64/t/004_test_relminmxid.pl
-index e924f9cd9a..e1f6e556e5 100644
+index eab008eeae3..80088c1313c 100644
 --- a/src/test/xid-64/t/004_test_relminmxid.pl
 +++ b/src/test/xid-64/t/004_test_relminmxid.pl
-@@ -8,7 +8,7 @@ use bigint;
- 
+@@ -9,7 +9,7 @@ use bigint;
  my ($node, $rmm, $vacout);
  $node = PostgreSQL::Test::Cluster->new('master');
--$node->init;
-+$node->init(extra => [ "--xid=3", "--multixact-id=1", "--multixact-offset=0" ]);
+ # This test explicitly checks the first MultiXact ID, not the high default.
+-$node->init(extra => [ '--multixact-id=1' ]);
++$node->init(extra => [ '--xid=3', '--multixact-id=1', '--multixact-offset=1' ]);
  $node->append_conf('postgresql.conf', 'max_prepared_transactions = 2');
  $node->start;
  
 diff --git a/src/test/xid-64/t/005_stream_subxact.pl b/src/test/xid-64/t/005_stream_subxact.pl
-index 9249bbecab..f791fe3a17 100644
+index 9249bbecab5..f791fe3a175 100644
 --- a/src/test/xid-64/t/005_stream_subxact.pl
 +++ b/src/test/xid-64/t/005_stream_subxact.pl
 @@ -77,7 +77,7 @@ sub test_streaming
@@ -811,7 +777,7 @@ index 9249bbecab..f791fe3a17 100644
  	'debug_logical_replication_streaming = immediate');
  $node_publisher->start;
 diff --git a/src/test/xid-64/t/006_zeropage.pl b/src/test/xid-64/t/006_zeropage.pl
-index 4b87c90edc..fd3ac3973f 100644
+index 4b87c90edcd..6b53668838d 100644
 --- a/src/test/xid-64/t/006_zeropage.pl
 +++ b/src/test/xid-64/t/006_zeropage.pl
 @@ -17,7 +17,7 @@ sub command_output
@@ -819,10 +785,10 @@ index 4b87c90edc..fd3ac3973f 100644
  
  my $node = PostgreSQL::Test::Cluster->new('main');
 -$node->init;
-+$node->init(extra => [ "--xid=3", "--multixact-id=3", "--multixact-offset=0" ]);;
++$node->init(extra => [ "--xid=3", "--multixact-id=3", "--multixact-offset=1" ]);
  $node->start;
  my $pgdata = $node->data_dir;
  my $xlogfilename0 = $node->safe_psql('postgres',
 -- 
-2.51.0
+2.55.0
 
