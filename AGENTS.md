@@ -861,7 +861,7 @@ user's instruction to pause on a new logic correction.**
   recovery run is claimed. New xid-64 test directory arrives in later minis;
   the aggregate is still only partly adapted.
 
-### NEW LOGIC FINDING: mini0184(AdjustUpgrade.pm) assumes a regression table exists
+### Historical finding: mini0184(AdjustUpgrade.pm) regression-table assumption (fixed below)
 
 **First unapplied: mini0184(AdjustUpgrade.pm). Paused under the user's rule
 for discussion before new logic corrections. This finding concerns the test
@@ -882,3 +882,75 @@ harness, not PostgreSQL runtime tuple storage or WAL.**
   guess; PostgreSQL 9.2 grammar supports both IF EXISTS clauses. Preserve
   PG19 btree_gist and other native upgrade adjustments. Discuss this test
   behavior before implementing mini0184(AdjustUpgrade.pm).
+
+
+## IMPORTANT: all 0005 minis processed; first complete build exposes freeze fallback
+
+- User approved mini0184(AdjustUpgrade.pm) with both IF EXISTS clauses.
+  Applied **`7b3940c7dfd`**; actual adjustment generation for PG11/12/18/19
+  emits the guarded SQL, and Perl syntax passes. Preserve all native PG19
+  upgrade adjustments. This was a low-priority older-source test issue.
+- Processed remaining mini0185(Cluster.pm) through mini0214(typedefs.list).
+  Preserve native PG19 recovery/logical-promotion tests and regression
+  content; synthetic end-of-WAL headers match the 28-byte xid64 header.
+  Regression SQL/expectations cover widened xid and snapshot boundaries,
+  deterministic view order, tuple sizing and page conversion. Imported
+  expectations and C conversion test helpers still require live validation.
+- mini0198(regress.c) retains the previously authorized by-value AIO metadata
+  wrapper. mini0210(004_test_relminmxid.pl) explicitly starts MultiXact IDs
+  at 1, matching its assertions despite Cluster.pm's high-ID defaults.
+  All changed Perl modules/recovery tests and six new xid-64 TAP files pass
+  syntax checks. The initdb options and meson-listed 001_test_large_xids.pl
+  still depend on later series patch 0009; do not claim that TAP ran.
+- PG19 recovery-target diagnostics now format the full-width first-normal
+  constant correctly and drop obsolete epoch wording; validation rules are
+  unchanged. Source **`dcbd6235799`**, saved supplemental patch
+  pg19-recovery-target-xid.patch. The existing lower-bound test is updated.
+- Whole-aggregate verification exposed stale contexts in early
+  mini0001(verify_nbtree.c), mini0009(heapfuncs.c), mini0027(tupmacs.h).
+  Refreshed their saved contexts from committed source. All other earlier
+  aggregate sections already yielded the correct source when replayed.
+  **The complete aggregate now replays on 8ca324058af and matches all 219
+  source files exactly**, including new files. No history aggregation/reset
+  was performed. Saved final artifacts in Baloo **`3efe9a3`**, parent
+  **`fd8e0764bd4`**. All mini steps are processed; validation is unfinished.
+
+### NEW LOGIC DECISION: freeze_single_heap_page() and PG19 prune/VM API
+
+**Pause before changing this fallback, under the user's core-logic review
+rule. This is a missed PG19 adaptation in mini0028(heapam.c), not evidence
+that the original PG18 caller used the wrong PG18 API.**
+
+- First full-source build configured successfully with assertions, injection
+  points, TAP and CFLAGS=-O0 -g -Werror=format. Build directory:
+  **`/tmp/pg19-xid64-build-iAc7eE`**. `make -j4 world-bin` fails compiling
+  heapam.c: VacuumParams is passed by value to vacuum_get_cutoffs(), and
+  the positional heap_page_prune_and_freeze() call no longer matches PG19.
+  No live backend/TAP/recovery run has occurred. Resume this build directory
+  after the fix; build.stdout contains the full compiler output.
+- A signature-only change is insufficient. freeze_single_heap_page() is the
+  xid64 fallback after base shifting cannot accommodate an XID/MultiXact.
+  Its original final false argument deliberately disabled fragmentation
+  repair. The current PG19 main prune path always passes true to both
+  heap_page_prune_execute() and log_heap_prune_and_freeze(). That would
+  discard the caller's requested behavior and advertise it differently in
+  WAL; the lower-level execution/redo flag machinery already exists.
+- PG19 prune_freeze_setup() also asserts a valid pinned VM buffer and reads
+  VM state even without HEAP_PAGE_PRUNE_SET_VM. The helper currently has no
+  VM buffer argument. The prune contract requires a cleanup lock, while
+  INSERT/UPDATE/DELETE/tuple-lock callers of heap_page_prepare_for_xid()
+  have their own buffer pins, content locks and tuple-pointer assumptions.
+  Audit those contracts before allocating a VM pin, releasing any lock, or
+  enabling fragmentation repair. Do not pass InvalidBuffer or silently
+  substitute ordinary cleanup pruning merely to compile.
+- Proposed direction for discussion: adapt to PruneFreezeParams and pointer
+  VacuumParams; preserve the explicit no-fragmentation request through
+  primary execution and its WAL flag; provide VM state/pinning with native
+  lock ordering and retain normal PG19 behavior for other callers. Resolve
+  the fallback's cleanup-lock/held-pointer contract as part of that design.
+  Freeze eligibility, cutoffs, failsafe and full conflict horizons remain
+  governed by existing rules. No new freeze-all behavior is authorized.
+- After approval, implement, resume world-bin and then test forced base-range
+  exhaustion for heap/TOAST, XID/MultiXact replacement and WAL replay. The
+  stored HeapTupleSatisfies* invocation-chain audit is now due but remains
+  unfinished. Keep the separate already-normal replacement-range audit.
