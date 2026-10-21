@@ -954,3 +954,99 @@ that the original PG18 caller used the wrong PG18 API.**
   exhaustion for heap/TOAST, XID/MultiXact replacement and WAL replay. The
   stored HeapTupleSatisfies* invocation-chain audit is now due but remains
   unfinished. Keep the separate already-normal replacement-range audit.
+
+## IMPORTANT: approved single-page freeze fallback correction (2026-10-21)
+
+- User approved implementation after discussing cleanup locking. Updated
+  mini0028(heapam.c), mini0034(pruneheap.c), and mini0136(heapam.h):
+  freeze_single_heap_page() passes &VacuumParams and PruneFreezeParams,
+  obtains a corresponding VM pin, passes it to pruning, and releases it.
+- **VM lock ownership:** the existing PG19 pruning routines acquire/release
+  the exclusive VM content lock when clearing corruption or setting VM bits.
+  Do not lock the VM around the call: that would acquire it twice. The
+  fallback retains the heap exclusive lock and pins the VM under that lock,
+  as native heap_page_prune_opt() does; it does not unlock/relock heap pages
+  underneath callers' tuple pointers or two-buffer update locks. This rare
+  fallback can therefore perform VM I/O under the heap lock. SET_VM remains
+  disabled: outer DML callers may have no VM pin to clear newly set bits.
+  PG19 VM consistency checks and corrective clearing remain enabled.
+- **No fragmentation repair:** new opt-in
+  HEAP_PAGE_PRUNE_NO_REPAIR_FRAGMENTATION preserves the original xid64
+  fallback's false argument through page execution and prune WAL. All
+  existing callers retain ordinary defragmentation. No live tuple storage
+  moves or dead tuple bytes are reclaimed in this mode; pruning may still
+  change globally dead items' line pointers. The fallback retains an ordinary
+  exclusive heap content lock and does not wait for other pins. WAL retains
+  XLHP_CLEANUP_LOCK: standby replay still uses stronger cleanup locking, but
+  the fragmentation flag is clear. Freeze eligibility, cutoffs, failsafe,
+  selected-plan ordering and full conflict horizons are unchanged.
+- **Critical-section caller:** heap_abort_speculative() previously invoked
+  page preparation inside its critical section. Move preparation before
+  START_CRIT_SECTION(), retaining the pruning-hint/tuple changes inside.
+  This permits fallback VM pinning and visibility work to fail normally.
+  The fallback asserts an exclusive heap lock and no outer critical section.
+- First resumed world-bin compiles the corrected heap files, then finds a
+  separate PG19-only checksum-worker activity string using %u for a now-full
+  TransactionId. Widened that diagnostic to %llu with an unsigned long long
+  value cast; transaction waiting logic is unchanged. Full build and live
+  fallback/VM/concurrency/recovery validation are still in progress; do not
+  infer those results from successful heap-object compilation.
+
+### Overnight authorization and validation findings (2026-10-21)
+
+- User explicitly authorizes overnight adaptation, including logical fixes
+  without pausing for individual discussions. Save applied fixes and proposals
+  on alternative branches and document reasons/results for later discussion.
+  Both repositories now use pg19beta3xid64_CODEX_OVERNIGHT_20261021. Original
+  main branch is preserved at 6400ddc9891; original Baloo branch at 878a515.
+- Fallback source: 088d616a983. Additional PG19 width adaptation: 6400ddc9891.
+  pg_get_multixact_stats() must pass uint64 storage to GetMultiXactInfo(),
+  return num_mxids as int8 and oldest_multixact with TransactionIdGetDatum().
+  The missed caller otherwise permits an eight-byte write into a four-byte
+  local and truncates the returned oldest ID. Catalog return types already
+  support the corrected values. The checksum activity diagnostic is also fixed.
+- world-bin and install-world-bin pass with assertions/TAP/injection points
+  and -Werror=format. The complete saved 0005 aggregate replays exactly on
+  8ca324058af across 221 source files. Artifacts Baloo 9226f18, parent 14a6b49d4f9.
+- Live probe dev/tests/xid64_freeze_fallback/check.py uses an isolated cluster,
+  artificial full-XID jumps and a concurrent backend retaining a page pin and
+  dead HOT-root payload pointer. With FPW on, insertion finishes while that
+  pin is held; root becomes LP_REDIRECT, surviving tuple address/payload is
+  unchanged, eligible xmin freezes, VM pin is created without setting bits,
+  and crash redo with wal_consistency_checking=all passes.
+- FPW-off redo finds a real consistency-check failure at PRUNE_ON_ACCESS.
+  Temporary diagnostics (removed from source afterward) identify byte 8157:
+  replay=1, primary=5 in the orphaned dead tuple header. Primary visibility
+  checks set hint bits that redo need not reproduce. heap_mask() masks only
+  normal tuples and central free space, leaving dead tuple storage exposed.
+  Original later patch 0007 zeros dead tuple storage on the real page, which
+  conflicts with our pin-only pointer preservation requirement. Proposed
+  adaptation: mask unreferenced tuple-area bytes only in the consistency
+  check's private copies, keeping live tuples, line pointers and page bases
+  checked and leaving shared dead tuple bytes untouched. Validate both FPW
+  modes and held pointers before claiming the fallback/recovery work complete.
+
+### Applied patches 0006-0008; fallback recovery validated
+
+- Patch 0006 (README.XID64), 7b5ca03ef47, adds the original design document.
+- Patch 0007 (heapam_xlog.c), a613c77b2ba, implements the private-image
+  masking solution above instead of the original real-page zeroing. It
+  preserves pin-only dead tuple pointers. The mask retains every referenced
+  tuple's aligned storage and masks holes only between pd_upper/pd_special;
+  live data, line pointers and page bases remain checked. Temporary recovery
+  byte-dump instrumentation was removed and is absent from committed source.
+- Patch 0008 (heapam.c), 9eb9842a30d, requires physical emptiness before
+  INSERT emits INIT_PAGE. A single reusable slot after pruning is insufficient
+  when old tuple storage remains below pd_special. Preserve PG19 VM lock/WAL
+  changes and existing page variable; capture physical emptiness before insert.
+- Final live probe /tmp/xid64-freeze-fallback-iap5glkh passes FPW on/off with
+  concurrent buffer pins, stable dead payload/survivor addresses, HOT redirect,
+  eligible freezing, VM pin creation and crash redo with consistency checking.
+  Negative mask checks detect deliberately changed live payload, page base and
+  redirect metadata while ignoring orphaned bytes. A separate one-unused-slot
+  fixture retains physical storage, reuses slot 1, and passes crash recovery
+  with the same tuple offset. Backend rebuild/install passes. This is targeted
+  backend/crash validation, not full check-world or streaming standby coverage.
+- These cleanup-lock findings and changed patch 0007 semantics must be reviewed
+  with the user later and considered for pg18xid64/Tantor 18. Do not reapply the
+  original shared-page zeroing on top of the adapted masking solution.
