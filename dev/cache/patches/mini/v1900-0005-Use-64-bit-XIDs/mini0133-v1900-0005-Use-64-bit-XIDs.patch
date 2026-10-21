@@ -1,0 +1,14 @@
+diff --git a/src/bin/pg_waldump/t/001_basic.pl b/src/bin/pg_waldump/t/001_basic.pl
+index 53b2f016b80..91a9b0b900c 100644
+--- a/src/bin/pg_waldump/t/001_basic.pl
++++ b/src/bin/pg_waldump/t/001_basic.pl
+@@ -80,7 +80,8 @@ CommitTs
+ ReplicationOrigin
+ Generic
+ LogicalMessage
+-XLOG2$/,
++XLOG2
++Heap3$/,
+ 	'rmgr list');
+ 
+ 

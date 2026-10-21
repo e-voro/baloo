@@ -157,12 +157,12 @@ Discussion: https://postgr.es/m/CAJ7c6TPDOYBYrnCAeyndkBktO0WG2xSdYduTF0nxq%2Bvfk
  src/bin/pg_upgrade/segresize.c                     |   48 +
  src/bin/pg_upgrade/t/002_pg_upgrade.pl             |   17 
  src/bin/pg_upgrade/version.c                       |  233 +++++
- src/bin/pg_verifybackup/t/003_corruption.pl        |    6 
+ src/bin/pg_verifybackup/t/003_corruption.pl        |    7 
  src/bin/pg_waldump/t/001_basic.pl                  |    3 
  src/include/access/ginblock.h                      |   11 
  src/include/access/gist.h                          |    2 
- src/include/access/heapam.h                        |   53 +
- src/include/access/heapam_xlog.h                   |   23 
+ src/include/access/heapam.h                        |   49 +
+ src/include/access/heapam_xlog.h                   |   22 
  src/include/access/heaptoast.h                     |   11 
  src/include/access/htup.h                          |   20 
  src/include/access/htup_details.h                  |  273 +++++
@@ -242,7 +242,7 @@ Discussion: https://postgr.es/m/CAJ7c6TPDOYBYrnCAeyndkBktO0WG2xSdYduTF0nxq%2Bvfk
  src/test/xid-64/t/006_zeropage.pl                  |   33 +
  src/test/xid-64/t/007_first_multi.pl               |   83 ++
  src/tools/pgindent/typedefs.list                   |    4 
- 220 files changed, 6862 insertions(+), 2311 deletions(-)
+ 220 files changed, 6860 insertions(+), 2309 deletions(-)
 
 diff --git a/contrib/amcheck/verify_heapam.c b/contrib/amcheck/verify_heapam.c
 index e5ea68b801..14ce47cf80 100644
@@ -14243,20 +14243,21 @@ index 047670d4acb..70bdf3b2dbb 100644
 +	return cluster_is_xid32(cluster);
 +}
 diff --git a/src/bin/pg_verifybackup/t/003_corruption.pl b/src/bin/pg_verifybackup/t/003_corruption.pl
-index deb8c11ca9..4f86cc3ef5 100644
+index 37300634bfa..92a8e64873d 100644
 --- a/src/bin/pg_verifybackup/t/003_corruption.pl
 +++ b/src/bin/pg_verifybackup/t/003_corruption.pl
-@@ -15,7 +15,8 @@ use Test::More;
- my $tar = $ENV{TAR};
+@@ -16,7 +16,9 @@ my $tar = $ENV{TAR};
+ my @tar_p_flags = tar_portability_options($tar);
  
  my $primary = PostgreSQL::Test::Cluster->new('primary');
 -$primary->init(allows_streaming => 1);
-+$primary->init(allows_streaming => 1,
-+			   extra => [ "--xid=3", "--multixact-id=1", "--multixact-offset=0" ]);
++$primary->init(
++	allows_streaming => 1,
++	extra => [ '--xid=3', '--multixact-id=1', '--multixact-offset=1' ]);
  $primary->start;
  
  # Include a user-defined tablespace in the hopes of detecting problems in that
-@@ -30,6 +31,7 @@ INSERT INTO x1 VALUES (111);
+@@ -31,6 +33,7 @@ INSERT INTO x1 VALUES (111);
  CREATE TABLESPACE ts1 LOCATION '$source_ts_path';
  CREATE TABLE x2 (a int) TABLESPACE ts1;
  INSERT INTO x1 VALUES (222);
@@ -14264,7 +14265,7 @@ index deb8c11ca9..4f86cc3ef5 100644
  EOM
  
  my @scenario = (
-@@ -49,7 +51,7 @@ my @scenario = (
+@@ -50,7 +53,7 @@ my @scenario = (
  		'name' => 'missing_file',
  		'mutilate' => \&mutilate_missing_file,
  		'fails_like' =>
@@ -14274,21 +14275,21 @@ index deb8c11ca9..4f86cc3ef5 100644
  	{
  		'name' => 'missing_tablespace',
 diff --git a/src/bin/pg_waldump/t/001_basic.pl b/src/bin/pg_waldump/t/001_basic.pl
-index f26d75e01c..19f518436d 100644
+index 53b2f016b80..91a9b0b900c 100644
 --- a/src/bin/pg_waldump/t/001_basic.pl
 +++ b/src/bin/pg_waldump/t/001_basic.pl
-@@ -73,7 +73,8 @@ BRIN
- CommitTs
+@@ -80,7 +80,8 @@ CommitTs
  ReplicationOrigin
  Generic
--LogicalMessage$/,
-+LogicalMessage
+ LogicalMessage
+-XLOG2$/,
++XLOG2
 +Heap3$/,
  	'rmgr list');
  
  
 diff --git a/src/include/access/ginblock.h b/src/include/access/ginblock.h
-index 4c1681068d..59d176eccf 100644
+index 2d75023179a..12c5b61616d 100644
 --- a/src/include/access/ginblock.h
 +++ b/src/include/access/ginblock.h
 @@ -133,8 +133,15 @@ typedef struct GinMetaPageData
@@ -14310,7 +14311,7 @@ index 4c1681068d..59d176eccf 100644
  
  /*
 diff --git a/src/include/access/gist.h b/src/include/access/gist.h
-index b3f4e02cbf..2a606bcb0d 100644
+index 9b385b13a88..edde1a74bcc 100644
 --- a/src/include/access/gist.h
 +++ b/src/include/access/gist.h
 @@ -226,7 +226,7 @@ GistPageGetDeleteXid(Page page)
@@ -14323,37 +14324,37 @@ index b3f4e02cbf..2a606bcb0d 100644
  
  /*
 diff --git a/src/include/access/heapam.h b/src/include/access/heapam.h
-index 909db73b7b..3ba4f9e980 100644
+index 5176478c295..9c7c5be5c5b 100644
 --- a/src/include/access/heapam.h
 +++ b/src/include/access/heapam.h
-@@ -98,6 +98,8 @@ typedef struct HeapScanDescData
+@@ -103,6 +103,8 @@ typedef struct HeapScanDescData
  	uint32		rs_cindex;		/* current tuple's index in vistuples */
  	uint32		rs_ntuples;		/* number of visible tuples on page */
  	OffsetNumber rs_vistuples[MaxHeapTuplesPerPage];	/* their offsets */
-+	TransactionId rs_xmin[MaxHeapTuplesPerPage];		/* their xmins */
-+	TransactionId rs_xmax[MaxHeapTuplesPerPage];		/* their xmaxs */
++	TransactionId rs_xmin[MaxHeapTuplesPerPage];	/* their xmins */
++	TransactionId rs_xmax[MaxHeapTuplesPerPage];	/* their xmaxs */
  } HeapScanDescData;
  typedef struct HeapScanDescData *HeapScanDesc;
  
-@@ -313,6 +315,8 @@ extern void ReleaseBulkInsertStatePin(BulkInsertState bistate);
+@@ -376,6 +378,8 @@ extern void ReleaseBulkInsertStatePin(BulkInsertState bistate);
  
  extern void heap_insert(Relation relation, HeapTuple tup, CommandId cid,
- 						int options, BulkInsertState bistate);
+ 						uint32 options, BulkInsertState bistate);
 +extern void rewrite_page_prepare_for_xid(Page page, HeapTuple tup,
 +										 bool is_toast);
  extern void heap_multi_insert(Relation relation, TupleTableSlot **slots,
- 							  int ntuples, CommandId cid, int options,
+ 							  int ntuples, CommandId cid, uint32 options,
  							  BulkInsertState bistate);
-@@ -339,23 +343,22 @@ extern void heap_inplace_update_and_unlock(Relation relation,
+@@ -403,23 +407,23 @@ extern void heap_inplace_update_and_unlock(Relation relation,
  										   Buffer buffer);
  extern void heap_inplace_unlock(Relation relation,
  								HeapTuple oldtup, Buffer buffer);
 -extern bool heap_prepare_freeze_tuple(HeapTupleHeader tuple,
 +extern bool heap_prepare_freeze_tuple(HeapTuple tuple,
- 									  const struct VacuumCutoffs *cutoffs,
+ 									  const VacuumCutoffs *cutoffs,
  									  HeapPageFreeze *pagefrz,
  									  HeapTupleFreeze *frz, bool *totally_frozen);
--
+ 
 -extern void heap_pre_freeze_checks(Buffer buffer,
 +extern void heap_pre_freeze_checks(Relation rel, Buffer buffer,
  								   HeapTupleFreeze *tuples, int ntuples);
@@ -14366,7 +14367,7 @@ index 909db73b7b..3ba4f9e980 100644
  							  TransactionId FreezeLimit, TransactionId MultiXactCutoff);
 -extern bool heap_tuple_should_freeze(HeapTupleHeader tuple,
 +extern bool heap_tuple_should_freeze(HeapTuple htup,
- 									 const struct VacuumCutoffs *cutoffs,
+ 									 const VacuumCutoffs *cutoffs,
  									 TransactionId *NoFreezePageRelfrozenXid,
  									 MultiXactId *NoFreezePageRelminMxid);
 -extern bool heap_tuple_needs_eventual_freeze(HeapTupleHeader tuple);
@@ -14374,13 +14375,7 @@ index 909db73b7b..3ba4f9e980 100644
  
  extern void simple_heap_insert(Relation relation, HeapTuple tup);
  extern void simple_heap_delete(Relation relation, const ItemPointerData *tid);
-@@ -375,12 +378,15 @@ extern void heap_page_prune_and_freeze(Relation relation, Buffer buffer,
- 									   PruneReason reason,
- 									   OffsetNumber *off_loc,
- 									   TransactionId *new_relfrozen_xid,
--									   MultiXactId *new_relmin_mxid);
-+									   MultiXactId *new_relmin_mxid,
-+									   bool repairFragmentation);
+@@ -452,8 +456,10 @@ extern void heap_page_prune_and_freeze(PruneFreezeParams *params,
  extern void heap_page_prune_execute(Buffer buffer, bool lp_truncate_only,
  									OffsetNumber *redirected, int nredirected,
  									OffsetNumber *nowdead, int ndead,
@@ -14393,7 +14388,7 @@ index 909db73b7b..3ba4f9e980 100644
  extern void log_heap_prune_and_freeze(Relation relation, Buffer buffer,
  									  Buffer vmbuffer, uint8 vmflags,
  									  TransactionId conflict_xid,
-@@ -389,7 +395,8 @@ extern void log_heap_prune_and_freeze(Relation relation, Buffer buffer,
+@@ -462,7 +468,8 @@ extern void log_heap_prune_and_freeze(Relation relation, Buffer buffer,
  									  HeapTupleFreeze *frozen, int nfrozen,
  									  OffsetNumber *redirected, int nredirected,
  									  OffsetNumber *dead, int ndead,
@@ -14403,7 +14398,7 @@ index 909db73b7b..3ba4f9e980 100644
  
  /* in heap/vacuumlazy.c */
  extern void heap_vacuum_rel(Relation rel,
-@@ -406,7 +413,7 @@ extern HTSV_Result HeapTupleSatisfiesVacuumHorizon(HeapTuple htup, Buffer buffer
+@@ -486,7 +493,7 @@ extern HTSV_Result HeapTupleSatisfiesVacuumHorizon(HeapTuple htup, Buffer buffer
  												   TransactionId *dead_after);
  extern void HeapTupleSetHintBits(HeapTupleHeader tuple, Buffer buffer,
  								 uint16 infomask, TransactionId xid);
@@ -14412,7 +14407,7 @@ index 909db73b7b..3ba4f9e980 100644
  extern bool HeapTupleIsSurelyDead(HeapTuple htup,
  								  GlobalVisState *vistest);
  
-@@ -433,18 +440,32 @@ extern void HeapCheckForSerializableConflictOut(bool visible, Relation relation,
+@@ -530,18 +537,32 @@ extern void HeapCheckForSerializableConflictOut(bool visible, Relation relation,
   * in private storage (which is what CLUSTER and friends do).
   */
  static inline void
@@ -14450,7 +14445,7 @@ index 909db73b7b..3ba4f9e980 100644
  
  #endif							/* HEAPAM_H */
 diff --git a/src/include/access/heapam_xlog.h b/src/include/access/heapam_xlog.h
-index 16c2b2e3c9..7fc16cf6f0 100644
+index 3f79c389a90..734f80ea3e1 100644
 --- a/src/include/access/heapam_xlog.h
 +++ b/src/include/access/heapam_xlog.h
 @@ -65,6 +65,8 @@
@@ -14462,25 +14457,17 @@ index 16c2b2e3c9..7fc16cf6f0 100644
  /*
   * xl_heap_insert/xl_heap_multi_insert flag values, 8 bits are available.
   */
-@@ -282,6 +284,7 @@ typedef struct xl_heap_update
-  * other fields require only 2-byte alignment.  This is also the reason that
-  * 'frz_offsets' is stored separately from the xlhp_freeze_plan structs.
+@@ -367,6 +369,9 @@ typedef struct xl_heap_prune
   */
-+
- typedef struct xl_heap_prune
- {
- 	uint16		flags;
-@@ -339,6 +342,9 @@ typedef struct xl_heap_prune
  #define		XLHP_VM_ALL_VISIBLE			(1 << 8)
  #define		XLHP_VM_ALL_FROZEN			(1 << 9)
++/* Preserve xid64 page layout when replaying a prune record. */
++#define		XLHP_TOAST_RELATION			(1 << 10)
++#define		XLHP_REPAIR_FRAGMENTATION	(1 << 11)
  
-+#define		XLHP_TOAST_RELATION				(1 << 10)
-+#define		XLHP_REPAIR_FRAGMENTATION			(1 << 11)
-+
  /*
   * xlhp_freeze_plan describes how to freeze a group of one or more heap tuples
-  * (appears in xl_heap_prune's xlhp_freeze_plans sub-record)
-@@ -488,7 +494,19 @@ typedef struct xl_heap_rewrite_mapping
+@@ -506,7 +511,19 @@ typedef struct xl_heap_rewrite_mapping
  	XLogRecPtr	start_lsn;		/* Insert LSN at begin of rewrite */
  } xl_heap_rewrite_mapping;
  
@@ -14501,7 +14488,7 @@ index 16c2b2e3c9..7fc16cf6f0 100644
  												  TransactionId *snapshotConflictHorizon);
  
  extern void heap_redo(XLogReaderState *record);
-@@ -498,6 +516,9 @@ extern void heap_mask(char *pagedata, BlockNumber blkno);
+@@ -516,6 +533,9 @@ extern void heap_mask(char *pagedata, BlockNumber blkno);
  extern void heap2_redo(XLogReaderState *record);
  extern void heap2_desc(StringInfo buf, XLogReaderState *record);
  extern const char *heap2_identify(uint8 info);
@@ -14510,9 +14497,9 @@ index 16c2b2e3c9..7fc16cf6f0 100644
 +extern const char *heap3_identify(uint8 info);
  extern void heap_xlog_logical_rewrite(XLogReaderState *r);
  
- extern XLogRecPtr log_heap_visible(Relation rel, Buffer heap_buffer,
+ /* in heapdesc.c, so it can be shared between frontend/backend code */
 diff --git a/src/include/access/heaptoast.h b/src/include/access/heaptoast.h
-index 1c68f8107d..af4bdc733e 100644
+index 631cb1836b9..4ff881a7054 100644
 --- a/src/include/access/heaptoast.h
 +++ b/src/include/access/heaptoast.h
 @@ -20,10 +20,19 @@
@@ -14537,7 +14524,7 @@ index 1c68f8107d..af4bdc733e 100644
  /*
   * These symbols control toaster activation.  If a tuple is larger than
 diff --git a/src/include/access/htup.h b/src/include/access/htup.h
-index f6b766697e..2f1f86fe5c 100644
+index cfc4e1cbc58..7f16eb949af 100644
 --- a/src/include/access/htup.h
 +++ b/src/include/access/htup.h
 @@ -54,6 +54,12 @@ typedef MinimalTupleData *MinimalTuple;
@@ -14547,8 +14534,8 @@ index f6b766697e..2f1f86fe5c 100644
 + * t_xmin and t_xmax are TransactionId values stored in heap tuple header.
 + * Normally they are calculated from ShortTransactionId-sized on-disk tuple
 + * xmin/xmax representation:
-+ * t_data->t_choice.t_heap.t_xmin/t_data->t_choice.t_heap.t_xmin
-+ * and pd_xid_base and pd_multi_base commmon values for all tuples on a page.
++ * t_data->t_choice.t_heap.t_xmin/t_data->t_choice.t_heap.t_xmax
++ * and pd_xid_base and pd_multi_base values common for all tuples on a page.
 + *
   * t_len should always be valid, except in the pointer-to-nothing case.
   * t_self and t_tableOid should be valid if the HeapTupleData points to

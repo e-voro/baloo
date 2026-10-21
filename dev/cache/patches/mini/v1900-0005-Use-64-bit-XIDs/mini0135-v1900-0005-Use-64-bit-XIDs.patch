@@ -1,0 +1,13 @@
+diff --git a/src/include/access/gist.h b/src/include/access/gist.h
+index 9b385b13a88..edde1a74bcc 100644
+--- a/src/include/access/gist.h
++++ b/src/include/access/gist.h
+@@ -226,7 +226,7 @@ GistPageGetDeleteXid(Page page)
+ 		return ((GISTDeletedPageContents *) PageGetContents(page))->deleteXid;
+ 	}
+ 	else
+-		return FullTransactionIdFromEpochAndXid(0, FirstNormalTransactionId);
++		return FullTransactionIdFromXid(FirstNormalTransactionId);
+ }
+ 
+ /*

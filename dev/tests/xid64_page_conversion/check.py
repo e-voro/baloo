@@ -53,7 +53,7 @@ with tempfile.TemporaryDirectory(prefix="xid64-page-conversion-") as tmp:
         target.write_text("/* Definitions supplied by fixture.c. */\n")
 
     htup = future("0140")
-    heapam = future("0136")
+    heapam = read("src/include/access/heapam.h")
     source = read("src/backend/storage/page/bufpage.c")
     production = source[source.index("static HeapPageSpecialData"):
                         source.index("/* ----------------------------------------------------------------")]
