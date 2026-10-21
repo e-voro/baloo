@@ -1,0 +1,133 @@
+From 1547efbb71074b5b1828230e7532b7cdc45190d7 Mon Sep 17 00:00:00 2001
+From: Evgeny Voropaev <evorop@gmail.com>
+Date: Wed, 21 Oct 2026 20:29:12 +0800
+Subject: [PATCH] Check legacy tuple visibility without buffer hint writes
+ during conversion
+
+Preserve predecoded source XIDs and wrapped MultiXacts by passing InvalidBuffer from conversion. Skip hint updates before private-pin buffer APIs, and retain page decoding for ordinary vacuum callers. Validate native tuple layouts by version so double-xmax pages are accepted.
+---
+ src/backend/access/heap/heapam_visibility.c | 34 ++++++++++++++++++---
+ src/backend/storage/buffer/heap_convert.c   |  6 +++-
+ src/include/access/heapam.h                 |  1 +
+ 3 files changed, 35 insertions(+), 6 deletions(-)
+
+diff --git a/src/backend/access/heap/heapam_visibility.c b/src/backend/access/heap/heapam_visibility.c
+index e0f58cb023d..50948bae1c4 100644
+--- a/src/backend/access/heap/heapam_visibility.c
++++ b/src/backend/access/heap/heapam_visibility.c
+@@ -9,6 +9,8 @@
+  * If the hint bits are changed, MarkBufferDirtyHint is called on
+  * the passed-in buffer.  The caller must hold not only a pin, but at least
+  * shared buffer content lock on the buffer containing the tuple.
++ * Vacuum checks additionally accept InvalidBuffer for predecoded tuples:
++ * that mode never sets hint bits and the caller owns the tuple storage.
+  *
+  * NOTE: When using a non-MVCC snapshot, we must check
+  * TransactionIdIsInProgress (which looks in the PGPROC array) before
+@@ -142,6 +144,13 @@ static inline void
+ SetHintBitsExt(HeapTupleHeader tuple, Buffer buffer,
+ 			   uint16 infomask, TransactionId xid, SetHintBitsState *state)
+ {
++	/* Legacy conversion checks predecoded tuples without owning a buffer pin. */
++	if (!BufferIsValid(buffer))
++	{
++		Assert(state == NULL);
++		return;
++	}
++
+ 	/*
+ 	 * In batched mode, if we previously did not get permission to set hint
+ 	 * bits, don't try again - in all likelihood IO is still going on.
+@@ -516,7 +525,7 @@ HeapTupleSatisfiesUpdate(HeapTuple htup, CommandId curcid,
+ 
+ 	Assert(ItemPointerIsValid(&htup->t_self));
+ 	Assert(htup->t_tableOid != InvalidOid);
+-	Assert(PageGetSpecialSize(page) != 0);
++	Assert(PageGetPageLayoutVersion(page) == PG_PAGE_LAYOUT_VERSION);
+ 
+ 	HeapTupleCopyXidsFromPage(buffer, htup, page);
+ 
+@@ -1112,6 +1121,10 @@ HeapTupleSatisfiesMVCC(HeapTuple htup, Snapshot snapshot,
+  * OldestXmin are deemed "recently dead"; they might still be visible to some
+  * open transaction, so we can't remove them, even if we see that the deleting
+  * transaction has committed.
++ *
++ * With InvalidBuffer, the caller must provide full xmin/xmax in htup.
++ * No hint bits will be written.  Legacy-page conversion uses this mode
++ * while owning a page through I/O, without a private buffer pin or lock.
+  */
+ HTSV_Result
+ HeapTupleSatisfiesVacuum(HeapTuple htup, TransactionId OldestXmin,
+@@ -1151,14 +1164,25 @@ HTSV_Result
+ HeapTupleSatisfiesVacuumHorizon(HeapTuple htup, Buffer buffer, TransactionId *dead_after)
+ {
+ 	HeapTupleHeader tuple = htup->t_data;
+-	Page			page = BufferGetPage(buffer);
+ 
+ 	Assert(ItemPointerIsValid(&htup->t_self));
+ 	Assert(htup->t_tableOid != InvalidOid);
+ 	Assert(dead_after != NULL);
+ 
+-	/* Also initializes full XIDs for legacy pages without special space. */
+-	HeapTupleCopyXidsFromPage(buffer, htup, page);
++	/*
++	 * Decode current-format pages, including real double-xmax pages without
++	 * special space, under the caller's content lock.  InvalidBuffer selects
++	 * the no-hints mode documented above: conversion has already populated
++	 * full XIDs and expanded wrapped source MultiXacts.  Re-decoding its
++	 * legacy page as double-xmax would destroy those values.
++	 */
++	if (BufferIsValid(buffer))
++	{
++		Page page = BufferGetPage(buffer);
++
++		Assert(PageGetPageLayoutVersion(page) == PG_PAGE_LAYOUT_VERSION);
++		HeapTupleCopyXidsFromPage(buffer, htup, page);
++	}
+ 
+ 	*dead_after = InvalidTransactionId;
+ 
+@@ -1742,7 +1766,7 @@ HeapTupleSatisfiesVisibility(HeapTuple htup, Snapshot snapshot, Buffer buffer)
+ {
+ 	Page page = BufferGetPage(buffer);
+ 
+-	Assert(PageGetSpecialSize(page) != 0);
++	Assert(PageGetPageLayoutVersion(page) == PG_PAGE_LAYOUT_VERSION);
+ 
+ 	HeapTupleCopyXidsFromPage(buffer, htup, page);
+ 
+diff --git a/src/backend/storage/buffer/heap_convert.c b/src/backend/storage/buffer/heap_convert.c
+index 97024d84a4c..3baccd83800 100644
+--- a/src/backend/storage/buffer/heap_convert.c
++++ b/src/backend/storage/buffer/heap_convert.c
+@@ -411,10 +411,14 @@ repack_heap_tuples(RelationExtraData *rel_extra, RelFileLocator *relfilelocator,
+ 		 * HEAPTUPLE_RECENTLY_DEAD. And since this is the first time we read
+ 		 * page after pg_upgrade, it cannot be HEAPTUPLE_RECENTLY_DEAD. See
+ 		 * HeapTupleSatisfiesVacuum() for details
++		 *
++		 * InvalidBuffer preserves the predecoded source XIDs and suppresses
++		 * hint writes: an AIO worker owns the I/O but not a private pin.
+ 		 */
+ 		if (try_double_xmax &&
+ 			HeapTupleSatisfiesVacuum(&tuple,
+-									 (TransactionId) 1 << 32, buf) == HEAPTUPLE_DEAD)
++									 (TransactionId) 1 << 32,
++									 InvalidBuffer) == HEAPTUPLE_DEAD)
+ 		{
+ 			ItemIdSetDead(lp);
+ 		}
+diff --git a/src/include/access/heapam.h b/src/include/access/heapam.h
+index 01eac47f6db..81024b28839 100644
+--- a/src/include/access/heapam.h
++++ b/src/include/access/heapam.h
+@@ -492,6 +492,7 @@ extern bool HeapTupleSatisfiesVisibility(HeapTuple htup, Snapshot snapshot,
+ 										 Buffer buffer);
+ extern TM_Result HeapTupleSatisfiesUpdate(HeapTuple htup, CommandId curcid,
+ 										  Buffer buffer);
++/* Vacuum checks accept InvalidBuffer for predecoded XIDs without hint writes. */
+ extern HTSV_Result HeapTupleSatisfiesVacuum(HeapTuple htup, TransactionId OldestXmin,
+ 											Buffer buffer);
+ extern HTSV_Result HeapTupleSatisfiesVacuumHorizon(HeapTuple htup, Buffer buffer,
+-- 
+2.55.0
+

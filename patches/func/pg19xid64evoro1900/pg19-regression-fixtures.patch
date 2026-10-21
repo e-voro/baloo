@@ -1,0 +1,124 @@
+From 380de11735c67ca9a60ad0d21b3f40044bf13fd5 Mon Sep 17 00:00:00 2001
+From: Evgeny Voropaev <evorop@gmail.com>
+Date: Wed, 21 Oct 2026 20:53:19 +0800
+Subject: [PATCH] Adapt PG19 regression fixtures to xid64 page size and ID
+ boundaries
+
+Retain the native large tid-array surgery test in the xid64 expected output. Apply the supplied combine-backup page-fit adjustment while preserving same-page and cross-page checks. Verify widened MultiXacts cross 2^32 monotonically and retain the native wrap assertion for xid32. Focused regressions and TAP (39 and 18 assertions) pass.
+---
+ .../pg_surgery/expected/heap_surgery_1.out    | 17 ++++++++++++
+ .../pg_combinebackup/t/012_vm_consistency.pl  |  2 +-
+ .../test_slru/t/002_multixact_wraparound.pl   | 27 ++++++++++++-------
+ 3 files changed, 36 insertions(+), 10 deletions(-)
+
+diff --git a/contrib/pg_surgery/expected/heap_surgery_1.out b/contrib/pg_surgery/expected/heap_surgery_1.out
+index 4c277bc6697..36b84184305 100644
+--- a/contrib/pg_surgery/expected/heap_surgery_1.out
++++ b/contrib/pg_surgery/expected/heap_surgery_1.out
+@@ -134,6 +134,23 @@ select heap_force_kill('htab2'::regclass, ARRAY['(0, 3)']::tid[]);
+  
+ (1 row)
+ 
++-- a tid[] larger than 65535 entries must still finish
++create temp table htab3(a int);
++insert into htab3 values (1);
++select heap_force_kill(
++	'htab3'::regclass,
++	array(select '(0,1)'::tid from generate_series(1, 65536)));
++ heap_force_kill 
++-----------------
++ 
++(1 row)
++
++select count(*) from htab3;
++ count 
++-------
++     0
++(1 row)
++
+ -- materialized view.
+ -- note that we don't commit the transaction, so autovacuum can't interfere.
+ begin;
+diff --git a/src/bin/pg_combinebackup/t/012_vm_consistency.pl b/src/bin/pg_combinebackup/t/012_vm_consistency.pl
+index 6bf47ebec37..58eeb113c80 100644
+--- a/src/bin/pg_combinebackup/t/012_vm_consistency.pl
++++ b/src/bin/pg_combinebackup/t/012_vm_consistency.pl
+@@ -52,7 +52,7 @@ my @tests = (
+ 		setup => q{CREATE TABLE vm_update_test (id INT, val TEXT);
+ 			ALTER TABLE vm_update_test ALTER COLUMN val SET STORAGE PLAIN;
+ 			INSERT INTO vm_update_test VALUES (1, 'same page'), (2, 'cross page');
+-			INSERT INTO vm_update_test SELECT i, repeat('a', 200)
++			INSERT INTO vm_update_test SELECT i, repeat('a', 192)
+ 				FROM generate_series(3, 70) i;},
+ 		modify => q{UPDATE vm_update_test SET id = 0 WHERE id = 1;
+ 			UPDATE vm_update_test SET val = repeat('b', 4000) WHERE id = 2;},
+diff --git a/src/test/modules/test_slru/t/002_multixact_wraparound.pl b/src/test/modules/test_slru/t/002_multixact_wraparound.pl
+index 8b4601ab8e1..ea7f1b37016 100644
+--- a/src/test/modules/test_slru/t/002_multixact_wraparound.pl
++++ b/src/test/modules/test_slru/t/002_multixact_wraparound.pl
+@@ -1,6 +1,6 @@
+ # Copyright (c) 2024-2026, PostgreSQL Global Development Group
+ 
+-# Test multixact wraparound
++# Test crossing the 32-bit multixact boundary
+ 
+ use strict;
+ use warnings FATAL => 'all';
+@@ -15,7 +15,7 @@ $node->init;
+ $node->append_conf('postgresql.conf',
+ 	"shared_preload_libraries = 'test_slru'");
+ 
+-# Set the cluster's next multitransaction close to wraparound
++# Set the cluster's next multitransaction close to the 32-bit boundary
+ my $node_pgdata = $node->data_dir;
+ command_ok(
+ 	[
+@@ -53,8 +53,8 @@ close $fh;
+ unlink("$node_pgdata/pg_multixact/offsets/000000000000000")
+   or die "could not unlink \"$node_pgdata/pg_multixact/offsets/000000000000000\": $!";
+ 
+-# Consume multixids to wrap around.  We start at 0xFFFFFFF8, so after
+-# creating 16 multixacts we should definitely have wrapped around.
++# Consume multixids across the 32-bit boundary.  With 64-bit IDs this
++# boundary must not wrap; with 32-bit IDs the original wrap test still applies.
+ $node->start;
+ $node->safe_psql('postgres', q(CREATE EXTENSION test_slru));
+ 
+@@ -66,12 +66,21 @@ foreach my $i (1 .. 16)
+ 	push @multixact_ids, $multi;
+ }
+ 
+-# Verify that wraparound occurred (last_multi should be numerically
+-# smaller than first_multi)
+ my $first_multi = $multixact_ids[0];
+ my $last_multi = $multixact_ids[-1];
+-ok( $last_multi < $first_multi,
+-	"multixact wraparound occurred (first: $first_multi, last: $last_multi)");
++my $xid_size = $node->safe_psql('postgres',
++	q{SELECT typlen FROM pg_type WHERE oid = 'xid'::regtype});
++if ($xid_size == 8)
++{
++	ok($first_multi < 4294967296 && $last_multi >= 4294967296 &&
++		$last_multi == $first_multi + 15,
++		"multixacts cross 2^32 without wrapping (first: $first_multi, last: $last_multi)");
++}
++else
++{
++	ok($last_multi < $first_multi,
++		"multixact wraparound occurred (first: $first_multi, last: $last_multi)");
++}
+ 
+ # Verify that all the multixacts we created are readable
+ foreach my $i (0 .. $#multixact_ids)
+@@ -80,7 +89,7 @@ foreach my $i (0 .. $#multixact_ids)
+ 	is( $node->safe_psql(
+ 			'postgres', qq{SELECT test_read_multixact('$multi');}),
+ 		'',
+-		"multixact $i (ID: $multi) is readable after wraparound");
++		"multixact $i (ID: $multi) is readable after crossing the 32-bit boundary");
+ }
+ 
+ done_testing();
+-- 
+2.55.0
+

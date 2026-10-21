@@ -1,0 +1,204 @@
+From 0828bf07ff326220ce819d05650f0a6d7daeda4e Mon Sep 17 00:00:00 2001
+From: Evgeny Voropaev <evorop@gmail.com>
+Date: Wed, 21 Oct 2026 20:29:12 +0800
+Subject: [PATCH] Bound full-XID VACUUM age cutoffs and saturate failsafe
+ margins
+
+Avoid unsigned cutoff underflow in young clusters or with large age GUCs. Compute the 105 percent failsafe margin without float-to-int64 overflow. Preserve the existing 95 percent aggressive policy and visibility horizons. Add live low-counter/default/MAX-age coverage; actual-function UBSan probe covers 123 boundary cases.
+---
+ src/backend/commands/vacuum.c        | 61 ++++++++++++++++------------
+ src/test/xid-64/meson.build          |  1 +
+ src/test/xid-64/t/008_vacuum_ages.pl | 46 +++++++++++++++++++++
+ 3 files changed, 82 insertions(+), 26 deletions(-)
+ create mode 100644 src/test/xid-64/t/008_vacuum_ages.pl
+
+diff --git a/src/backend/commands/vacuum.c b/src/backend/commands/vacuum.c
+index 7ef7c94beb9..d6b034f647e 100644
+--- a/src/backend/commands/vacuum.c
++++ b/src/backend/commands/vacuum.c
+@@ -1090,6 +1090,22 @@ get_all_vacuum_rels(MemoryContext vac_context, int options)
+ 	return vacrels;
+ }
+ 
++/* Full XID/MultiXact ages saturate at the first valid ID, not at UINT64_MAX. */
++static uint64
++vacuum_cutoff_from_age(uint64 next, uint64 age, uint64 first)
++{
++	return next > age ? Max(first, next - age) : first;
++}
++
++/* Apply the 105% failsafe margin without overflowing an int64 age. */
++static int64
++vacuum_failsafe_min_age(int64 freeze_max_age)
++{
++	uint64 padded_age = (uint64) freeze_max_age + freeze_max_age / 20;
++
++	return (int64) Min(padded_age, (uint64) PG_INT64_MAX);
++}
++
+ /*
+  * vacuum_get_cutoffs() -- compute OldestXmin and freeze cutoff points
+  *
+@@ -1162,12 +1178,10 @@ vacuum_get_cutoffs(Relation rel, const VacuumParams *params,
+ 	 * Almost ready to set freeze output parameters; check if OldestXmin or
+ 	 * OldestMxact are held back to an unsafe degree before we start on that
+ 	 */
+-	safeOldestXmin = nextXID - autovacuum_freeze_max_age;
+-	if (!TransactionIdIsNormal(safeOldestXmin))
+-		safeOldestXmin = FirstNormalTransactionId;
+-	safeOldestMxact = nextMXID - effective_multixact_freeze_max_age;
+-	if (safeOldestMxact < FirstMultiXactId)
+-		safeOldestMxact = FirstMultiXactId;
++	safeOldestXmin = vacuum_cutoff_from_age(nextXID, autovacuum_freeze_max_age,
++										 FirstNormalTransactionId);
++	safeOldestMxact = vacuum_cutoff_from_age(nextMXID, effective_multixact_freeze_max_age,
++										   FirstMultiXactId);
+ 	if (TransactionIdPrecedes(cutoffs->OldestXmin, safeOldestXmin))
+ 		ereport(WARNING,
+ 				(errmsg("cutoff for removing and freezing tuples is far in the past"),
+@@ -1191,9 +1205,8 @@ vacuum_get_cutoffs(Relation rel, const VacuumParams *params,
+ 	Assert(freeze_min_age >= 0);
+ 
+ 	/* Compute FreezeLimit, being careful to generate a normal XID */
+-	cutoffs->FreezeLimit = nextXID - freeze_min_age;
+-	if (!TransactionIdIsNormal(cutoffs->FreezeLimit))
+-		cutoffs->FreezeLimit = FirstNormalTransactionId;
++	cutoffs->FreezeLimit = vacuum_cutoff_from_age(nextXID, freeze_min_age,
++												FirstNormalTransactionId);
+ 	/* FreezeLimit must always be <= OldestXmin */
+ 	if (TransactionIdPrecedes(cutoffs->OldestXmin, cutoffs->FreezeLimit))
+ 		cutoffs->FreezeLimit = cutoffs->OldestXmin;
+@@ -1211,9 +1224,8 @@ vacuum_get_cutoffs(Relation rel, const VacuumParams *params,
+ 	Assert(multixact_freeze_min_age >= 0);
+ 
+ 	/* Compute MultiXactCutoff, being careful to generate a valid value */
+-	cutoffs->MultiXactCutoff = nextMXID - multixact_freeze_min_age;
+-	if (cutoffs->MultiXactCutoff < FirstMultiXactId)
+-		cutoffs->MultiXactCutoff = FirstMultiXactId;
++	cutoffs->MultiXactCutoff = vacuum_cutoff_from_age(nextMXID, multixact_freeze_min_age,
++													 FirstMultiXactId);
+ 	/* MultiXactCutoff must always be <= OldestMxact */
+ 	if (MultiXactIdPrecedes(cutoffs->OldestMxact, cutoffs->MultiXactCutoff))
+ 		cutoffs->MultiXactCutoff = cutoffs->OldestMxact;
+@@ -1231,9 +1243,8 @@ vacuum_get_cutoffs(Relation rel, const VacuumParams *params,
+ 		freeze_table_age = vacuum_freeze_table_age;
+ 	freeze_table_age = Min(freeze_table_age, autovacuum_freeze_max_age * 0.95);
+ 	Assert(freeze_table_age >= 0);
+-	aggressiveXIDCutoff = nextXID - freeze_table_age;
+-	if (!TransactionIdIsNormal(aggressiveXIDCutoff))
+-		aggressiveXIDCutoff = FirstNormalTransactionId;
++	aggressiveXIDCutoff = vacuum_cutoff_from_age(nextXID, freeze_table_age,
++												  FirstNormalTransactionId);
+ 	if (TransactionIdPrecedesOrEquals(cutoffs->relfrozenxid,
+ 									  aggressiveXIDCutoff))
+ 		return true;
+@@ -1252,9 +1263,8 @@ vacuum_get_cutoffs(Relation rel, const VacuumParams *params,
+ 		Min(multixact_freeze_table_age,
+ 			effective_multixact_freeze_max_age * 0.95);
+ 	Assert(multixact_freeze_table_age >= 0);
+-	aggressiveMXIDCutoff = nextMXID - multixact_freeze_table_age;
+-	if (aggressiveMXIDCutoff < FirstMultiXactId)
+-		aggressiveMXIDCutoff = FirstMultiXactId;
++	aggressiveMXIDCutoff = vacuum_cutoff_from_age(nextMXID, multixact_freeze_table_age,
++												   FirstMultiXactId);
+ 	if (MultiXactIdPrecedesOrEquals(cutoffs->relminmxid,
+ 									aggressiveMXIDCutoff))
+ 		return true;
+@@ -1286,11 +1296,11 @@ vacuum_xid_failsafe_check(const struct VacuumCutoffs *cutoffs)
+ 	 * Determine the index skipping age to use. In any case no less than
+ 	 * autovacuum_freeze_max_age * 1.05.
+ 	 */
+-	skip_index_vacuum = Max(vacuum_failsafe_age, autovacuum_freeze_max_age * 1.05);
++	skip_index_vacuum = Max(vacuum_failsafe_age,
++						   vacuum_failsafe_min_age(autovacuum_freeze_max_age));
+ 
+-	xid_skip_limit = ReadNextTransactionId() - skip_index_vacuum;
+-	if (!TransactionIdIsNormal(xid_skip_limit))
+-		xid_skip_limit = FirstNormalTransactionId;
++	xid_skip_limit = vacuum_cutoff_from_age(ReadNextTransactionId(), skip_index_vacuum,
++											  FirstNormalTransactionId);
+ 
+ 	if (TransactionIdPrecedes(relfrozenxid, xid_skip_limit))
+ 	{
+@@ -1304,11 +1314,10 @@ vacuum_xid_failsafe_check(const struct VacuumCutoffs *cutoffs)
+ 	 * 1.05.
+ 	 */
+ 	skip_index_vacuum = Max(vacuum_multixact_failsafe_age,
+-							autovacuum_multixact_freeze_max_age * 1.05);
++						   vacuum_failsafe_min_age(autovacuum_multixact_freeze_max_age));
+ 
+-	multi_skip_limit = ReadNextMultiXactId() - skip_index_vacuum;
+-	if (multi_skip_limit < FirstMultiXactId)
+-		multi_skip_limit = FirstMultiXactId;
++	multi_skip_limit = vacuum_cutoff_from_age(ReadNextMultiXactId(), skip_index_vacuum,
++												FirstMultiXactId);
+ 
+ 	if (MultiXactIdPrecedes(relminmxid, multi_skip_limit))
+ 	{
+diff --git a/src/test/xid-64/meson.build b/src/test/xid-64/meson.build
+index 63a780b69e8..80153da8237 100644
+--- a/src/test/xid-64/meson.build
++++ b/src/test/xid-64/meson.build
+@@ -11,6 +11,7 @@ tests += {
+       't/005_stream_subxact.pl',
+       't/006_zeropage.pl',
+       't/007_first_multi.pl',
++      't/008_vacuum_ages.pl',
+     ],
+   },
+ }
+diff --git a/src/test/xid-64/t/008_vacuum_ages.pl b/src/test/xid-64/t/008_vacuum_ages.pl
+new file mode 100644
+index 00000000000..ad590db3472
+--- /dev/null
++++ b/src/test/xid-64/t/008_vacuum_ages.pl
+@@ -0,0 +1,46 @@
++# Verify age policies with counters younger than the requested freeze ages.
++use strict;
++use warnings FATAL => 'all';
++use PostgreSQL::Test::Cluster;
++use PostgreSQL::Test::Utils;
++use Test::More;
++
++my $node = PostgreSQL::Test::Cluster->new('vacuum_ages');
++$node->init(extra => ['--xid=3', '--multixact-id=1', '--multixact-offset=1']);
++$node->append_conf('postgresql.conf', 'autovacuum = off');
++$node->start;
++$node->safe_psql('postgres', q{
++	CREATE TABLE age_policy(id int PRIMARY KEY) WITH (autovacuum_enabled=false);
++	INSERT INTO age_policy VALUES (1);
++});
++for my $phase ('default ages', 'maximum ages')
++{
++	if ($phase eq 'maximum ages')
++	{
++		$node->stop;
++		$node->append_conf('postgresql.conf', q{
++autovacuum_freeze_max_age = 9223372036854775807
++autovacuum_multixact_freeze_max_age = 9223372036854775807
++});
++		$node->start;
++	}
++	my $xmin = $node->safe_psql('postgres', 'SELECT xmin::text FROM age_policy');
++	my ($stdout, $stderr);
++	is($node->psql('postgres',
++		'VACUUM (VERBOSE, DISABLE_PAGE_SKIPPING) age_policy',
++		stdout => \$stdout, stderr => \$stderr), 0,
++		"VACUUM succeeds with $phase");
++	is($node->safe_psql('postgres', 'SELECT xmin::text FROM age_policy'), $xmin,
++		"minimum freeze age is respected with $phase");
++	unlike($stderr, qr/failsafe|far in the past/i,
++		"no spurious age warning or failsafe with $phase");
++}
++$node->safe_psql('postgres', q{
++	SET vacuum_freeze_min_age = 0;
++	SET vacuum_multixact_freeze_min_age = 0;
++	VACUUM (DISABLE_PAGE_SKIPPING) age_policy;
++});
++is($node->safe_psql('postgres', 'SELECT xmin::text FROM age_policy'), '2',
++	'zero minimum age still freezes eligible tuples');
++$node->stop;
++done_testing();
+-- 
+2.55.0
+

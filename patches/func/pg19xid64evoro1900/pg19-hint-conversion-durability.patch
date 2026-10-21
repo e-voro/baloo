@@ -1,0 +1,133 @@
+From 42a0b1c973eddc1398e3271534c09c6e48140062 Mon Sep 17 00:00:00 2001
+From: Evgeny Voropaev <evorop@gmail.com>
+Date: Wed, 21 Oct 2026 20:52:43 +0800
+Subject: [PATCH] WAL-log converted pages dirtied only by hint updates
+
+Preserve conversion across primary checkpoint and restart even with checksums, wal_log_hints and full_page_writes disabled. Force the conversion image regardless of page LSN and protect marking dirty through WAL/LSN publication in a critical section. Cross-version recovery TAP passes 23 assertions with PostgreSQL 15.19; the unfixed hint/checkpoint/restart case crashed standby redo on an old-format page.
+---
+ src/backend/access/transam/xloginsert.c       |  7 ++++---
+ src/backend/storage/buffer/bufmgr.c           | 16 +++++++++++++++-
+ .../t/009_xid32_to_xid64_recovery.pl          | 19 ++++++++++++++++++-
+ 3 files changed, 37 insertions(+), 5 deletions(-)
+
+diff --git a/src/backend/access/transam/xloginsert.c b/src/backend/access/transam/xloginsert.c
+index 95f72c687b9..fee08985fb3 100644
+--- a/src/backend/access/transam/xloginsert.c
++++ b/src/backend/access/transam/xloginsert.c
+@@ -1137,8 +1137,9 @@ XLogCheckBufferNeedsBackup(Buffer buffer)
+  * MarkBufferDirtyHint().
+  *
+  * We only need to do something if page has not yet been full page written in
+- * this checkpoint round. The LSN of the inserted wal record is returned if we
+- * had to write, InvalidXLogRecPtr otherwise.
++ * this checkpoint round, or if its conversion has not yet been WAL-logged.
++ * The LSN of the inserted WAL record is returned if we had to write,
++ * InvalidXLogRecPtr otherwise.
+  */
+ XLogRecPtr
+ XLogSaveBufferForHint(Buffer buffer, bool buffer_std)
+@@ -1168,7 +1169,7 @@ XLogSaveBufferForHint(Buffer buffer, bool buffer_std)
+ 	 */
+ 	lsn = PageGetLSN(BufferGetPage(buffer));
+ 
+-	if (lsn <= RedoRecPtr)
++	if (IsBufferConverted(buffer) || lsn <= RedoRecPtr)
+ 	{
+ 		int			flags = 0;
+ 
+diff --git a/src/backend/storage/buffer/bufmgr.c b/src/backend/storage/buffer/bufmgr.c
+index 89564657dee..11792f8453e 100644
+--- a/src/backend/storage/buffer/bufmgr.c
++++ b/src/backend/storage/buffer/bufmgr.c
+@@ -5756,6 +5756,7 @@ MarkSharedBufferDirtyHint(Buffer buffer, BufferDesc *bufHdr, uint64 lockstate,
+ 	{
+ 		XLogRecPtr	lsn = InvalidXLogRecPtr;
+ 		bool		wal_log = false;
++		bool		converted = (lockstate & BM_CONVERTED) != 0;
+ 		uint64		buf_state;
+ 
+ 		/*
+@@ -5766,8 +5767,14 @@ MarkSharedBufferDirtyHint(Buffer buffer, BufferDesc *bufHdr, uint64 lockstate,
+ 		 *
+ 		 * We don't check full_page_writes here because that logic is included
+ 		 * when we call XLogInsert() since the value changes dynamically.
++		 *
++		 * Conversion is a persistent format change even when the only backend
++		 * change is a hint.  Log its image before the page can reach disk;
++		 * otherwise eviction or restart loses BM_CONVERTED and later incremental
++		 * WAL would be applied to an old-format page on the standby.
+ 		 */
+-		if (XLogHintBitIsNeeded() && (lockstate & BM_PERMANENT))
++		if ((XLogHintBitIsNeeded() || converted) &&
++			(lockstate & BM_PERMANENT))
+ 		{
+ 			/*
+ 			 * If we must not write WAL, due to a relfilelocator-specific
+@@ -5784,6 +5791,10 @@ MarkSharedBufferDirtyHint(Buffer buffer, BufferDesc *bufHdr, uint64 lockstate,
+ 			wal_log = true;
+ 		}
+ 
++		/* A converted page must not remain dirty after a WAL insertion error. */
++		if (converted && wal_log)
++			START_CRIT_SECTION();
++
+ 		/*
+ 		 * We must mark the page dirty before we emit the WAL record, as per
+ 		 * the usual rules, to ensure that BufferSync()/SyncOneBuffer() try to
+@@ -5835,6 +5846,9 @@ MarkSharedBufferDirtyHint(Buffer buffer, BufferDesc *bufHdr, uint64 lockstate,
+ 			UnlockBufHdr(bufHdr);
+ 		}
+ 
++		if (converted && wal_log)
++			END_CRIT_SECTION();
++
+ 		pgBufferUsage.shared_blks_dirtied++;
+ 		if (VacuumCostActive)
+ 			VacuumCostBalance += VacuumCostPageDirty;
+diff --git a/src/bin/pg_upgrade/t/009_xid32_to_xid64_recovery.pl b/src/bin/pg_upgrade/t/009_xid32_to_xid64_recovery.pl
+index 9f1e0a4bed2..295b783cb00 100644
+--- a/src/bin/pg_upgrade/t/009_xid32_to_xid64_recovery.pl
++++ b/src/bin/pg_upgrade/t/009_xid32_to_xid64_recovery.pl
+@@ -43,6 +43,8 @@ $old->safe_psql('postgres', q{
+ 	CREATE TABLE recovery_dense_unfrozen(n int, payload text);
+ 	ALTER TABLE recovery_dense_unfrozen ALTER COLUMN payload SET STORAGE PLAIN;
+ 	INSERT INTO recovery_dense_unfrozen SELECT n, repeat('y',4048) FROM generate_series(1,2) n;
++	CREATE TABLE recovery_hint(n int);
++	INSERT INTO recovery_hint VALUES (1);
+ 	CREATE TABLE recovery_safe_row(value recovery_update);
+ 	INSERT INTO recovery_safe_row VALUES (ROW(1));
+ 	CREATE TYPE bad_xid_record AS (value xid);
+@@ -107,7 +109,7 @@ $primary->safe_psql('postgres',
+ 	q{SELECT pg_truncate_visibility_map('recovery_visible')});
+ my %paths;
+ for my $table ('recovery_update', 'recovery_extend', 'recovery_visible',
+-	'recovery_dense', 'recovery_dense_unfrozen')
++	'recovery_dense', 'recovery_dense_unfrozen', 'recovery_hint')
+ {
+ 	$paths{$table} = $primary->safe_psql('postgres',
+ 		"SELECT pg_relation_filepath('$table')");
+@@ -139,6 +141,21 @@ truncate($extend_path, 0) or die "truncate $extend_path: $!";
+ $primary->start;
+ $standby->start;
+ 
++# A hint-only read must WAL-log conversion even without checksums/hint WAL.
++# Restart loses the in-memory conversion marker; a subsequent incremental
++# update must therefore find an already converted page on the standby.
++is($primary->safe_psql('postgres', 'SELECT n FROM recovery_hint'), '1',
++	'hint-only read of a legacy page succeeds');
++$primary->safe_psql('postgres', 'CHECKPOINT');
++$primary->stop;
++is(page_version($primary->data_dir . '/' . $paths{recovery_hint}), 5,
++	'hint dirtied the converted page before restart');
++$primary->start;
++$primary->safe_psql('postgres', 'UPDATE recovery_hint SET n = 2');
++$primary->wait_for_catchup($standby);
++is($standby->safe_psql('postgres', 'SELECT n FROM recovery_hint'), '2',
++	'incremental update after hint/checkpoint/restart replays on legacy standby');
++
+ $primary->safe_psql('postgres', q{
+ 	UPDATE recovery_update SET n = 2;
+ 	UPDATE recovery_extend SET n = 2;
+-- 
+2.55.0
+

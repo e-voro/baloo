@@ -1,0 +1,110 @@
+From d4cff03bb4037cb80ba418d461f74c724774638d Mon Sep 17 00:00:00 2001
+From: Evgeny Voropaev <evorop@gmail.com>
+Date: Wed, 21 Oct 2026 20:54:15 +0800
+Subject: [PATCH] Use byte pointers for xid64 WAL and page offset arithmetic
+
+PG19 Pointer is void *, so the PG18 arithmetic depended on a compiler extension. Use char * for byte offsets without changing record layouts or conversion behavior. Affected backend files compile with -Werror=pointer-arith and -Werror=format.
+---
+ src/backend/access/heap/heapam_xlog.c    | 6 +++---
+ src/backend/replication/logical/decode.c | 6 +++---
+ src/backend/storage/page/bufpage.c       | 8 ++++----
+ 3 files changed, 10 insertions(+), 10 deletions(-)
+
+diff --git a/src/backend/access/heap/heapam_xlog.c b/src/backend/access/heap/heapam_xlog.c
+index be1c75f2df8..ad94f5fb3c9 100644
+--- a/src/backend/access/heap/heapam_xlog.c
++++ b/src/backend/access/heap/heapam_xlog.c
+@@ -425,7 +425,7 @@ heap_xlog_insert(XLogReaderState *record)
+ 	ItemPointerData target_tid;
+ 	XLogRedoAction action;
+ 	bool		isinit = (XLogRecGetInfo(record) & XLOG_HEAP_INIT_PAGE) != 0;
+-	Pointer		rec_data = (Pointer) XLogRecGetData(record);
++	char	   *rec_data = XLogRecGetData(record);
+ 	TransactionId xid_base = InvalidTransactionId;
+ 	TransactionId multi_base = InvalidTransactionId;
+ 
+@@ -582,7 +582,7 @@ heap_xlog_multi_insert(XLogReaderState *record)
+ 	Buffer		vmbuffer = InvalidBuffer;
+ 	TransactionId	xid_base = InvalidTransactionId,
+ 					multi_base = InvalidTransactionId;
+-	Pointer		rec_data = (Pointer) XLogRecGetData(record);
++	char	   *rec_data = XLogRecGetData(record);
+ 
+ 	/*
+ 	 * Insertion doesn't overwrite MVCC data, so no conflict processing is
+@@ -826,7 +826,7 @@ heap_xlog_update(XLogReaderState *record, bool hot_update)
+ 	XLogRedoAction newaction;
+ 	Relation	reln = NULL;
+ 	bool		isinit = (XLogRecGetInfo(record) & XLOG_HEAP_INIT_PAGE) != 0;
+-	Pointer		rec_data = (Pointer) XLogRecGetData(record);
++	char	   *rec_data = XLogRecGetData(record);
+ 	TransactionId xid_base = InvalidTransactionId,
+ 				  multi_base = InvalidTransactionId;
+ 
+diff --git a/src/backend/replication/logical/decode.c b/src/backend/replication/logical/decode.c
+index cc7e8b50df9..b79137a1144 100644
+--- a/src/backend/replication/logical/decode.c
++++ b/src/backend/replication/logical/decode.c
+@@ -922,7 +922,7 @@ DecodeInsert(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
+ 	ReorderBufferChange *change;
+ 	RelFileLocator target_locator;
+ 	bool		isinit = (XLogRecGetInfo(r) & XLOG_HEAP_INIT_PAGE) != 0;
+-	Pointer		rec_data = (Pointer) XLogRecGetData(r);
++	char	   *rec_data = XLogRecGetData(r);
+ 
+ 	/* Bypass pd_xid_base and pd_multi_base */
+ 	if (isinit)
+@@ -985,7 +985,7 @@ DecodeUpdate(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
+ 	char	   *data;
+ 	RelFileLocator target_locator;
+ 	bool		isinit = (XLogRecGetInfo(r) & XLOG_HEAP_INIT_PAGE) != 0;
+-	Pointer		rec_data = (Pointer) XLogRecGetData(r);
++	char	   *rec_data = XLogRecGetData(r);
+ 
+ 	/* Bypass pd_xid_base and pd_multi_base */
+ 	if (isinit)
+@@ -1166,7 +1166,7 @@ DecodeMultiInsert(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
+ 	Size		tuplelen;
+ 	RelFileLocator rlocator;
+ 	bool		isinit = (XLogRecGetInfo(r) & XLOG_HEAP_INIT_PAGE) != 0;
+-	Pointer		rec_data = (Pointer) XLogRecGetData(r);
++	char	   *rec_data = XLogRecGetData(r);
+ 
+ 	/* Bypass pd_xid_base and pd_multi_base */
+ 	if (isinit)
+diff --git a/src/backend/storage/page/bufpage.c b/src/backend/storage/page/bufpage.c
+index 94865985b45..cdee49f8d7f 100644
+--- a/src/backend/storage/page/bufpage.c
++++ b/src/backend/storage/page/bufpage.c
+@@ -550,7 +550,7 @@ heap_page_add_special_area(ItemIdCompact itemidbase, int nitems, Page page,
+ 		ToastPageSpecial special;
+ 
+ 		new_phdr->pd_special = PageGetPageSize(newPage) - sizeof(ToastPageSpecialData);
+-		special = (ToastPageSpecial) ((Pointer) (newPage) + new_phdr->pd_special);
++		special = (ToastPageSpecial) ((char *) newPage + new_phdr->pd_special);
+ 		special->pd_xid_base = xid_base;
+ 	}
+ 	else
+@@ -558,7 +558,7 @@ heap_page_add_special_area(ItemIdCompact itemidbase, int nitems, Page page,
+ 		HeapPageSpecial special;
+ 
+ 		new_phdr->pd_special = PageGetPageSize(newPage) - sizeof(HeapPageSpecialData);
+-		special = (HeapPageSpecial) ((Pointer) (newPage) + new_phdr->pd_special);
++		special = (HeapPageSpecial) ((char *) newPage + new_phdr->pd_special);
+ 		special->pd_xid_base = xid_base;
+ 		special->pd_multi_base = multi_base;
+ 	}
+@@ -582,8 +582,8 @@ heap_page_add_special_area(ItemIdCompact itemidbase, int nitems, Page page,
+ 		lp = PageGetItemId(page, itemidptr->offsetindex + 1);
+ 		old_htup = (HeapTupleHeader) PageGetItem(page, lp);
+ 		upper -= itemidptr->alignedlen;
+-		memcpy((Pointer) newPage + upper,
+-			   (Pointer) page + itemidptr->itemoff,
++		memcpy((char *) newPage + upper,
++			   (char *) page + itemidptr->itemoff,
+ 			   itemidptr->alignedlen);
+ 		lp = PageGetItemId(newPage, itemidptr->offsetindex + 1);
+ 		lp->lp_off = upper;
+-- 
+2.55.0
+

@@ -1,0 +1,399 @@
+From b052fd6b675b7f8a2b7fe20582ae1963b481da51 Mon Sep 17 00:00:00 2001
+From: Evgeny Voropaev <evorop@gmail.com>
+Date: Wed, 21 Oct 2026 20:29:12 +0800
+Subject: [PATCH] Preserve conversion WAL images through PG19 prune and replay
+ paths
+
+Adapt supplied fix 0015: conversion images override NO_IMAGE, NO_CHANGE references retain markers and WILL_INIT remains reconstructible. PG19 visibility changes use prune WAL with heap-LSN advancement. Test real user-XID rejection, safe row types, dense frozen/unfrozen AIO conversion and PG15.19 streaming replay with checksums, hints and full-page writes disabled.
+---
+ src/backend/access/heap/pruneheap.c           |  10 +-
+ src/backend/access/transam/xloginsert.c       |  15 +-
+ src/bin/pg_upgrade/Makefile                   |   2 +-
+ src/bin/pg_upgrade/meson.build                |   1 +
+ .../t/009_xid32_to_xid64_recovery.pl          | 184 ++++++++++++++++++
+ src/test/perl/PostgreSQL/Test/Cluster.pm      |  36 ++--
+ src/test/regress/regress.c                    |  25 +++
+ 7 files changed, 248 insertions(+), 25 deletions(-)
+ create mode 100644 src/bin/pg_upgrade/t/009_xid32_to_xid64_recovery.pl
+
+diff --git a/src/backend/access/heap/pruneheap.c b/src/backend/access/heap/pruneheap.c
+index 010d61e1f60..54753c26180 100644
+--- a/src/backend/access/heap/pruneheap.c
++++ b/src/backend/access/heap/pruneheap.c
+@@ -2672,14 +2672,18 @@ log_heap_prune_and_freeze(Relation relation, Buffer buffer,
+ 	 * making to it is to set PD_ALL_VISIBLE and checksums/wal_log_hints are
+ 	 * disabled.
+ 	 *
+-	 * However, if the page has never been WAL-logged (LSN is invalid), we
+-	 * must force an FPI regardless.  This can happen when another backend
++	 * A converted page needs an FPI even with checksums and hints disabled:
++	 * redo has no relcache metadata with which to decode the old disk page.
++	 * We must also stamp its heap LSN when logging the conversion image.
++	 *
++	 * If the page has never been WAL-logged (LSN is invalid), we must force
++	 * an FPI regardless.  This can happen when another backend
+ 	 * extends the heap, initializes the page, and then fails before WAL-
+ 	 * logging it.  Since heap extension is not WAL-logged, recovery might try
+ 	 * to replay our record and find that the page isn't initialized, which
+ 	 * would cause a PANIC.
+ 	 */
+-	if (!XLogRecPtrIsValid(PageGetLSN(heap_page)))
++	if (IsBufferConverted(buffer) || !XLogRecPtrIsValid(PageGetLSN(heap_page)))
+ 		regbuf_flags_heap |= REGBUF_FORCE_IMAGE;
+ 	else if (!do_prune && nfrozen == 0 && (!do_set_vm || !XLogHintBitIsNeeded()))
+ 	{
+diff --git a/src/backend/access/transam/xloginsert.c b/src/backend/access/transam/xloginsert.c
+index 075a761d951..95f72c687b9 100644
+--- a/src/backend/access/transam/xloginsert.c
++++ b/src/backend/access/transam/xloginsert.c
+@@ -283,8 +283,13 @@ XLogRegisterBuffer(uint8 block_id, Buffer buffer, uint8 flags)
+ 	regbuf->flags = flags;
+ 	if (IsBufferConverted(buffer))
+ 	{
+-		regbuf->flags |= REGBUF_CONVERTED;
+-		MarkBufferConverted(buffer, false);
++		/* WILL_INIT reconstructs the page without reading legacy contents. */
++		if ((flags & REGBUF_WILL_INIT) != REGBUF_WILL_INIT)
++			regbuf->flags |= REGBUF_CONVERTED;
++
++		/* Keep the marker on references that need not make the page durable. */
++		if (!(flags & REGBUF_NO_CHANGE))
++			MarkBufferConverted(buffer, false);
+ 	}
+ 	regbuf->rdata_tail = (XLogRecData *) &regbuf->rdata_head;
+ 	regbuf->rdata_len = 0;
+@@ -680,13 +685,11 @@ XLogRecordAssemble(RmgrId rmid, uint8 info,
+ 		if (!regbuf->in_use)
+ 			continue;
+ 
+-		/* Determine if this block needs to be backed up */
+-		if (regbuf->flags & REGBUF_FORCE_IMAGE)
++		/* Conversion images are required even without torn-page protection. */
++		if (regbuf->flags & (REGBUF_FORCE_IMAGE | REGBUF_CONVERTED))
+ 			needs_backup = true;
+ 		else if (regbuf->flags & REGBUF_NO_IMAGE)
+ 			needs_backup = false;
+-		else if (regbuf->flags & REGBUF_CONVERTED)
+-			needs_backup = true;
+ 		else if (!doPageWrites)
+ 			needs_backup = false;
+ 		else
+diff --git a/src/bin/pg_upgrade/Makefile b/src/bin/pg_upgrade/Makefile
+index 0b7b2bb86bf..10ef4910d31 100644
+--- a/src/bin/pg_upgrade/Makefile
++++ b/src/bin/pg_upgrade/Makefile
+@@ -3,7 +3,7 @@
+ PGFILEDESC = "pg_upgrade - an in-place binary upgrade utility"
+ PGAPPICON = win32
+ 
+-EXTRA_INSTALL=contrib/test_decoding src/test/modules/dummy_seclabel src/test/modules/test_extensions
++EXTRA_INSTALL=contrib/test_decoding contrib/pg_visibility src/test/modules/dummy_seclabel src/test/modules/test_extensions
+ 
+ subdir = src/bin/pg_upgrade
+ top_builddir = ../../..
+diff --git a/src/bin/pg_upgrade/meson.build b/src/bin/pg_upgrade/meson.build
+index 33207219014..62d5d1dbd77 100644
+--- a/src/bin/pg_upgrade/meson.build
++++ b/src/bin/pg_upgrade/meson.build
+@@ -70,6 +70,7 @@ tests += {
+       't/006_transfer_modes.pl',
+       't/007_multixact_conversion.pl',
+       't/008_extension_control_path.pl',
++      't/009_xid32_to_xid64_recovery.pl',
+     ],
+     'deps': [test_ext],
+     'test_kwargs': {'priority': 40}, # pg_upgrade tests are slow
+diff --git a/src/bin/pg_upgrade/t/009_xid32_to_xid64_recovery.pl b/src/bin/pg_upgrade/t/009_xid32_to_xid64_recovery.pl
+new file mode 100644
+index 00000000000..9f1e0a4bed2
+--- /dev/null
++++ b/src/bin/pg_upgrade/t/009_xid32_to_xid64_recovery.pl
+@@ -0,0 +1,184 @@
++# Copyright (c) 2026, Tantor Labs
++# Recovery must restore converted pages before relcache-less incremental reads.
++use strict;
++use warnings FATAL => 'all';
++
++use PostgreSQL::Test::Cluster;
++use PostgreSQL::Test::Utils;
++use Test::More;
++
++plan skip_all => 'oldinstall is required for xid32 to xid64 recovery test'
++  unless defined $ENV{oldinstall};
++
++my $old = PostgreSQL::Test::Cluster->new('recovery_old',
++	install_path => $ENV{oldinstall});
++$old->init(force_initdb => 1, xid32 => 1);
++$old->append_conf('postgresql.conf', 'autovacuum = off');
++$old->start;
++plan skip_all => 'source cluster must use xid32'
++  unless $old->safe_psql('postgres',
++	q{SELECT typlen FROM pg_type WHERE oid = 'xid'::regtype}) eq '4';
++# Disable checksums in both clusters: visibility WAL normally omits the heap
++# image in this configuration. This is independent of full_page_writes.
++my $old_checksums = $old->safe_psql('postgres', 'SHOW data_checksums');
++$old->stop;
++$old->command_ok([$old->installed_command('pg_checksums'), '--disable',
++	'--no-sync', '--pgdata' => $old->data_dir], 'disable source checksums')
++  if $old_checksums eq 'on';
++$old->start;
++is($old->safe_psql('postgres', 'SHOW data_checksums'), 'off',
++	'source checksums are disabled');
++for my $table ('recovery_update', 'recovery_extend', 'recovery_visible')
++{
++	$old->safe_psql('postgres', "CREATE TABLE $table AS SELECT 1 AS n");
++	$old->safe_psql('postgres', "VACUUM FREEZE $table");
++}
++$old->safe_psql('postgres', q{
++	CREATE TABLE recovery_dense(n int, payload text);
++	ALTER TABLE recovery_dense ALTER COLUMN payload SET STORAGE PLAIN;
++	INSERT INTO recovery_dense SELECT n, repeat('x',4048) FROM generate_series(1,2) n;
++});
++$old->safe_psql('postgres', 'VACUUM FREEZE recovery_dense');
++$old->safe_psql('postgres', q{
++	CREATE TABLE recovery_dense_unfrozen(n int, payload text);
++	ALTER TABLE recovery_dense_unfrozen ALTER COLUMN payload SET STORAGE PLAIN;
++	INSERT INTO recovery_dense_unfrozen SELECT n, repeat('y',4048) FROM generate_series(1,2) n;
++	CREATE TABLE recovery_safe_row(value recovery_update);
++	INSERT INTO recovery_safe_row VALUES (ROW(1));
++	CREATE TYPE bad_xid_record AS (value xid);
++	CREATE TABLE bad_xid_storage(direct xid, elements xid[], nested bad_xid_record);
++});
++$old->stop;
++
++my $primary = PostgreSQL::Test::Cluster->new('recovery_primary');
++$primary->init(allows_streaming => 1, extra => ['--no-data-checksums']);
++$primary->append_conf('postgresql.conf', qq{
++autovacuum = off
++autovacuum_freeze_max_age = 1000000000000
++autovacuum_multixact_freeze_max_age = 1000000000000
++full_page_writes = off
++wal_log_hints = off
++io_method = worker
++checkpoint_timeout = '1h'
++});
++$primary->start;
++my $xid_size = $primary->safe_psql('postgres',
++	q{SELECT typlen FROM pg_type WHERE oid = 'xid'::regtype});
++$primary->stop;
++plan skip_all => 'target cluster must use xid64' unless $xid_size eq '8';
++
++my @upgrade_command = (
++	$primary->installed_command('pg_upgrade'), '--no-sync', '--copy',
++	'--old-datadir' => $old->data_dir,
++	'--new-datadir' => $primary->data_dir,
++	'--old-bindir' => $old->config_data('--bindir'),
++	'--new-bindir' => $primary->config_data('--bindir'),
++	'--socketdir' => $primary->host,
++	'--old-port' => $old->port,
++	'--new-port' => $primary->port);
++ok(!run_log([@upgrade_command, '--check']), 'reject explicit user xid storage');
++my @reports = glob($primary->data_dir . '/pg_upgrade_output.d/*/tables_using_xid.txt');
++BAIL_OUT('missing xid usage report') unless @reports;
++my $report = slurp_file($reports[-1]);
++like($report, qr/bad_xid_storage\.direct/, 'report direct user xid column');
++like($report, qr/bad_xid_storage\.elements/, 'report array of xid');
++like($report, qr/bad_xid_storage\.nested/, 'report composite containing xid');
++unlike($report, qr/\.(?:xmin|xmax)\b|recovery_safe_row/,
++	'ignore system XIDs and safe row types during recursive type checks');
++$old->start;
++$old->safe_psql('postgres', 'DROP TABLE bad_xid_storage; DROP TYPE bad_xid_record');
++$old->stop;
++my $upgraded = run_log([@upgrade_command]);
++ok($upgraded, 'upgrade source cluster for recovery tests');
++BAIL_OUT('upgrade failed') unless $upgraded;
++
++$primary->start;
++$primary->safe_psql('postgres', 'CREATE EXTENSION pg_visibility');
++my $regresslib = $ENV{REGRESS_SHLIB};
++BAIL_OUT('REGRESS_SHLIB is required') unless defined $regresslib;
++$regresslib =~ s/'/''/g;
++$primary->safe_psql('postgres', qq{
++	CREATE FUNCTION test_xid64_extension_fallback(regclass) RETURNS int4
++	AS '$regresslib' LANGUAGE C STRICT;
++});
++# A supported way to invalidate the VM without reading/converting heap pages.
++# Tuples are already frozen, so the next VACUUM only needs visibility WAL.
++$primary->safe_psql('postgres',
++	q{SELECT pg_truncate_visibility_map('recovery_visible')});
++my %paths;
++for my $table ('recovery_update', 'recovery_extend', 'recovery_visible',
++	'recovery_dense', 'recovery_dense_unfrozen')
++{
++	$paths{$table} = $primary->safe_psql('postgres',
++		"SELECT pg_relation_filepath('$table')");
++}
++$primary->stop;
++
++sub page_version
++{
++	my ($path) = @_;
++	open(my $fh, '<:raw', $path) or die "open $path: $!";
++	seek($fh, 18, 0) or die "seek $path: $!";
++	read($fh, my $bytes, 2) == 2 or die "read page version from $path: $!";
++	close($fh);
++	return unpack('S', $bytes) & 0xff;
++}
++for my $table (sort keys %paths)
++{
++	is(page_version($primary->data_dir . '/' . $paths{$table}), 4,
++		"$table still has an old-format page before replay");
++}
++
++$primary->backup_fs_cold('upgraded');
++my $standby = PostgreSQL::Test::Cluster->new('recovery_standby');
++$standby->init_from_backup($primary, 'upgraded', has_streaming => 1);
++# Exercise XLogReadBufferExtended's missing-block extension branch when the
++# update's full-page image arrives. No old heap contents are needed here.
++my $extend_path = $standby->data_dir . '/' . $paths{recovery_extend};
++truncate($extend_path, 0) or die "truncate $extend_path: $!";
++$primary->start;
++$standby->start;
++
++$primary->safe_psql('postgres', q{
++	UPDATE recovery_update SET n = 2;
++	UPDATE recovery_extend SET n = 2;
++	UPDATE recovery_dense SET n = n + 1;
++	UPDATE recovery_dense_unfrozen SET n = n + 1;
++});
++$primary->wait_for_catchup($standby);
++is($standby->safe_psql('postgres', 'SELECT n FROM recovery_update'), '2',
++	'replay restores converted heap despite full_page_writes=off');
++is($standby->safe_psql('postgres', 'SELECT n FROM recovery_extend'), '2',
++	'replay extends missing heap and restores converted page');
++is($standby->safe_psql('postgres', 'SELECT sum(n) FROM recovery_dense'), '5',
++	'dense legacy conversion and double-xmax update replay correctly');
++is($standby->safe_psql('postgres', 'SELECT sum(n) FROM recovery_dense_unfrozen'), '5',
++	'dense legacy conversion can check commit status in an AIO worker');
++# Subsequent records use the normal relcache-less read path on current pages.
++$standby->stop;
++$primary->safe_psql('postgres', q{
++	UPDATE recovery_update SET n = 3;
++	UPDATE recovery_extend SET n = 3;
++});
++$standby->start;
++$primary->wait_for_catchup($standby);
++is($standby->safe_psql('postgres', 'SELECT n FROM recovery_update'), '3',
++	'incremental redo reads converted page without relcache after restart');
++
++# Force the generic extension fallback on an already existing replayed block.
++# Recovery itself is the only writer and normally extends missing blocks
++# directly; this helper explicitly selects BMR_SMGR and the no-extension path.
++$standby->stop;
++$standby->start;
++is($standby->safe_psql('postgres',
++	q{SELECT test_xid64_extension_fallback('recovery_extend')}), '5',
++	'relcache-less extension fallback reads a replayed page after restart');
++
++$primary->safe_psql('postgres',
++	'VACUUM (DISABLE_PAGE_SKIPPING) recovery_visible');
++$primary->wait_for_catchup($standby);
++is($standby->safe_psql('postgres', 'SELECT n FROM recovery_visible'), '1',
++	'visibility WAL restores converted heap with checksums and hints disabled');
++$standby->stop;
++$primary->stop;
++done_testing();
+diff --git a/src/test/perl/PostgreSQL/Test/Cluster.pm b/src/test/perl/PostgreSQL/Test/Cluster.pm
+index dd3b2cb4eb3..f9c338e7ece 100644
+--- a/src/test/perl/PostgreSQL/Test/Cluster.pm
++++ b/src/test/perl/PostgreSQL/Test/Cluster.pm
+@@ -612,6 +612,8 @@ has_archiving => 1. This is disabled by default.
+ 
+ Data checksums can be forced off by passing no_data_checksums => 1.
+ 
++xid32 => 1 suppresses the xid64 initdb counter defaults for a legacy source.
++
+ postgresql.conf can be set up for replication by passing the keyword
+ parameter allows_streaming => 'logical' or 'physical' (passing 1 will also
+ suffice for physical replication) depending on type of replication that
+@@ -667,25 +669,29 @@ sub init
+ 	{
+ 		note("initializing database system by running initdb");
+ 
+-		if ($params{no_data_checksums})
+-		{
+-			PostgreSQL::Test::Utils::system_or_bail(
+-				'initdb', '--no-sync',
+-				'--pgdata' => $pgdata,
+-				'--auth' => 'trust',
+-				@{ $params{extra} });
+-		}
+-		else
++		my @xid_options;
++		if (!$params{no_data_checksums} && !$params{xid32})
+ 		{
+-			PostgreSQL::Test::Utils::system_or_bail(
+-				'initdb', '--no-sync',
+-				'--pgdata' => $pgdata,
+-				'--auth' => 'trust',
++			@xid_options = (
+ 				'--xid' => '1249835483136',
+ 				'--multixact-id' => '2422361554944',
+-				'--multixact-offset' => '3594887626752',
+-				@{ $params{extra} });
++				'--multixact-offset' => '3594887626752');
++
++			# An external install can be vanilla PostgreSQL of the same
++			# major version; inspect capabilities rather than its version.
++			if (defined $self->{_install_path})
++			{
++				my ($help, $stderr);
++				IPC::Run::run(['initdb', '--help'], '>', \$help, '2>', \$stderr)
++				  or BAIL_OUT("could not inspect external initdb: $stderr");
++				@xid_options = () unless $help =~ /--multixact-offset/;
++			}
+ 		}
++		PostgreSQL::Test::Utils::system_or_bail(
++			'initdb', '--no-sync',
++			'--pgdata' => $pgdata,
++			'--auth' => 'trust',
++			@xid_options, @{ $params{extra} });
+ 	}
+ 	else
+ 	{
+diff --git a/src/test/regress/regress.c b/src/test/regress/regress.c
+index 297be7ae2d9..3ac209c7a91 100644
+--- a/src/test/regress/regress.c
++++ b/src/test/regress/regress.c
+@@ -47,6 +47,7 @@
+ #include "storage/checksum.h"
+ #include "storage/bufmgr.h"
+ #include "storage/spin.h"
++#include "storage/smgr.h"
+ #include "tcop/tcopprot.h"
+ #include "utils/array.h"
+ #include "utils/builtins.h"
+@@ -98,6 +99,30 @@ PG_MODULE_MAGIC_EXT(
+ 					.version = PG_VERSION
+ );
+ 
++/* Exercise an existing-block extension fallback without a Relation pointer. */
++PG_FUNCTION_INFO_V1(test_xid64_extension_fallback);
++Datum
++test_xid64_extension_fallback(PG_FUNCTION_ARGS)
++{
++	Relation	rel = relation_open(PG_GETARG_OID(0), AccessShareLock);
++	SMgrRelation smgr = RelationGetSmgr(rel);
++	char		persistence = rel->rd_rel->relpersistence;
++	Buffer		buffer;
++	int			version;
++
++	if (persistence != RELPERSISTENCE_PERMANENT ||
++		smgrnblocks(smgr, MAIN_FORKNUM) == 0)
++		elog(ERROR, "test requires a nonempty permanent relation");
++
++	relation_close(rel, NoLock);
++	buffer = ExtendBufferedRelTo(BMR_SMGR(smgr, persistence), MAIN_FORKNUM,
++								 NULL, 0, 1, RBM_NORMAL);
++	LockBuffer(buffer, BUFFER_LOCK_SHARE);
++	version = PageGetPageLayoutVersion(BufferGetPage(buffer));
++	UnlockReleaseBuffer(buffer);
++	PG_RETURN_INT32(version);
++}
++
+ 
+ /* return the point where two paths intersect, or NULL if no intersection. */
+ PG_FUNCTION_INFO_V1(interpt_pp);
+-- 
+2.55.0
+

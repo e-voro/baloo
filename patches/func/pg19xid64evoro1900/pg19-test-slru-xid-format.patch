@@ -1,0 +1,25 @@
+From 87aca2ff8ca630a51a863004a096e4c576610962 Mon Sep 17 00:00:00 2001
+From: Evgeny Voropaev <evorop@gmail.com>
+Date: Wed, 21 Oct 2026 20:34:23 +0800
+Subject: [PATCH] Format full XIDs in the PG19 SLRU test error callback
+
+---
+ src/test/modules/test_slru/test_slru.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/test/modules/test_slru/test_slru.c b/src/test/modules/test_slru/test_slru.c
+index 40efffdbf62..474d6b7a4ea 100644
+--- a/src/test/modules/test_slru/test_slru.c
++++ b/src/test/modules/test_slru/test_slru.c
+@@ -209,7 +209,7 @@ test_slru_errdetail_for_io_error(const void *opaque_data)
+ {
+ 	TransactionId xid = *(const TransactionId *) opaque_data;
+ 
+-	return errdetail("Could not access test_slru entry %u.", xid);
++	return errdetail("Could not access test_slru entry %" PRIu64 ".", xid);
+ }
+ 
+ void
+-- 
+2.55.0
+
