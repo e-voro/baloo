@@ -58,6 +58,8 @@ pages or a separate tuple-XID payload to prune WAL.
 - Give brief English corrections before starting the technical work, so the
   user can read them during execution. Italicize corrected whole sentences;
   bold changed words, or only the corrected letters when fixing a typo.
+  Repeat English corrections and important interim explanations in the final
+  answer so they remain available after commentary is collapsed.
 
 - Log in REAL TIME to baloo/codex.log, not at the end of the operation. Stream
   command output with tee -a and append decisions/findings as they occur.
@@ -611,9 +613,9 @@ XID width alone does not identify a source MultiXact layout:
   server upgrade, TAP or recovery validation is claimed. Full build remains
   deferred until later 0005 declarations are applied.
 
-### NEW LOGIC TOPIC: --swap bypasses FSM/VM conversion
+### Historical review: --swap bypasses FSM/VM conversion (fixed below)
 
-**First unapplied mini is mini0128(relfilenumber.c); stop under the user's rule.**
+**This was the stop before mini0128(relfilenumber.c); implementation follows.**
 
 - transfer_single_new_db() takes the --swap branch, calls do_swap() and
   returns before the original mini's update_version/FSM/VM rewrite loop.
@@ -634,3 +636,67 @@ XID width alone does not identify a source MultiXact layout:
 - Discuss this new adaptation before applying mini0128(relfilenumber.c).
   Validate --swap with initialized/zero FSM/VM pages and checksums, plus
   copy/link modes and already-xid64 sources. Audit/backport for Tantor 18.
+
+## IMPORTANT: swapped FSM/VM header rewrite implemented (2026-10-21)
+
+- User approved the destination-side rewrite. Applied mini0128(relfilenumber.c),
+  source **`9a0b1024ba0`**, including file.c/pg_upgrade.h API support.
+  swap_catalog_files() now rewrites mapped user FSM/VM files after directory
+  relocation and catalog replacement, before the existing directory fsyncs.
+  Guard both swap and ordinary paths with **xid32 source -> xid64 target**,
+  incorporating supplied0007's width guard. Already-xid64 sources skip this.
+- Process only maps matching the destination database/tablespace being moved;
+  handle every present fork segment, preserve empty files and all-zero pages,
+  and leave heap files/catalog replacement logic intact. This retains native
+  serial and per-tablespace transfer entry points and bulk directory renames.
+- Write each replacement to an exclusive `.pg_upgrade` temporary file; verify
+  the complete rewrite before installation. If synchronization is enabled,
+  fsync that temporary file **before** renaming it over the destination fork.
+  Native directory/parent fsyncs follow the replacements; existing catalog
+  sync queue stays unchanged. --no-sync skips the new file fsyncs, retaining
+  the existing unconditional swap directory synchronization behavior.
+- Initialized auxiliary pages get layout version 5 without changing payload.
+  Recompute enabled checksums after the version change. Added a first_block
+  argument to updateSegmentPagesVersion(): segment N starts at
+  N * controldata.largesz, not block zero. This also corrects checksums in
+  ordinary copy/link conversion of later FSM/VM segments. Explicitly include
+  storage/block.h in the public frontend header and check output close errors.
+- Failure during conversion, output creation or fsync leaves that original
+  destination file unreplaced. A failed destructive swap still requires
+  reinitializing the new cluster; no whole-upgrade rollback is claimed.
+  PostgreSQL's rename wrapper supports replacement on Windows; validation
+  here ran on Linux, not Windows.
+- `dev/tests/xid64_swap_aux/check.py`: **28 filesystem scenarios pass** with
+  warnings as errors and UBSan. Uses actual native prepare/swap/catalog,
+  auxiliary-rewrite, ordinary transfer and sync-queue functions, actual page
+  helpers and **PostgreSQL's checksum implementation**. Exercises initialized,
+  zero and empty segments, segment-1 logical checksums, default/external
+  tablespaces, serial/partitioned calls, copy/link, --no-sync, already-xid64
+  no-op and corrupt/truncated/existing-output/fsync failures. Real rename,
+  fsync, file and inode checks verify ordering and heap-file preservation.
+  Partitioned calls are sequential fixtures, not concurrent worker execution.
+  Clone/copy_file_range, old VM payload conversion and live server upgrades
+  are not exercised by this probe.
+- Existing upgrade-pages/parser fixture still passes (15 XID parse cases,
+  page/checksum-call checks and 5 invalid-file rejections); its older checksum
+  stub is unchanged. The new swap probe uses actual checksums.
+- Continued with mini0130(002_pg_upgrade.pl), **`d961467957b`**: retain original
+  relfrozenxid/relminmxid assertions, use a unique public test relation and
+  regclass-qualified lookup. Preserve PG19 wal_level=replica, structured
+  regression invocation and all existing upgrade modes. Perl syntax passes;
+  full pg_upgrade TAP remains pending. Reviewed PG19-only changes in these
+  target files; no additional tuple XID/page/WAL conversion was needed.
+- Refreshed minis0124(file.c), 0127(pg_upgrade.h), 0128(relfilenumber.c),
+  0130(002_pg_upgrade.pl) and aggregate. All four minis reverse-check; all
+  four aggregate sections replay on `8ca324058af` and match source exactly.
+  Saved patches/probes in Baloo `5a62bab`, parent `ad392cc9fd3`.
+- **Next unapplied: mini0132(003_corruption.pl).** mini0129(segresize.c) and
+  mini0131(version.c) are already applied; do not replay. The initdb options
+  used by mini0132(003_corruption.pl) come from later series patch 0009 and
+  are not available at this partial checkpoint; preserve PG19's nonzero
+  MultiXact-offset initialization when adapting them.
+- Backport the swap FSM/VM rewrite and logical segment checksum correction
+  to pg18xid64/Tantor 18 after comparing supplied fixes. No swap-path fix was
+  found in those supplied patches. Live --swap/copy/link and cross-version
+  validation, including checksums and actual parallel jobs, remains required
+  after the full series builds.
