@@ -50,14 +50,14 @@ Discussion: https://postgr.es/m/CAJ7c6TPDOYBYrnCAeyndkBktO0WG2xSdYduTF0nxq%2Bvfk
  doc/src/sgml/monitoring.sgml                       |    8 
  src/backend/access/common/heaptuple.c              |   10 
  src/backend/access/common/reloptions.c             |  118 +-
- src/backend/access/heap/heapam.c                   |  996 ++++++++++++++++++--
- src/backend/access/heap/heapam_handler.c           |   75 +-
+ src/backend/access/heap/heapam.c                   | 1029 ++++++++++++++++++--
+ src/backend/access/heap/heapam_handler.c           |   75 +
  src/backend/access/heap/heapam_indexscan.c         |    9 
  src/backend/access/heap/heapam_visibility.c        |  187 ++--
  src/backend/access/heap/heapam_xlog.c              |  186 +++-
  src/backend/access/heap/heaptoast.c                |    3 
  src/backend/access/heap/hio.c                      |   39 +
- src/backend/access/heap/pruneheap.c                |   96 +-
+ src/backend/access/heap/pruneheap.c                |  113 ++
  src/backend/access/heap/rewriteheap.c              |  101 ++
  src/backend/access/heap/vacuumlazy.c               |   38 -
  src/backend/access/nbtree/nbtpage.c                |    2 
@@ -69,7 +69,7 @@ Discussion: https://postgr.es/m/CAJ7c6TPDOYBYrnCAeyndkBktO0WG2xSdYduTF0nxq%2Bvfk
  src/backend/access/rmgrdesc/xlogdesc.c             |    2 
  src/backend/access/transam/clog.c                  |   19 
  src/backend/access/transam/commit_ts.c             |   19 
- src/backend/access/transam/multixact.c             |  287 ++----
+ src/backend/access/transam/multixact.c             |  287 +-----
  src/backend/access/transam/slru.c                  |   10 
  src/backend/access/transam/subtrans.c              |    3 
  src/backend/access/transam/transam.c               |    1 
@@ -85,7 +85,7 @@ Discussion: https://postgr.es/m/CAJ7c6TPDOYBYrnCAeyndkBktO0WG2xSdYduTF0nxq%2Bvfk
  src/backend/commands/async.c                       |    4 
  src/backend/commands/dbcommands.c                  |    5 
  src/backend/commands/indexcmds.c                   |    6 
- src/backend/commands/sequence.c                    |   30 +
+ src/backend/commands/sequence.c                    |   30 -
  src/backend/commands/vacuum.c                      |   22 
  src/backend/commands/wait.c                        |    2 
  src/backend/executor/execExprInterp.c              |    1 
@@ -97,15 +97,16 @@ Discussion: https://postgr.es/m/CAJ7c6TPDOYBYrnCAeyndkBktO0WG2xSdYduTF0nxq%2Bvfk
  src/backend/nodes/gen_node_support.pl              |    6 
  src/backend/optimizer/util/plancat.c               |    2 
  src/backend/postmaster/autovacuum.c                |   82 +-
+ src/backend/postmaster/datachecksum_state.c        |    4 
  src/backend/replication/logical/decode.c           |   30 +
  src/backend/replication/logical/launcher.c         |    2 
- src/backend/replication/logical/proto.c            |   50 +
+ src/backend/replication/logical/proto.c            |   50 -
  src/backend/replication/logical/reorderbuffer.c    |   17 
  src/backend/replication/logical/slotsync.c         |    6 
  src/backend/replication/logical/snapbuild.c        |    4 
  src/backend/replication/logical/worker.c           |   10 
  src/backend/replication/walreceiver.c              |   28 -
- src/backend/replication/walsender.c                |   76 --
+ src/backend/replication/walsender.c                |   76 -
  src/backend/statistics/extended_stats.c            |    1 
  src/backend/storage/buffer/Makefile                |    3 
  src/backend/storage/buffer/bufmgr.c                |   94 ++
@@ -122,10 +123,11 @@ Discussion: https://postgr.es/m/CAJ7c6TPDOYBYrnCAeyndkBktO0WG2xSdYduTF0nxq%2Bvfk
  src/backend/utils/adt/enum.c                       |    2 
  src/backend/utils/adt/jsonfuncs.c                  |    2 
  src/backend/utils/adt/lockfuncs.c                  |   18 
+ src/backend/utils/adt/multixactfuncs.c             |    6 
  src/backend/utils/adt/pgstatfuncs.c                |    1 
  src/backend/utils/adt/rowtypes.c                   |   12 
  src/backend/utils/adt/xid.c                        |   44 +
- src/backend/utils/adt/xid8funcs.c                  |   68 +
+ src/backend/utils/adt/xid8funcs.c                  |   68 -
  src/backend/utils/cache/catcache.c                 |    1 
  src/backend/utils/cache/funccache.c                |    4 
  src/backend/utils/cache/relcache.c                 |    3 
@@ -137,7 +139,7 @@ Discussion: https://postgr.es/m/CAJ7c6TPDOYBYrnCAeyndkBktO0WG2xSdYduTF0nxq%2Bvfk
  src/backend/utils/sort/tuplesortvariants.c         |   16 
  src/backend/utils/time/combocid.c                  |   32 -
  src/backend/utils/time/snapmgr.c                   |   22 
- src/bin/pg_amcheck/t/004_verify_heapam.pl          |  226 ++++-
+ src/bin/pg_amcheck/t/004_verify_heapam.pl          |  226 ++++
  src/bin/pg_controldata/pg_controldata.c            |    2 
  src/bin/pg_dump/pg_dump.c                          |   27 -
  src/bin/pg_dump/pg_dump.h                          |    8 
@@ -152,7 +154,7 @@ Discussion: https://postgr.es/m/CAJ7c6TPDOYBYrnCAeyndkBktO0WG2xSdYduTF0nxq%2Bvfk
  src/bin/pg_upgrade/multixact_read_v18.c            |  148 +--
  src/bin/pg_upgrade/multixact_read_v18.h            |   19 
  src/bin/pg_upgrade/multixact_rewrite.c             |   45 +
- src/bin/pg_upgrade/pg_upgrade.c                    |  288 ++++--
+ src/bin/pg_upgrade/pg_upgrade.c                    |  288 +++---
  src/bin/pg_upgrade/pg_upgrade.h                    |   34 +
  src/bin/pg_upgrade/relfilenumber.c                 |  102 ++
  src/bin/pg_upgrade/segresize.c                     |   48 +
@@ -162,7 +164,7 @@ Discussion: https://postgr.es/m/CAJ7c6TPDOYBYrnCAeyndkBktO0WG2xSdYduTF0nxq%2Bvfk
  src/bin/pg_waldump/t/001_basic.pl                  |    3 
  src/include/access/ginblock.h                      |   11 
  src/include/access/gist.h                          |    2 
- src/include/access/heapam.h                        |   49 +
+ src/include/access/heapam.h                        |   54 +
  src/include/access/heapam_xlog.h                   |   22 
  src/include/access/heaptoast.h                     |   11 
  src/include/access/htup.h                          |   20 
@@ -174,7 +176,7 @@ Discussion: https://postgr.es/m/CAJ7c6TPDOYBYrnCAeyndkBktO0WG2xSdYduTF0nxq%2Bvfk
  src/include/access/rewriteheap.h                   |    4 
  src/include/access/rmgrlist.h                      |    1 
  src/include/access/tableam.h                       |    2 
- src/include/access/transam.h                       |  128 +--
+ src/include/access/transam.h                       |  128 +-
  src/include/access/tupmacs.h                       |    1 
  src/include/access/xact.h                          |   13 
  src/include/access/xloginsert.h                    |    1 
@@ -211,7 +213,7 @@ Discussion: https://postgr.es/m/CAJ7c6TPDOYBYrnCAeyndkBktO0WG2xSdYduTF0nxq%2Bvfk
  .../modules/injection_points/regress_injection.c   |   10 
  src/test/modules/test_lfind/test_lfind.c           |   32 +
  src/test/perl/PostgreSQL/Test/AdjustUpgrade.pm     |    4 
- src/test/perl/PostgreSQL/Test/Cluster.pm           |   25 -
+ src/test/perl/PostgreSQL/Test/Cluster.pm           |   25 
  src/test/recovery/t/003_recovery_targets.pl        |    8 
  .../recovery/t/035_standby_logical_decoding.pl     |    2 
  src/test/recovery/t/039_end_of_wal.pl              |   19 
@@ -241,7 +243,7 @@ Discussion: https://postgr.es/m/CAJ7c6TPDOYBYrnCAeyndkBktO0WG2xSdYduTF0nxq%2Bvfk
  src/test/xid-64/t/006_zeropage.pl                  |   33 +
  src/test/xid-64/t/007_first_multi.pl               |   83 ++
  src/tools/pgindent/typedefs.list                   |    4 
- 219 files changed, 6887 insertions(+), 2295 deletions(-)
+ 221 files changed, 6938 insertions(+), 2309 deletions(-)
 
 diff --git a/contrib/amcheck/verify_heapam.c b/contrib/amcheck/verify_heapam.c
 index 056dd210923..8f1afca1ac9 100644
@@ -1792,7 +1794,7 @@ index 1666c8fbe6d..1a0716081ea 100644
  		{"log_autovacuum_min_duration", RELOPT_TYPE_INT,
  		offsetof(StdRdOptions, autovacuum) + offsetof(AutoVacOpts, log_vacuum_min_duration)},
 diff --git a/src/backend/access/heap/heapam.c b/src/backend/access/heap/heapam.c
-index 20e30a749b0..5730e0e92e9 100644
+index 20e30a749b0..351a105cefd 100644
 --- a/src/backend/access/heap/heapam.c
 +++ b/src/backend/access/heap/heapam.c
 @@ -40,12 +40,14 @@
@@ -2782,7 +2784,15 @@ index 20e30a749b0..5730e0e92e9 100644
  		ItemPointerCopy(&(mytup.t_data->t_ctid), &tupid);
  		UnlockReleaseBuffer(buf);
  	}
-@@ -6417,12 +6609,13 @@ heap_abort_speculative(Relation relation, const ItemPointerData *tid)
+@@ -6390,6 +6582,7 @@ void
+ heap_abort_speculative(Relation relation, const ItemPointerData *tid)
+ {
+ 	TransactionId xid = GetCurrentTransactionId();
++	TransactionId prune_xid;
+ 	ItemId		lp;
+ 	HeapTupleData tp;
+ 	Page		page;
+@@ -6417,12 +6610,13 @@ heap_abort_speculative(Relation relation, const ItemPointerData *tid)
  	tp.t_data = (HeapTupleHeader) PageGetItem(page, lp);
  	tp.t_len = ItemIdGetLength(lp);
  	tp.t_self = *tid;
@@ -2797,15 +2807,38 @@ index 20e30a749b0..5730e0e92e9 100644
  		elog(ERROR, "attempted to kill a tuple inserted by another transaction");
  	if (!(IsToastRelation(relation) || HeapTupleHeaderIsSpeculative(tp.t_data)))
  		elog(ERROR, "attempted to kill a non-speculative tuple");
-@@ -6455,6 +6648,7 @@ heap_abort_speculative(Relation relation, const ItemPointerData *tid)
+@@ -6434,8 +6628,6 @@ heap_abort_speculative(Relation relation, const ItemPointerData *tid)
+ 	 * do anything special with infomask bits.
+ 	 */
+ 
+-	START_CRIT_SECTION();
+-
+ 	/*
+ 	 * The tuple will become DEAD immediately.  Flag that this page is a
+ 	 * candidate for pruning by setting xmin to TransactionXmin. While not
+@@ -6449,15 +6641,19 @@ heap_abort_speculative(Relation relation, const ItemPointerData *tid)
+ 	Assert(TransactionIdIsValid(TransactionXmin));
+ 	{
+ 		TransactionId relfrozenxid = relation->rd_rel->relfrozenxid;
+-		TransactionId prune_xid;
+ 
+ 		if (TransactionIdPrecedes(TransactionXmin, relfrozenxid))
  			prune_xid = relfrozenxid;
  		else
  			prune_xid = TransactionXmin;
+-		PageSetPrunable(page, prune_xid);
++		/* Preparation may prune/freeze and perform I/O; do it before crit. */
 +		heap_page_prepare_for_xid(relation, buffer, prune_xid, false);
- 		PageSetPrunable(page, prune_xid);
  	}
  
-@@ -6465,9 +6659,11 @@ heap_abort_speculative(Relation relation, const ItemPointerData *tid)
++	START_CRIT_SECTION();
++
++	PageSetPrunable(page, prune_xid);
++
+ 	/* store transaction information of xact deleting the tuple */
+ 	tp.t_data->t_infomask &= ~(HEAP_XMAX_BITS | HEAP_MOVED);
+ 	tp.t_data->t_infomask2 &= ~HEAP_KEYS_UPDATED;
+@@ -6465,9 +6661,11 @@ heap_abort_speculative(Relation relation, const ItemPointerData *tid)
  	/*
  	 * Set the tuple header xmin to InvalidTransactionId.  This makes the
  	 * tuple immediately invisible everyone.  (In particular, to any
@@ -2819,7 +2852,7 @@ index 20e30a749b0..5730e0e92e9 100644
  
  	/* Clear the speculative insertion token too */
  	tp.t_data->t_ctid = tp.t_self;
-@@ -6600,6 +6796,8 @@ heap_inplace_lock(Relation relation,
+@@ -6600,6 +6798,8 @@ heap_inplace_lock(Relation relation,
  	LockTuple(relation, &oldtup.t_self, InplaceUpdateTupleLock);
  	LockBuffer(buffer, BUFFER_LOCK_EXCLUSIVE);
  
@@ -2828,7 +2861,7 @@ index 20e30a749b0..5730e0e92e9 100644
  	/*----------
  	 * Interpret HeapTupleSatisfiesUpdate() like heap_update() does, except:
  	 *
-@@ -6636,7 +6834,7 @@ heap_inplace_lock(Relation relation,
+@@ -6636,7 +6836,7 @@ heap_inplace_lock(Relation relation,
  		TransactionId xwait;
  		uint16		infomask;
  
@@ -2837,7 +2870,7 @@ index 20e30a749b0..5730e0e92e9 100644
  		infomask = oldtup.t_data->t_infomask;
  
  		if (infomask & HEAP_XMAX_IS_MULTI)
-@@ -6941,6 +7139,14 @@ FreezeMultiXactId(MultiXactId multi, uint16 t_infomask,
+@@ -6941,6 +7141,14 @@ FreezeMultiXactId(MultiXactId multi, uint16 t_infomask,
  				 errmsg_internal("found multixact %llu from before relminmxid %llu",
  								 (unsigned long long) multi,
  								 (unsigned long long) cutoffs->relminmxid)));
@@ -2852,7 +2885,7 @@ index 20e30a749b0..5730e0e92e9 100644
  	else if (MultiXactIdPrecedes(multi, cutoffs->OldestMxact))
  	{
  		TransactionId update_xact;
-@@ -6982,7 +7188,7 @@ FreezeMultiXactId(MultiXactId multi, uint16 t_infomask,
+@@ -6982,7 +7190,7 @@ FreezeMultiXactId(MultiXactId multi, uint16 t_infomask,
  			 * been pruned away instead, since updater XID is < OldestXmin).
  			 * Just remove xmax.
  			 */
@@ -2861,7 +2894,7 @@ index 20e30a749b0..5730e0e92e9 100644
  				ereport(ERROR,
  						(errcode(ERRCODE_DATA_CORRUPTED),
  						 errmsg_internal("multixact %llu contains non-aborted update XID %llu from before removable cutoff %llu",
-@@ -7272,7 +7478,7 @@ FreezeMultiXactId(MultiXactId multi, uint16 t_infomask,
+@@ -7272,7 +7480,7 @@ FreezeMultiXactId(MultiXactId multi, uint16 t_infomask,
   * then caller had better have an exclusive lock on it already.
   */
  bool
@@ -2870,7 +2903,7 @@ index 20e30a749b0..5730e0e92e9 100644
  						  const struct VacuumCutoffs *cutoffs,
  						  HeapPageFreeze *pagefrz,
  						  HeapTupleFreeze *frz, bool *totally_frozen)
-@@ -7284,8 +7490,9 @@ heap_prepare_freeze_tuple(HeapTupleHeader tuple,
+@@ -7284,8 +7492,9 @@ heap_prepare_freeze_tuple(HeapTupleHeader tuple,
  				replace_xmax = false,
  				freeze_xmax = false;
  	TransactionId xid;
@@ -2881,7 +2914,7 @@ index 20e30a749b0..5730e0e92e9 100644
  	frz->t_infomask2 = tuple->t_infomask2;
  	frz->t_infomask = tuple->t_infomask;
  	frz->frzflags = 0;
-@@ -7296,7 +7503,7 @@ heap_prepare_freeze_tuple(HeapTupleHeader tuple,
+@@ -7296,7 +7505,7 @@ heap_prepare_freeze_tuple(HeapTupleHeader tuple,
  	 * will become frozen iff our freeze plan is executed by caller (could be
  	 * neither).
  	 */
@@ -2890,7 +2923,7 @@ index 20e30a749b0..5730e0e92e9 100644
  	if (!TransactionIdIsNormal(xid))
  		xmin_already_frozen = true;
  	else
-@@ -7445,6 +7652,15 @@ heap_prepare_freeze_tuple(HeapTupleHeader tuple,
+@@ -7445,6 +7654,15 @@ heap_prepare_freeze_tuple(HeapTupleHeader tuple,
  		/* MultiXactId processing forces freezing (barring FRM_NOOP case) */
  		Assert(pagefrz->freeze_required || (!freeze_xmax && !replace_xmax));
  	}
@@ -2906,7 +2939,7 @@ index 20e30a749b0..5730e0e92e9 100644
  	else if (TransactionIdIsNormal(xid))
  	{
  		/* Raw xmax is normal XID */
-@@ -7466,7 +7682,7 @@ heap_prepare_freeze_tuple(HeapTupleHeader tuple,
+@@ -7466,7 +7684,7 @@ heap_prepare_freeze_tuple(HeapTupleHeader tuple,
  		if (freeze_xmax && !HEAP_XMAX_IS_LOCKED_ONLY(tuple->t_infomask))
  			frz->checkflags |= HEAP_FREEZE_CHECK_XMAX_ABORTED;
  	}
@@ -2915,7 +2948,7 @@ index 20e30a749b0..5730e0e92e9 100644
  	{
  		/* Raw xmax is InvalidTransactionId XID */
  		Assert((tuple->t_infomask & HEAP_XMAX_IS_MULTI) == 0);
-@@ -7536,7 +7752,7 @@ heap_prepare_freeze_tuple(HeapTupleHeader tuple,
+@@ -7536,7 +7754,7 @@ heap_prepare_freeze_tuple(HeapTupleHeader tuple,
  		 * Does this tuple force caller to freeze the entire page?
  		 */
  		pagefrz->freeze_required =
@@ -2924,7 +2957,7 @@ index 20e30a749b0..5730e0e92e9 100644
  									 &pagefrz->NoFreezePageRelfrozenXid,
  									 &pagefrz->NoFreezePageRelminMxid);
  	}
-@@ -7554,7 +7770,7 @@ heap_prepare_freeze_tuple(HeapTupleHeader tuple,
+@@ -7554,7 +7772,7 @@ heap_prepare_freeze_tuple(HeapTupleHeader tuple,
   * successive VACUUMs that each decide against freezing the same page.
   */
  void
@@ -2933,7 +2966,7 @@ index 20e30a749b0..5730e0e92e9 100644
  					   HeapTupleFreeze *tuples, int ntuples)
  {
  	Page		page = BufferGetPage(buffer);
-@@ -7563,34 +7779,31 @@ heap_pre_freeze_checks(Buffer buffer,
+@@ -7563,34 +7781,31 @@ heap_pre_freeze_checks(Buffer buffer,
  	{
  		HeapTupleFreeze *frz = tuples + i;
  		ItemId		itemid = PageGetItemId(page, frz->offset);
@@ -2977,7 +3010,7 @@ index 20e30a749b0..5730e0e92e9 100644
  				ereport(ERROR,
  						(errcode(ERRCODE_DATA_CORRUPTED),
  						 errmsg_internal("cannot freeze non-aborted xmax %llu",
-@@ -7607,7 +7820,7 @@ heap_pre_freeze_checks(Buffer buffer,
+@@ -7607,7 +7822,7 @@ heap_pre_freeze_checks(Buffer buffer,
   * if needed, emits WAL.
   */
  void
@@ -2986,7 +3019,7 @@ index 20e30a749b0..5730e0e92e9 100644
  {
  	Page		page = BufferGetPage(buffer);
  
-@@ -7618,7 +7831,7 @@ heap_freeze_prepared_tuples(Buffer buffer, HeapTupleFreeze *tuples, int ntuples)
+@@ -7618,7 +7833,7 @@ heap_freeze_prepared_tuples(Buffer buffer, HeapTupleFreeze *tuples, int ntuples)
  		HeapTupleHeader htup;
  
  		htup = (HeapTupleHeader) PageGetItem(page, itemid);
@@ -2995,7 +3028,7 @@ index 20e30a749b0..5730e0e92e9 100644
  	}
  }
  
-@@ -7629,7 +7842,7 @@ heap_freeze_prepared_tuples(Buffer buffer, HeapTupleFreeze *tuples, int ntuples)
+@@ -7629,7 +7844,7 @@ heap_freeze_prepared_tuples(Buffer buffer, HeapTupleFreeze *tuples, int ntuples)
   * Useful for callers like CLUSTER that perform their own WAL logging.
   */
  bool
@@ -3004,7 +3037,7 @@ index 20e30a749b0..5730e0e92e9 100644
  				  TransactionId relfrozenxid, TransactionId relminmxid,
  				  TransactionId FreezeLimit, TransactionId MultiXactCutoff)
  {
-@@ -7807,10 +8020,10 @@ MultiXactIdGetUpdateXid(TransactionId xmax, uint16 t_infomask)
+@@ -7807,10 +8022,10 @@ MultiXactIdGetUpdateXid(TransactionId xmax, uint16 t_infomask)
   * checking the hint bits.
   */
  TransactionId
@@ -3018,7 +3051,7 @@ index 20e30a749b0..5730e0e92e9 100644
  }
  
  /*
-@@ -8038,15 +8251,18 @@ ConditionalMultiXactIdWait(MultiXactId multi, MultiXactStatus status,
+@@ -8038,15 +8253,18 @@ ConditionalMultiXactIdWait(MultiXactId multi, MultiXactStatus status,
   * will eventually require freezing (if tuple isn't removed by pruning first).
   */
  bool
@@ -3039,7 +3072,7 @@ index 20e30a749b0..5730e0e92e9 100644
  	if (TransactionIdIsNormal(xid))
  		return true;
  
-@@ -8057,13 +8273,13 @@ heap_tuple_needs_eventual_freeze(HeapTupleHeader tuple)
+@@ -8057,13 +8275,13 @@ heap_tuple_needs_eventual_freeze(HeapTupleHeader tuple)
  	{
  		MultiXactId multi;
  
@@ -3055,7 +3088,7 @@ index 20e30a749b0..5730e0e92e9 100644
  		if (TransactionIdIsNormal(xid))
  			return true;
  	}
-@@ -8093,17 +8309,18 @@ heap_tuple_needs_eventual_freeze(HeapTupleHeader tuple)
+@@ -8093,17 +8311,18 @@ heap_tuple_needs_eventual_freeze(HeapTupleHeader tuple)
   * point that it fully commits to not freezing the tuple/page in question.
   */
  bool
@@ -3076,7 +3109,7 @@ index 20e30a749b0..5730e0e92e9 100644
  	if (TransactionIdIsNormal(xid))
  	{
  		Assert(TransactionIdPrecedesOrEquals(cutoffs->relfrozenxid, xid));
-@@ -8117,9 +8334,9 @@ heap_tuple_should_freeze(HeapTupleHeader tuple,
+@@ -8117,9 +8336,9 @@ heap_tuple_should_freeze(HeapTupleHeader tuple,
  	xid = InvalidTransactionId;
  	multi = InvalidMultiXactId;
  	if (tuple->t_infomask & HEAP_XMAX_IS_MULTI)
@@ -3088,7 +3121,7 @@ index 20e30a749b0..5730e0e92e9 100644
  
  	if (TransactionIdIsNormal(xid))
  	{
-@@ -8130,6 +8347,14 @@ heap_tuple_should_freeze(HeapTupleHeader tuple,
+@@ -8130,6 +8349,14 @@ heap_tuple_should_freeze(HeapTupleHeader tuple,
  		if (TransactionIdPrecedes(xid, cutoffs->FreezeLimit))
  			freeze = true;
  	}
@@ -3103,7 +3136,7 @@ index 20e30a749b0..5730e0e92e9 100644
  	else if (!MultiXactIdIsValid(multi))
  	{
  		/* xmax is a permanent XID or invalid MultiXactId/XID */
-@@ -8201,14 +8426,14 @@ heap_tuple_should_freeze(HeapTupleHeader tuple,
+@@ -8201,14 +8428,14 @@ heap_tuple_should_freeze(HeapTupleHeader tuple,
   * caller's WAL record) by REDO routine when it replays caller's operation.
   */
  void
@@ -3123,7 +3156,7 @@ index 20e30a749b0..5730e0e92e9 100644
  	{
  		if (TransactionIdPrecedes(*snapshotConflictHorizon, xvac))
  			*snapshotConflictHorizon = xvac;
-@@ -8220,8 +8445,8 @@ HeapTupleHeaderAdvanceConflictHorizon(HeapTupleHeader tuple,
+@@ -8220,8 +8447,8 @@ HeapTupleHeaderAdvanceConflictHorizon(HeapTupleHeader tuple,
  	 *
  	 * Look for a committed hint bit, or if no xmin bit is set, check clog.
  	 */
@@ -3134,7 +3167,7 @@ index 20e30a749b0..5730e0e92e9 100644
  	{
  		if (xmax != xmin &&
  			TransactionIdFollows(xmax, *snapshotConflictHorizon))
-@@ -8569,7 +8794,7 @@ heap_index_delete_tuples(Relation rel, TM_IndexDeleteOp *delstate)
+@@ -8569,7 +8796,7 @@ heap_index_delete_tuples(Relation rel, TM_IndexDeleteOp *delstate)
  		for (;;)
  		{
  			ItemId		lp;
@@ -3143,7 +3176,7 @@ index 20e30a749b0..5730e0e92e9 100644
  
  			/* Sanity check (pure paranoia) */
  			if (offnum < FirstOffsetNumber)
-@@ -8606,16 +8831,18 @@ heap_index_delete_tuples(Relation rel, TM_IndexDeleteOp *delstate)
+@@ -8606,16 +8833,18 @@ heap_index_delete_tuples(Relation rel, TM_IndexDeleteOp *delstate)
  			if (!ItemIdIsNormal(lp))
  				break;
  
@@ -3165,7 +3198,7 @@ index 20e30a749b0..5730e0e92e9 100644
  												  &snapshotConflictHorizon);
  
  			/*
-@@ -8624,13 +8851,13 @@ heap_index_delete_tuples(Relation rel, TM_IndexDeleteOp *delstate)
+@@ -8624,13 +8853,13 @@ heap_index_delete_tuples(Relation rel, TM_IndexDeleteOp *delstate)
  			 * chain (they get their own index entries) -- just move on to
  			 * next htid from index AM caller.
  			 */
@@ -3183,7 +3216,7 @@ index 20e30a749b0..5730e0e92e9 100644
  		}
  
  		/* Enable further/final shrinking of deltids for caller */
-@@ -9030,6 +9257,8 @@ log_heap_update(Relation reln, Buffer oldbuf, Buffer vmbuffer_old,
+@@ -9030,6 +9259,8 @@ log_heap_update(Relation reln, Buffer oldbuf, Buffer vmbuffer_old,
  				bool walLogical)
  {
  	xl_heap_update xlrec;
@@ -3192,7 +3225,7 @@ index 20e30a749b0..5730e0e92e9 100644
  	xl_heap_header xlhdr;
  	xl_heap_header xlhdr_idx;
  	uint8		info;
-@@ -9138,13 +9367,13 @@ log_heap_update(Relation reln, Buffer oldbuf, Buffer vmbuffer_old,
+@@ -9138,13 +9369,13 @@ log_heap_update(Relation reln, Buffer oldbuf, Buffer vmbuffer_old,
  
  	/* Prepare WAL data for the old page */
  	xlrec.old_offnum = ItemPointerGetOffsetNumber(&oldtup->t_self);
@@ -3208,7 +3241,7 @@ index 20e30a749b0..5730e0e92e9 100644
  
  	bufflags = REGBUF_STANDARD;
  	if (init)
-@@ -9156,6 +9385,17 @@ log_heap_update(Relation reln, Buffer oldbuf, Buffer vmbuffer_old,
+@@ -9156,6 +9387,17 @@ log_heap_update(Relation reln, Buffer oldbuf, Buffer vmbuffer_old,
  	if (oldbuf != newbuf)
  		XLogRegisterBuffer(HEAP_UPDATE_BLKREF_HEAP_OLD, oldbuf, REGBUF_STANDARD);
  
@@ -3226,7 +3259,7 @@ index 20e30a749b0..5730e0e92e9 100644
  	XLogRegisterData(&xlrec, SizeOfHeapUpdate);
  
  	/*
-@@ -9286,8 +9526,8 @@ log_heap_new_cid(Relation relation, HeapTuple tup)
+@@ -9286,8 +9528,8 @@ log_heap_new_cid(Relation relation, HeapTuple tup)
  	{
  		Assert(!(hdr->t_infomask & HEAP_XMAX_INVALID));
  		Assert(!HeapTupleHeaderXminInvalid(hdr));
@@ -3237,7 +3270,7 @@ index 20e30a749b0..5730e0e92e9 100644
  		xlrec.combocid = HeapTupleHeaderGetRawCommandId(hdr);
  	}
  	/* No combo CID, so only cmin or cmax can be set by this TX */
-@@ -9476,14 +9716,14 @@ HeapCheckForSerializableConflictOut(bool visible, Relation relation,
+@@ -9476,14 +9718,14 @@ HeapCheckForSerializableConflictOut(bool visible, Relation relation,
  		case HEAPTUPLE_LIVE:
  			if (visible)
  				return;
@@ -3255,7 +3288,7 @@ index 20e30a749b0..5730e0e92e9 100644
  
  			if (TransactionIdPrecedes(xid, TransactionXmin))
  			{
-@@ -9493,7 +9733,7 @@ HeapCheckForSerializableConflictOut(bool visible, Relation relation,
+@@ -9493,7 +9735,7 @@ HeapCheckForSerializableConflictOut(bool visible, Relation relation,
  			}
  			break;
  		case HEAPTUPLE_INSERT_IN_PROGRESS:
@@ -3264,7 +3297,7 @@ index 20e30a749b0..5730e0e92e9 100644
  			break;
  		case HEAPTUPLE_DEAD:
  			Assert(!visible);
-@@ -9531,3 +9771,519 @@ HeapCheckForSerializableConflictOut(bool visible, Relation relation,
+@@ -9531,3 +9773,542 @@ HeapCheckForSerializableConflictOut(bool visible, Relation relation,
  
  	CheckForSerializableConflictOut(relation, xid, snapshot);
  }
@@ -3488,17 +3521,40 @@ index 20e30a749b0..5730e0e92e9 100644
 +	OffsetNumber			dummy_off_loc;
 +	TransactionId			relfrozen_xid;
 +	MultiXactId				relmin_mxid;
++	PruneFreezeParams		prune_params;
++	Buffer					vmbuffer = InvalidBuffer;
 +
-+	vacuum_get_cutoffs(relation, params, &cutoffs);
++	Assert(BufferIsLockedByMeInMode(buffer, BUFFER_LOCK_EXCLUSIVE));
++	Assert(CritSectionCount == 0);
++
++	vacuum_get_cutoffs(relation, &params, &cutoffs);
 +	relfrozen_xid = cutoffs.FreezeLimit;
 +	relmin_mxid = cutoffs.MultiXactCutoff;
 +
 +	vistest = GlobalVisTestFor(relation);
 +
-+	heap_page_prune_and_freeze(relation, buffer, vistest,
-+							   HEAP_PAGE_PRUNE_FREEZE, &cutoffs, &presult,
-+							   PRUNE_ON_ACCESS, &dummy_off_loc,
-+							   &relfrozen_xid, &relmin_mxid, false);
++	/*
++	 * Keep the heap lock: callers may hold tuple pointers and another heap
++	 * buffer lock.  As in heap_page_prune_opt(), pin the VM while holding it.
++	 * The pruning code locks the VM itself when clearing corrupt bits.  Do
++	 * not pre-lock it here, or enable SET_VM: callers are about to modify the
++	 * heap and may not have their own VM pin for clearing newly set bits.
++	 */
++	visibilitymap_pin(relation, BufferGetBlockNumber(buffer), &vmbuffer);
++
++	prune_params.relation = relation;
++	prune_params.buffer = buffer;
++	prune_params.vmbuffer = vmbuffer;
++	prune_params.reason = PRUNE_ON_ACCESS;
++	prune_params.options = HEAP_PAGE_PRUNE_FREEZE |
++		HEAP_PAGE_PRUNE_NO_REPAIR_FRAGMENTATION;
++	prune_params.vistest = vistest;
++	prune_params.cutoffs = &cutoffs;
++
++	heap_page_prune_and_freeze(&prune_params, &presult, &dummy_off_loc,
++							   &relfrozen_xid, &relmin_mxid);
++
++	ReleaseBuffer(vmbuffer);
 +
 +	if (presult.ndeleted > presult.nnewlpdead)
 +		pgstat_update_heap_dead_tuples(relation,
@@ -5277,7 +5333,7 @@ index fb4ffb97592..171606affd1 100644
  			/* use this page as future insert target, too */
  			RelationSetTargetBlock(relation, targetBlock);
 diff --git a/src/backend/access/heap/pruneheap.c b/src/backend/access/heap/pruneheap.c
-index e1be6c37084..a87b3c31dda 100644
+index e1be6c37084..010d61e1f60 100644
 --- a/src/backend/access/heap/pruneheap.c
 +++ b/src/backend/access/heap/pruneheap.c
 @@ -291,7 +291,7 @@ heap_page_prune_opt(Relation relation, Buffer buffer, Buffer *vmbuffer,
@@ -5322,7 +5378,28 @@ index e1be6c37084..a87b3c31dda 100644
  	{
  		PageClearPrunable(page);
  		MarkBufferDirtyHint(prstate->buffer, true);
-@@ -1193,7 +1199,7 @@ heap_page_prune_and_freeze(PruneFreezeParams *params,
+@@ -1076,7 +1082,10 @@ prune_freeze_fast_path(PruneState *prstate, PruneFreezeResult *presult)
+  * specified page. If the page's visibility status has changed, update it in
+  * the VM.
+  *
+- * Caller must have pin and buffer cleanup lock on the page.  Note that we
++ * Caller must have pin and buffer cleanup lock on the page, or an exclusive
++ * content lock when HEAP_PAGE_PRUNE_NO_REPAIR_FRAGMENTATION is set.  In the
++ * latter case, tuple storage is neither moved nor reclaimed; only globally
++ * dead items may lose their normal line pointers.  Note that we
+  * don't update the FSM information for page on caller's behalf.  Caller might
+  * also need to account for a reduction in the length of the line pointer
+  * array following array truncation by us.
+@@ -1122,6 +1131,8 @@ heap_page_prune_and_freeze(PruneFreezeParams *params,
+ 	bool		do_hint_prune;
+ 	bool		do_set_vm;
+ 	bool		did_tuple_hint_fpi;
++	bool		repair_fragmentation =
++		(params->options & HEAP_PAGE_PRUNE_NO_REPAIR_FRAGMENTATION) == 0;
+ 	int64		fpi_before = pgWalUsage.wal_fpi;
+ 	TransactionId conflict_xid;
+ 
+@@ -1193,7 +1204,7 @@ heap_page_prune_and_freeze(PruneFreezeParams *params,
  	 * pd_prune_xid field or the page was marked full, we will update the hint
  	 * bit.
  	 */
@@ -5331,7 +5408,7 @@ index e1be6c37084..a87b3c31dda 100644
  		PageIsFull(prstate.page);
  
  	/*
-@@ -1258,7 +1264,7 @@ heap_page_prune_and_freeze(PruneFreezeParams *params,
+@@ -1258,7 +1269,7 @@ heap_page_prune_and_freeze(PruneFreezeParams *params,
  		 * Update the page's pd_prune_xid field to either zero, or the lowest
  		 * XID of any soon-prunable tuple.
  		 */
@@ -5340,10 +5417,11 @@ index e1be6c37084..a87b3c31dda 100644
  
  		/*
  		 * Also clear the "page is full" flag, since there's no point in
-@@ -1281,17 +1287,30 @@ heap_page_prune_and_freeze(PruneFreezeParams *params,
+@@ -1281,17 +1292,31 @@ heap_page_prune_and_freeze(PruneFreezeParams *params,
  
  	if (do_prune || do_freeze || do_set_vm)
  	{
+-		/* Apply the planned item changes and repair page fragmentation. */
 +		/*
 +		 * Freeze before compaction can convert a double-xmax page.  The
 +		 * conversion must choose bases from the final xmax values, including
@@ -5355,7 +5433,7 @@ index e1be6c37084..a87b3c31dda 100644
 +			heap_freeze_prepared_tuples(prstate.relation, prstate.buffer,
 +										prstate.frozen, prstate.nfrozen);
 +
- 		/* Apply the planned item changes and repair page fragmentation. */
++		/* Apply item changes, optionally repairing page fragmentation. */
  		if (do_prune)
  		{
  			heap_page_prune_execute(prstate.buffer, false,
@@ -5363,7 +5441,8 @@ index e1be6c37084..a87b3c31dda 100644
  									prstate.nowdead, prstate.ndead,
 -									prstate.nowunused, prstate.nunused);
 +									prstate.nowunused, prstate.nunused,
-+									true, IsToastRelation(prstate.relation));
++									repair_fragmentation,
++									IsToastRelation(prstate.relation));
  		}
  
 -		if (do_freeze)
@@ -5374,17 +5453,23 @@ index e1be6c37084..a87b3c31dda 100644
  
  		/* Set the visibility map and page visibility hint */
  		if (do_set_vm)
-@@ -1330,7 +1349,8 @@ heap_page_prune_and_freeze(PruneFreezeParams *params,
+@@ -1325,12 +1350,13 @@ heap_page_prune_and_freeze(PruneFreezeParams *params,
+ 									  do_set_vm ? prstate.vmbuffer : InvalidBuffer,
+ 									  do_set_vm ? prstate.new_vmbits : 0,
+ 									  conflict_xid,
+-									  true, /* cleanup lock */
++									  true, /* retain cleanup locking during replay */
+ 									  params->reason,
  									  prstate.frozen, prstate.nfrozen,
  									  prstate.redirected, prstate.nredirected,
  									  prstate.nowdead, prstate.ndead,
 -									  prstate.nowunused, prstate.nunused);
 +									  prstate.nowunused, prstate.nunused,
-+									  true);
++									  repair_fragmentation);
  		}
  	}
  
-@@ -1518,7 +1538,9 @@ heap_prune_chain(OffsetNumber maxoff, OffsetNumber rootoffnum,
+@@ -1518,7 +1544,9 @@ heap_prune_chain(OffsetNumber maxoff, OffsetNumber rootoffnum,
  	 */
  	int			ndeadchain = 0,
  				nchain = 0;
@@ -5394,7 +5479,7 @@ index e1be6c37084..a87b3c31dda 100644
  	rootlp = PageGetItemId(page, rootoffnum);
  
  	/* Start from the root tuple */
-@@ -1572,12 +1594,16 @@ heap_prune_chain(OffsetNumber maxoff, OffsetNumber rootoffnum,
+@@ -1572,12 +1600,16 @@ heap_prune_chain(OffsetNumber maxoff, OffsetNumber rootoffnum,
  		Assert(ItemIdIsNormal(lp));
  
  		htup = (HeapTupleHeader) PageGetItem(page, lp);
@@ -5412,7 +5497,7 @@ index e1be6c37084..a87b3c31dda 100644
  			break;
  
  		/*
-@@ -1591,7 +1617,7 @@ heap_prune_chain(OffsetNumber maxoff, OffsetNumber rootoffnum,
+@@ -1591,7 +1623,7 @@ heap_prune_chain(OffsetNumber maxoff, OffsetNumber rootoffnum,
  
  				/* Remember the last DEAD tuple seen */
  				ndeadchain = nchain;
@@ -5421,7 +5506,7 @@ index e1be6c37084..a87b3c31dda 100644
  													  &prstate->latest_xid_removed);
  				/* Advance to next chain member */
  				break;
-@@ -1641,7 +1667,7 @@ heap_prune_chain(OffsetNumber maxoff, OffsetNumber rootoffnum,
+@@ -1641,7 +1673,7 @@ heap_prune_chain(OffsetNumber maxoff, OffsetNumber rootoffnum,
  		 */
  		Assert(ItemPointerGetBlockNumber(&htup->t_ctid) == prstate->block);
  		offnum = ItemPointerGetOffsetNumber(&htup->t_ctid);
@@ -5430,7 +5515,7 @@ index e1be6c37084..a87b3c31dda 100644
  	}
  
  	if (ItemIdIsRedirected(rootlp) && nchain < 2)
-@@ -1857,6 +1883,7 @@ static void
+@@ -1857,6 +1889,7 @@ static void
  heap_prune_record_unchanged_lp_normal(PruneState *prstate, OffsetNumber offnum)
  {
  	HeapTupleHeader htup;
@@ -5438,7 +5523,7 @@ index e1be6c37084..a87b3c31dda 100644
  	TransactionId xmin;
  	Page		page = prstate->page;
  
-@@ -1886,6 +1913,9 @@ heap_prune_record_unchanged_lp_normal(PruneState *prstate, OffsetNumber offnum)
+@@ -1886,6 +1919,9 @@ heap_prune_record_unchanged_lp_normal(PruneState *prstate, OffsetNumber offnum)
  	 * should be negligible.)
  	 */
  	htup = (HeapTupleHeader) PageGetItem(page, PageGetItemId(page, offnum));
@@ -5448,7 +5533,7 @@ index e1be6c37084..a87b3c31dda 100644
  
  	switch (prstate->htsv[offnum])
  	{
-@@ -1919,7 +1949,7 @@ heap_prune_record_unchanged_lp_normal(PruneState *prstate, OffsetNumber offnum)
+@@ -1919,7 +1955,7 @@ heap_prune_record_unchanged_lp_normal(PruneState *prstate, OffsetNumber offnum)
  			 * any snapshot that still considers the newest xid on the page to
  			 * be running. If so, we don't consider the page all-visible.
  			 */
@@ -5457,7 +5542,7 @@ index e1be6c37084..a87b3c31dda 100644
  
  			/* Track newest xmin on page. */
  			if (TransactionIdFollows(xmin, prstate->newest_live_xid) &&
-@@ -1938,7 +1968,7 @@ heap_prune_record_unchanged_lp_normal(PruneState *prstate, OffsetNumber offnum)
+@@ -1938,7 +1974,7 @@ heap_prune_record_unchanged_lp_normal(PruneState *prstate, OffsetNumber offnum)
  			 * that the page is reconsidered for pruning in future.
  			 */
  			heap_prune_record_prunable(prstate,
@@ -5466,7 +5551,7 @@ index e1be6c37084..a87b3c31dda 100644
  									   offnum);
  			break;
  
-@@ -1960,7 +1990,7 @@ heap_prune_record_unchanged_lp_normal(PruneState *prstate, OffsetNumber offnum)
+@@ -1960,7 +1996,7 @@ heap_prune_record_unchanged_lp_normal(PruneState *prstate, OffsetNumber offnum)
  			 * mark them all-visible during the next round of pruning.
  			 */
  			heap_prune_record_prunable(prstate,
@@ -5475,7 +5560,7 @@ index e1be6c37084..a87b3c31dda 100644
  									   offnum);
  			break;
  
-@@ -1980,7 +2010,7 @@ heap_prune_record_unchanged_lp_normal(PruneState *prstate, OffsetNumber offnum)
+@@ -1980,7 +2016,7 @@ heap_prune_record_unchanged_lp_normal(PruneState *prstate, OffsetNumber offnum)
  			 * the page is reconsidered for pruning in future.
  			 */
  			heap_prune_record_prunable(prstate,
@@ -5484,7 +5569,7 @@ index e1be6c37084..a87b3c31dda 100644
  									   offnum);
  			break;
  
-@@ -2000,7 +2030,7 @@ heap_prune_record_unchanged_lp_normal(PruneState *prstate, OffsetNumber offnum)
+@@ -2000,7 +2036,7 @@ heap_prune_record_unchanged_lp_normal(PruneState *prstate, OffsetNumber offnum)
  	{
  		bool		totally_frozen;
  
@@ -5493,7 +5578,17 @@ index e1be6c37084..a87b3c31dda 100644
  									   prstate->cutoffs,
  									   &prstate->pagefrz,
  									   &prstate->frozen[prstate->nfrozen],
-@@ -2088,7 +2118,8 @@ void
+@@ -2081,14 +2117,16 @@ heap_prune_record_unchanged_lp_redirect(PruneState *prstate, OffsetNumber offnum
+  * as unused, not redirecting or removing anything else.  The
+  * PageRepairFragmentation() call is skipped in that case.
+  *
+- * If 'lp_truncate_only' is not set, the caller must hold a cleanup lock on
+- * the buffer.  If it is set, an ordinary exclusive lock suffices.
++ * A cleanup lock is required when repairing fragmentation.  Otherwise an
++ * ordinary exclusive lock suffices: tuple storage remains untouched, even
++ * when globally dead items' line pointers are redirected or removed.
+  */
+ void
  heap_page_prune_execute(Buffer buffer, bool lp_truncate_only,
  						OffsetNumber *redirected, int nredirected,
  						OffsetNumber *nowdead, int ndead,
@@ -5503,7 +5598,7 @@ index e1be6c37084..a87b3c31dda 100644
  {
  	Page		page = BufferGetPage(buffer);
  	OffsetNumber *offnum;
-@@ -2236,7 +2267,8 @@ heap_page_prune_execute(Buffer buffer, bool lp_truncate_only,
+@@ -2236,7 +2274,8 @@ heap_page_prune_execute(Buffer buffer, bool lp_truncate_only,
  		 * Finally, repair any fragmentation, and update the page's hint bit
  		 * about whether it has free pointers.
  		 */
@@ -5513,7 +5608,7 @@ index e1be6c37084..a87b3c31dda 100644
  
  		/*
  		 * Now that the page has been modified, assert that redirect items
-@@ -2309,7 +2341,8 @@ page_verify_redirects(Page page)
+@@ -2309,7 +2348,8 @@ page_verify_redirects(Page page)
   * and reused by a completely unrelated tuple.
   */
  void
@@ -5523,7 +5618,7 @@ index e1be6c37084..a87b3c31dda 100644
  {
  	OffsetNumber offnum,
  				maxoff;
-@@ -2324,7 +2357,9 @@ heap_get_root_tuples(Page page, OffsetNumber *root_offsets)
+@@ -2324,7 +2364,9 @@ heap_get_root_tuples(Page page, OffsetNumber *root_offsets)
  		HeapTupleHeader htup;
  		OffsetNumber nextoffnum;
  		TransactionId priorXmax;
@@ -5533,7 +5628,7 @@ index e1be6c37084..a87b3c31dda 100644
  		/* skip unused and dead items */
  		if (!ItemIdIsUsed(lp) || ItemIdIsDead(lp))
  			continue;
-@@ -2332,6 +2367,9 @@ heap_get_root_tuples(Page page, OffsetNumber *root_offsets)
+@@ -2332,6 +2374,9 @@ heap_get_root_tuples(Page page, OffsetNumber *root_offsets)
  		if (ItemIdIsNormal(lp))
  		{
  			htup = (HeapTupleHeader) PageGetItem(page, lp);
@@ -5543,7 +5638,7 @@ index e1be6c37084..a87b3c31dda 100644
  
  			/*
  			 * Check if this tuple is part of a HOT-chain rooted at some other
-@@ -2353,7 +2391,7 @@ heap_get_root_tuples(Page page, OffsetNumber *root_offsets)
+@@ -2353,7 +2398,7 @@ heap_get_root_tuples(Page page, OffsetNumber *root_offsets)
  
  			/* Set up to scan the HOT-chain */
  			nextoffnum = ItemPointerGetOffsetNumber(&htup->t_ctid);
@@ -5552,7 +5647,7 @@ index e1be6c37084..a87b3c31dda 100644
  		}
  		else
  		{
-@@ -2392,9 +2430,12 @@ heap_get_root_tuples(Page page, OffsetNumber *root_offsets)
+@@ -2392,9 +2437,12 @@ heap_get_root_tuples(Page page, OffsetNumber *root_offsets)
  				break;
  
  			htup = (HeapTupleHeader) PageGetItem(page, lp);
@@ -5566,7 +5661,7 @@ index e1be6c37084..a87b3c31dda 100644
  				break;
  
  			/* Remember the root line pointer for this item */
-@@ -2408,7 +2449,7 @@ heap_get_root_tuples(Page page, OffsetNumber *root_offsets)
+@@ -2408,7 +2456,7 @@ heap_get_root_tuples(Page page, OffsetNumber *root_offsets)
  			Assert(!HeapTupleHeaderIndicatesMovedPartitions(htup));
  
  			nextoffnum = ItemPointerGetOffsetNumber(&htup->t_ctid);
@@ -5575,7 +5670,7 @@ index e1be6c37084..a87b3c31dda 100644
  		}
  	}
  }
-@@ -2589,7 +2630,8 @@ log_heap_prune_and_freeze(Relation relation, Buffer buffer,
+@@ -2589,7 +2637,8 @@ log_heap_prune_and_freeze(Relation relation, Buffer buffer,
  						  HeapTupleFreeze *frozen, int nfrozen,
  						  OffsetNumber *redirected, int nredirected,
  						  OffsetNumber *dead, int ndead,
@@ -5585,7 +5680,7 @@ index e1be6c37084..a87b3c31dda 100644
  {
  	xl_heap_prune xlrec;
  	XLogRecPtr	recptr;
-@@ -2612,6 +2654,10 @@ log_heap_prune_and_freeze(Relation relation, Buffer buffer,
+@@ -2612,6 +2661,10 @@ log_heap_prune_and_freeze(Relation relation, Buffer buffer,
  	Assert((vmflags & VISIBILITYMAP_VALID_BITS) == vmflags);
  
  	xlrec.flags = 0;
@@ -8111,6 +8206,21 @@ index 0c975d0eda6..bf8a1e05a31 100644
  	Relation	rel;
  	TableScanDesc scan;
  	HeapTuple	tup;
+diff --git a/src/backend/postmaster/datachecksum_state.c b/src/backend/postmaster/datachecksum_state.c
+index 368df23e967..9cc60a96dda 100644
+--- a/src/backend/postmaster/datachecksum_state.c
++++ b/src/backend/postmaster/datachecksum_state.c
+@@ -1105,8 +1105,8 @@ WaitForAllTransactionsToFinish(void)
+ 		/* Oldest running xid is older than us, so wait */
+ 		snprintf(activity,
+ 				 sizeof(activity),
+-				 "Waiting for transactions older than %u to end",
+-				 waitforxid);
++				 "Waiting for transactions older than %llu to end",
++				 (unsigned long long) waitforxid);
+ 		pgstat_report_activity(STATE_RUNNING, activity);
+ 
+ 		/* Retry every 3 seconds */
 diff --git a/src/backend/replication/logical/decode.c b/src/backend/replication/logical/decode.c
 index c944be4ac83..cc7e8b50df9 100644
 --- a/src/backend/replication/logical/decode.c
@@ -10882,6 +10992,32 @@ index c3107f0d5a9..79bf2a84315 100644
  				values[9] = Int16GetDatum(instance->locktag.locktag_field4);
  				nulls[2] = true;
  				nulls[3] = true;
+diff --git a/src/backend/utils/adt/multixactfuncs.c b/src/backend/utils/adt/multixactfuncs.c
+index b1437b3bf70..0d8c9601dff 100644
+--- a/src/backend/utils/adt/multixactfuncs.c
++++ b/src/backend/utils/adt/multixactfuncs.c
+@@ -122,7 +122,7 @@ pg_get_multixact_stats(PG_FUNCTION_ARGS)
+ 	{
+ 		uint64		members;
+ 		MultiXactId oldestMultiXactId;
+-		uint32		multixacts;
++		uint64		multixacts;
+ 		MultiXactOffset oldestOffset;
+ 		MultiXactOffset nextOffset;
+ 		uint64		membersBytes;
+@@ -131,10 +131,10 @@ pg_get_multixact_stats(PG_FUNCTION_ARGS)
+ 		members = nextOffset - oldestOffset;
+ 		membersBytes = MultiXactOffsetStorageSize(nextOffset, oldestOffset);
+ 
+-		values[0] = UInt32GetDatum(multixacts);
++		values[0] = Int64GetDatum(multixacts);
+ 		values[1] = Int64GetDatum(members);
+ 		values[2] = Int64GetDatum(membersBytes);
+-		values[3] = UInt32GetDatum(oldestMultiXactId);
++		values[3] = TransactionIdGetDatum(oldestMultiXactId);
+ 		memset(nulls, false, sizeof(nulls));
+ 	}
+ 
 diff --git a/src/backend/utils/adt/pgstatfuncs.c b/src/backend/utils/adt/pgstatfuncs.c
 index 0c59df17901..a9d22ea082a 100644
 --- a/src/backend/utils/adt/pgstatfuncs.c
@@ -14341,10 +14477,18 @@ index 9b385b13a88..edde1a74bcc 100644
  
  /*
 diff --git a/src/include/access/heapam.h b/src/include/access/heapam.h
-index 5176478c295..9c7c5be5c5b 100644
+index 5176478c295..01eac47f6db 100644
 --- a/src/include/access/heapam.h
 +++ b/src/include/access/heapam.h
-@@ -103,6 +103,8 @@ typedef struct HeapScanDescData
+@@ -43,6 +43,7 @@
+ #define HEAP_PAGE_PRUNE_FREEZE				(1 << 1)
+ #define HEAP_PAGE_PRUNE_ALLOW_FAST_PATH		(1 << 2)
+ #define HEAP_PAGE_PRUNE_SET_VM				(1 << 3)
++#define HEAP_PAGE_PRUNE_NO_REPAIR_FRAGMENTATION (1 << 4)
+ 
+ typedef struct BulkInsertStateData *BulkInsertState;
+ typedef struct GlobalVisState GlobalVisState;
+@@ -103,6 +104,8 @@ typedef struct HeapScanDescData
  	uint32		rs_cindex;		/* current tuple's index in vistuples */
  	uint32		rs_ntuples;		/* number of visible tuples on page */
  	OffsetNumber rs_vistuples[MaxHeapTuplesPerPage];	/* their offsets */
@@ -14353,7 +14497,18 @@ index 5176478c295..9c7c5be5c5b 100644
  } HeapScanDescData;
  typedef struct HeapScanDescData *HeapScanDesc;
  
-@@ -376,6 +378,8 @@ extern void ReleaseBulkInsertStatePin(BulkInsertState bistate);
+@@ -282,6 +285,10 @@ typedef struct PruneFreezeParams
+ 	 * LP_UNUSED during pruning.
+ 	 *
+ 	 * HEAP_PAGE_PRUNE_FREEZE indicates that we will also freeze tuples.
++	 *
++	 * HEAP_PAGE_PRUNE_NO_REPAIR_FRAGMENTATION preserves tuple storage and
++	 * tuple addresses.  It permits the xid64 fallback to run under an
++	 * ordinary exclusive content lock, without waiting for other pins.
+ 	 */
+ 	int			options;
+ 
+@@ -376,6 +383,8 @@ extern void ReleaseBulkInsertStatePin(BulkInsertState bistate);
  
  extern void heap_insert(Relation relation, HeapTuple tup, CommandId cid,
  						uint32 options, BulkInsertState bistate);
@@ -14362,7 +14517,7 @@ index 5176478c295..9c7c5be5c5b 100644
  extern void heap_multi_insert(Relation relation, TupleTableSlot **slots,
  							  int ntuples, CommandId cid, uint32 options,
  							  BulkInsertState bistate);
-@@ -403,23 +407,23 @@ extern void heap_inplace_update_and_unlock(Relation relation,
+@@ -403,23 +412,23 @@ extern void heap_inplace_update_and_unlock(Relation relation,
  										   Buffer buffer);
  extern void heap_inplace_unlock(Relation relation,
  								HeapTuple oldtup, Buffer buffer);
@@ -14392,7 +14547,7 @@ index 5176478c295..9c7c5be5c5b 100644
  
  extern void simple_heap_insert(Relation relation, HeapTuple tup);
  extern void simple_heap_delete(Relation relation, const ItemPointerData *tid);
-@@ -452,8 +456,10 @@ extern void heap_page_prune_and_freeze(PruneFreezeParams *params,
+@@ -452,8 +461,10 @@ extern void heap_page_prune_and_freeze(PruneFreezeParams *params,
  extern void heap_page_prune_execute(Buffer buffer, bool lp_truncate_only,
  									OffsetNumber *redirected, int nredirected,
  									OffsetNumber *nowdead, int ndead,
@@ -14405,7 +14560,7 @@ index 5176478c295..9c7c5be5c5b 100644
  extern void log_heap_prune_and_freeze(Relation relation, Buffer buffer,
  									  Buffer vmbuffer, uint8 vmflags,
  									  TransactionId conflict_xid,
-@@ -462,7 +468,8 @@ extern void log_heap_prune_and_freeze(Relation relation, Buffer buffer,
+@@ -462,7 +473,8 @@ extern void log_heap_prune_and_freeze(Relation relation, Buffer buffer,
  									  HeapTupleFreeze *frozen, int nfrozen,
  									  OffsetNumber *redirected, int nredirected,
  									  OffsetNumber *dead, int ndead,
@@ -14415,7 +14570,7 @@ index 5176478c295..9c7c5be5c5b 100644
  
  /* in heap/vacuumlazy.c */
  extern void heap_vacuum_rel(Relation rel,
-@@ -486,7 +493,7 @@ extern HTSV_Result HeapTupleSatisfiesVacuumHorizon(HeapTuple htup, Buffer buffer
+@@ -486,7 +498,7 @@ extern HTSV_Result HeapTupleSatisfiesVacuumHorizon(HeapTuple htup, Buffer buffer
  												   TransactionId *dead_after);
  extern void HeapTupleSetHintBits(HeapTupleHeader tuple, Buffer buffer,
  								 uint16 infomask, TransactionId xid);
@@ -14424,7 +14579,7 @@ index 5176478c295..9c7c5be5c5b 100644
  extern bool HeapTupleIsSurelyDead(HeapTuple htup,
  								  GlobalVisState *vistest);
  
-@@ -530,18 +537,32 @@ extern void HeapCheckForSerializableConflictOut(bool visible, Relation relation,
+@@ -530,18 +542,32 @@ extern void HeapCheckForSerializableConflictOut(bool visible, Relation relation,
   * in private storage (which is what CLUSTER and friends do).
   */
  static inline void
