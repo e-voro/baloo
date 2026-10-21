@@ -120,11 +120,53 @@ static void add_tuple(Page page, TransactionId xmax, bool multi, uint32 payload)
 
 static TransactionId xmax_at(Page page, OffsetNumber off)
 {
-    HeapTupleHeader t = tuple_at(page, off);
-    if (HeapPageIsDoubleXmax(page)) return HeapTupleHeaderGetDoubleXmax(t);
-    TransactionId base = (t->t_infomask & HEAP_XMAX_IS_MULTI) ?
-        HeapPageGetSpecial(page)->pd_multi_base : PageGetSpecialXidBase(page);
-    return ShortTransactionIdToNormal(base, t->t_choice.t_heap.t_xmax);
+    return HeapTupleHeaderGetRawXmax(page, tuple_at(page, off));
+}
+
+/* Test the reader against literal full-XID expectations, then round-trip it. */
+static void check_xmax_accessors(void)
+{
+    TransactionId bases[] = {0, UINT64_C(4294967296), UINT64_MAX - MaxShortTransactionId};
+    uint32 raw[] = {0, 1, 2, 3, 77, MaxShortTransactionId};
+    unsigned cases = 0;
+    for (int toast = 0; toast < 2; toast++) {
+        for (unsigned b = 0; b < sizeof(bases)/sizeof(bases[0]); b++) {
+            PGAlignedBlock page;
+            init_page(page.data, true, toast, bases[b]);
+            if (!toast) HeapPageGetSpecial(page.data)->pd_multi_base = bases[b] / 2;
+            for (int multi = 0; multi < (toast ? 1 : 2); multi++) {
+                TransactionId base = multi ? bases[b] / 2 : bases[b];
+                for (unsigned r = 0; r < sizeof(raw)/sizeof(raw[0]); r++) {
+                    HeapTupleHeaderData header = {0};
+                    header.t_infomask = multi ? HEAP_XMAX_IS_MULTI : 0;
+                    header.t_choice.t_heap.t_xmax = raw[r];
+                    TransactionId expected = raw[r] < 3 ? raw[r] : base + raw[r];
+                    assert(HeapTupleHeaderGetRawXmax(page.data, &header) == expected);
+                    HeapTupleData tuple = {.t_data = &header, .t_xmax = expected};
+                    HeapTupleHeaderStoreXmax(page.data, &tuple);
+                    assert(header.t_choice.t_heap.t_xmax == raw[r]);
+                    assert(HeapTupleHeaderGetRawXmax(page.data, &header) == expected);
+                    cases++;
+                }
+            }
+        }
+    }
+    TransactionId full[] = {0, 1, 2, 3, UINT32_MAX, UINT64_C(4294967373), UINT64_MAX};
+    for (int multi = 0; multi < 2; multi++) {
+        PGAlignedBlock page;
+        init_page(page.data, false, false, 0);
+        for (unsigned f = 0; f < sizeof(full)/sizeof(full[0]); f++) {
+            HeapTupleHeaderData header = {0};
+            header.t_infomask = multi ? HEAP_XMAX_IS_MULTI : 0;
+            HeapTupleData tuple = {.t_data = &header, .t_xmax = full[f]};
+            HeapTupleHeaderStoreXmax(page.data, &tuple);
+            assert(header.t_choice.t_heap.t_xmin == (uint32) (full[f] >> 32));
+            assert(header.t_choice.t_heap.t_xmax == (uint32) full[f]);
+            assert(HeapTupleHeaderGetRawXmax(page.data, &header) == full[f]);
+            cases++;
+        }
+    }
+    assert(cases == 68);
 }
 
 static void check_hints(void)
@@ -245,6 +287,6 @@ static void check_shift(void)
 
 int main(void)
 {
-    check_hints(); check_conversion(); check_freezing(); check_shift();
-    printf("PASS BLCKSZ=%d: hint boundaries, conversion, freeze results, base shifts\n", BLCKSZ);
+    check_xmax_accessors(); check_hints(); check_conversion(); check_freezing(); check_shift();
+    printf("PASS BLCKSZ=%d: 68 xmax cases, hint boundaries, conversion, freeze results, base shifts\n", BLCKSZ);
 }

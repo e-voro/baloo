@@ -3,11 +3,10 @@
 
 Uses the real bufpage.h and extracted C functions, with fixed-width tuple and
 backend-service fixtures. This is not a server, concurrency, or WAL replay test.
-Future tuple helpers are obtained by applying their minis to original blobs.
+Tuple accessors and freeze helpers are extracted from the applied headers.
 """
 from pathlib import Path
 import os
-import re
 import shlex
 import subprocess
 import tempfile
@@ -33,18 +32,6 @@ def function(source, signature):
 with tempfile.TemporaryDirectory(prefix="xid64-page-conversion-") as tmp:
     work = Path(tmp)
 
-    def future(number):
-        patch = read("baloo/dev/cache/patches/mini/v1900-0005-Use-64-bit-XIDs/"
-                     f"mini{number}-v1900-0005-Use-64-bit-XIDs.patch")
-        name = re.search(r"^--- a/(.+)$", patch, re.M).group(1)
-        blob = re.search(r"^index ([0-9a-f]+)\.\.", patch, re.M).group(1)
-        target = work / number / name
-        target.parent.mkdir(parents=True)
-        target.write_bytes(subprocess.check_output(["git", "show", blob], cwd=root))
-        subprocess.run(["git", "apply", "-"], input=patch, text=True,
-                       cwd=work / number, check=True)
-        return target.read_text()
-
     # Use real page/header definitions; only their external dependencies stubbed.
     for path in ("access/transam.h", "access/multixact.h", "access/xlogdefs.h",
                  "utils/elog.h"):
@@ -52,7 +39,7 @@ with tempfile.TemporaryDirectory(prefix="xid64-page-conversion-") as tmp:
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text("/* Definitions supplied by fixture.c. */\n")
 
-    htup = future("0140")
+    htup = read("src/include/access/htup_details.h")
     heapam = read("src/include/access/heapam.h")
     source = read("src/backend/storage/page/bufpage.c")
     production = source[source.index("static HeapPageSpecialData"):
@@ -60,7 +47,8 @@ with tempfile.TemporaryDirectory(prefix="xid64-page-conversion-") as tmp:
     production += function(read("src/backend/storage/buffer/heap_convert.c"),
                            "int\nitemoffcompare(")
     for name in ("HeapTupleHeaderGetDoubleXmax", "HeapTupleHeaderSetDoubleXmax",
-                 "HeapTupleSetXmax", "HeapTupleHeaderStoreXmax"):
+                 "HeapTupleSetXmax", "HeapTupleHeaderStoreXmax",
+                 "HeapTupleHeaderGetRawXmax"):
         start = htup.rfind("static inline", 0, htup.index(name + "("))
         production += function(htup, htup[start:htup.index("(", start) + 1])
     for name in ("heap_execute_freeze_tuple", "heap_execute_freeze_tuple_page"):

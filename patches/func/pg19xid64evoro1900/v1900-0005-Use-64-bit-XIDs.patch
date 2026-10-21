@@ -165,7 +165,7 @@ Discussion: https://postgr.es/m/CAJ7c6TPDOYBYrnCAeyndkBktO0WG2xSdYduTF0nxq%2Bvfk
  src/include/access/heapam_xlog.h                   |   22 
  src/include/access/heaptoast.h                     |   11 
  src/include/access/htup.h                          |   20 
- src/include/access/htup_details.h                  |  273 +++++
+ src/include/access/htup_details.h                  |  267 +++++
  src/include/access/multixact.h                     |    4 
  src/include/access/multixact_internal.h            |   10 
  src/include/access/nbtree.h                        |   10 
@@ -242,7 +242,7 @@ Discussion: https://postgr.es/m/CAJ7c6TPDOYBYrnCAeyndkBktO0WG2xSdYduTF0nxq%2Bvfk
  src/test/xid-64/t/006_zeropage.pl                  |   33 +
  src/test/xid-64/t/007_first_multi.pl               |   83 ++
  src/tools/pgindent/typedefs.list                   |    4 
- 220 files changed, 6860 insertions(+), 2309 deletions(-)
+ 220 files changed, 6864 insertions(+), 2299 deletions(-)
 
 diff --git a/contrib/amcheck/verify_heapam.c b/contrib/amcheck/verify_heapam.c
 index e5ea68b801..14ce47cf80 100644
@@ -14573,7 +14573,7 @@ index cfc4e1cbc58..7f16eb949af 100644
  
  #endif							/* HTUP_H */
 diff --git a/src/include/access/htup_details.h b/src/include/access/htup_details.h
-index f3593acc8c..71bee3263a 100644
+index 77a6c48fd71..6f9a6311f50 100644
 --- a/src/include/access/htup_details.h
 +++ b/src/include/access/htup_details.h
 @@ -19,6 +19,7 @@
@@ -14710,25 +14710,22 @@ index f3593acc8c..71bee3263a 100644
  {
  	return (tup->t_infomask & (HEAP_XMIN_COMMITTED | HEAP_XMIN_INVALID)) ==
  		HEAP_XMIN_INVALID;
-@@ -358,36 +410,44 @@ HeapTupleHeaderXminFrozen(const HeapTupleHeaderData *tup)
+@@ -358,24 +410,46 @@ HeapTupleHeaderXminFrozen(const HeapTupleHeaderData *tup)
  }
  
  static inline void
--HeapTupleHeaderSetXminCommitted(HeapTupleHeaderData *tup)
+-HeapTupleHeaderSetXminFrozen(HeapTupleHeaderData *tup)
 +HeapTupleHeaderStoreXminFrozen(HeapTupleHeaderData *tup)
  {
  	Assert(!HeapTupleHeaderXminInvalid(tup));
--	tup->t_infomask |= HEAP_XMIN_COMMITTED;
-+	tup->t_infomask |= HEAP_XMIN_FROZEN;
+ 	tup->t_infomask |= HEAP_XMIN_FROZEN;
  }
  
--static inline void
--HeapTupleHeaderSetXminInvalid(HeapTupleHeaderData *tup)
-+static inline TransactionId
+ static inline TransactionId
+-HeapTupleHeaderGetRawXmax(const HeapTupleHeaderData *tup)
 +HeapTupleHeaderGetRawXmax(Page page, const HeapTupleHeaderData *tup)
  {
--	Assert(!HeapTupleHeaderXminCommitted(tup));
--	tup->t_infomask |= HEAP_XMIN_INVALID;
+-	return tup->t_choice.t_heap.t_xmax;
 +	TransactionId base;
 +
 +	if (HeapPageIsDoubleXmax(page))
@@ -14736,39 +14733,34 @@ index f3593acc8c..71bee3263a 100644
 +
 +	base = (tup->t_infomask & HEAP_XMAX_IS_MULTI) ?
 +				HeapPageGetSpecial(page)->pd_multi_base :
-+				HeapPageGetSpecial(page)->pd_xid_base;
++				PageGetSpecialXidBase(page);
 +	return ShortTransactionIdToNormal(base,
 +									  tup->t_choice.t_heap.t_xmax);
  }
  
 +
  static inline void
--HeapTupleHeaderSetXminFrozen(HeapTupleHeaderData *tup)
-+HeapTupleHeaderSetXmax(HeapTupleHeaderData *tup, TransactionId xid)
+ HeapTupleHeaderSetXmax(HeapTupleHeaderData *tup, TransactionId xid)
  {
--	Assert(!HeapTupleHeaderXminInvalid(tup));
--	tup->t_infomask |= HEAP_XMIN_FROZEN;
-+	tup->t_choice.t_heap.t_xmax = xid;
+ 	tup->t_choice.t_heap.t_xmax = xid;
  }
  
- static inline TransactionId
--HeapTupleHeaderGetRawXmax(const HeapTupleHeaderData *tup)
++static inline TransactionId
 +HeapTupleGetRawXmax(const HeapTupleData *tup)
- {
--	return tup->t_choice.t_heap.t_xmax;
++{
 +	return tup->t_xmax;
- }
- 
- static inline void
--HeapTupleHeaderSetXmax(HeapTupleHeaderData *tup, TransactionId xid)
++}
++
++static inline void
 +HeapTupleSetXmax(HeapTupleData *tup, TransactionId xid)
- {
--	tup->t_choice.t_heap.t_xmax = xid;
++{
 +	tup->t_xmax = xid;
- }
- 
++}
++
  #ifndef FRONTEND
-@@ -398,22 +458,58 @@ HeapTupleHeaderSetXmax(HeapTupleHeaderData *tup, TransactionId xid)
+ /*
+  * HeapTupleHeaderGetRawXmax gets you the raw Xmax field.  To find out the Xid
+@@ -384,22 +458,58 @@ HeapTupleHeaderSetXmax(HeapTupleHeaderData *tup, TransactionId xid)
   * to resolve the MultiXactId if necessary.  This might involve multixact I/O,
   * so it should only be used if absolutely necessary.
   */
@@ -14835,7 +14827,7 @@ index f3593acc8c..71bee3263a 100644
   * get a legitimate result, ie you are in the originating transaction!
   */
  static inline CommandId
-@@ -611,8 +707,16 @@ BITMAPLEN(int NATTS)
+@@ -597,8 +707,16 @@ BITMAPLEN(int NATTS)
   * an otherwise-empty page can indeed hold a tuple of this size.  Because
   * ItemIds and tuples have different alignment requirements, don't assume that
   * you can, say, fit 2 tuples of size MaxHeapTupleSize/2 on the same page.
@@ -14853,7 +14845,7 @@ index f3593acc8c..71bee3263a 100644
  #define MinHeapTupleSize  MAXALIGN(SizeofHeapTupleHeader)
  
  /*
-@@ -805,6 +909,103 @@ HeapTupleClearHeapOnly(const HeapTupleData *tuple)
+@@ -791,6 +909,103 @@ HeapTupleClearHeapOnly(const HeapTupleData *tuple)
  	HeapTupleHeaderClearHeapOnly(tuple->t_data);
  }
  
