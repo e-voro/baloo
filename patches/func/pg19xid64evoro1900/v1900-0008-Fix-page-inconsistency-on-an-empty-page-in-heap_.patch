@@ -1,0 +1,47 @@
+From 9eb9842a30d760426d356eeb316a5a0dc5f220b8 Mon Sep 17 00:00:00 2001
+From: Evgeny Voropaev <evorop@gmail.com>
+Date: Wed, 21 Oct 2026 19:46:06 +0800
+Subject: [PATCH v1900 08/12] Require physical emptiness before logging heap INSERT with
+ INIT_PAGE
+
+Adapt xid64 patch 0008 to PG19 VM locking and existing page variables. A reused first line pointer does not imply that the tuple area is physically empty after pruning without fragmentation repair.
+---
+ src/backend/access/heap/heapam.c | 8 +++++++-
+ 1 file changed, 7 insertions(+), 1 deletion(-)
+
+diff --git a/src/backend/access/heap/heapam.c b/src/backend/access/heap/heapam.c
+index 351a105cefd..2041055c01a 100644
+--- a/src/backend/access/heap/heapam.c
++++ b/src/backend/access/heap/heapam.c
+@@ -2076,6 +2076,7 @@ heap_insert(Relation relation, HeapTuple tup, CommandId cid,
+ 	Buffer		vmbuffer = InvalidBuffer;
+ 	bool		clear_all_visible = false;
+ 	bool		vmbuffer_modified = false;
++	bool		page_was_physically_empty;
+ 
+ 	/* Cheap, simplistic check that the tuple matches the rel's rowtype. */
+ 	Assert(HeapTupleHeaderGetNatts(tup->t_data) <=
+@@ -2132,6 +2133,10 @@ heap_insert(Relation relation, HeapTuple tup, CommandId cid,
+ 	/* NO EREPORT(ERROR) from here till changes are logged */
+ 	START_CRIT_SECTION();
+ 
++	/* INIT replay must reproduce the existing physical tuple layout. */
++	page_was_physically_empty =
++		((PageHeader) page)->pd_upper == ((PageHeader) page)->pd_special;
++
+ 	RelationPutHeapTuple(relation, buffer, heaptup,
+ 						 (options & HEAP_INSERT_SPECULATIVE) != 0);
+ 
+@@ -2188,7 +2193,8 @@ heap_insert(Relation relation, HeapTuple tup, CommandId cid,
+ 		 * buffer references from XLogInsert.
+ 		 */
+ 		if (ItemPointerGetOffsetNumber(&(heaptup->t_self)) == FirstOffsetNumber &&
+-			PageGetMaxOffsetNumber(page) == FirstOffsetNumber)
++			PageGetMaxOffsetNumber(page) == FirstOffsetNumber &&
++			page_was_physically_empty)
+ 		{
+ 			info |= XLOG_HEAP_INIT_PAGE;
+ 			bufflags |= REGBUF_WILL_INIT;
+-- 
+2.55.0
+

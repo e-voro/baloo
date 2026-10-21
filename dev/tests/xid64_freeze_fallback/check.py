@@ -63,6 +63,10 @@ try:
         CREATE FUNCTION xid64_hold_pin(regclass,text) RETURNS bool
         AS '{work / 'probe.so'}' LANGUAGE C STRICT;
         CREATE FUNCTION xid64_vm_status(regclass) RETURNS int
+        AS '{work / 'probe.so'}' LANGUAGE C STRICT;
+        CREATE FUNCTION xid64_mask_image(bytea) RETURNS bytea
+        AS '{work / 'probe.so'}' LANGUAGE C STRICT;
+        CREATE FUNCTION xid64_prune_no_repair(regclass) RETURNS bool
         AS '{work / 'probe.so'}' LANGUAGE C STRICT;""")
 
     for fpw, next_xid in [('on', 2**33), ('off', 2**34)]:
@@ -108,6 +112,17 @@ try:
         assert f'3|1|{survivor_offset}' in after, 'survivor tuple moved'
         assert sql(f"SELECT xid64_vm_status('{table}')") == '0'
         assert sql(f"SELECT xmin::text FROM {table} WHERE id=2") == '2'
+        # Mask only orphaned storage: meaningful live bytes, page bases and
+        # redirect metadata must still expose deliberate mismatches.
+        dead_offset = int(before.splitlines()[1].split('|')[1])
+        special = sql(f"SELECT special FROM page_header(get_raw_page('{table}',0))")
+        for offset, masked_equal in [(dead_offset + 24, 't'),
+                                     (int(survivor_offset) + 24, 'f'),
+                                     (int(special), 'f'), (28, 'f')]:
+            result = sql(f"SELECT xid64_mask_image(p) = xid64_mask_image("
+                         f"set_byte(p,{offset},get_byte(p,{offset}) # 1)) "
+                         f"FROM (SELECT get_raw_page('{table}',0) p) s")
+            assert result == masked_equal, (offset, result, masked_equal)
         output, _ = holder.communicate(timeout=12)
         assert holder.returncode == 0 and output.strip() == 't', output
         expected = sql(f'SELECT id,payload FROM {table} ORDER BY id')
@@ -122,6 +137,18 @@ try:
         print(f'PASS: FPW={fpw}: fallback, concurrent pin, HOT redirect, '
               'stable tuple address/payload, frozen xmin, VM pin and crash redo',
               flush=True)
+    sql('CREATE TABLE init_guard(id int) WITH (autovacuum_enabled=false)')
+    sql('INSERT INTO init_guard VALUES (1)')
+    sql('DELETE FROM init_guard')
+    assert sql("SELECT xid64_prune_no_repair('init_guard')") == 't'
+    sql('CHECKPOINT')
+    assert sql('INSERT INTO init_guard VALUES (2) RETURNING ctid').splitlines()[0] == '(0,1)'
+    layout = sql("SELECT lp,lp_off FROM heap_page_items(get_raw_page('init_guard',0))")
+    stop('immediate')
+    start('off')
+    assert sql('TABLE init_guard') == '2'
+    assert sql("SELECT lp,lp_off FROM heap_page_items(get_raw_page('init_guard',0))") == layout
+    print('PASS: one unused slot with retained storage, first-slot insert and crash redo', flush=True)
     print('PASS: live fallback scenarios completed', flush=True)
 finally:
     if running:

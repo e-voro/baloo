@@ -2,16 +2,21 @@
 
 #include "access/table.h"
 #include "access/htup_details.h"
+#include "access/heapam_xlog.h"
+#include "access/heapam.h"
 #include "access/visibilitymap.h"
 #include "fmgr.h"
 #include "miscadmin.h"
 #include "storage/bufmgr.h"
+#include "storage/procarray.h"
 #include "utils/builtins.h"
 
 PG_MODULE_MAGIC;
 
 PG_FUNCTION_INFO_V1(xid64_hold_pin);
 PG_FUNCTION_INFO_V1(xid64_vm_status);
+PG_FUNCTION_INFO_V1(xid64_mask_image);
+PG_FUNCTION_INFO_V1(xid64_prune_no_repair);
 
 /* Keep a direct reference to a dead HOT root, like a pin-only consumer. */
 Datum
@@ -64,4 +69,58 @@ xid64_vm_status(PG_FUNCTION_ARGS)
 		ReleaseBuffer(vmbuffer);
 	table_close(rel, AccessShareLock);
 	PG_RETURN_INT32(bits);
+}
+
+Datum
+xid64_mask_image(PG_FUNCTION_ARGS)
+{
+	bytea *input = PG_GETARG_BYTEA_PP(0);
+	bytea *output;
+	PGAlignedBlock image;
+
+	if (VARSIZE_ANY_EXHDR(input) != BLCKSZ)
+		elog(ERROR, "expected one page");
+	memcpy(image.data, VARDATA_ANY(input), BLCKSZ);
+	heap_mask(image.data, 0);
+	output = palloc(VARHDRSZ + BLCKSZ);
+	SET_VARSIZE(output, VARHDRSZ + BLCKSZ);
+	memcpy(VARDATA(output), image.data, BLCKSZ);
+	PG_RETURN_BYTEA_P(output);
+}
+
+/* Create the valid one-unused-slot layout addressed by series patch 0008. */
+Datum
+xid64_prune_no_repair(PG_FUNCTION_ARGS)
+{
+	Relation rel = table_open(PG_GETARG_OID(0), RowExclusiveLock);
+	Buffer buffer = ReadBuffer(rel, 0);
+	Buffer vmbuffer = InvalidBuffer;
+	PruneFreezeParams params = {0};
+	PruneFreezeResult result;
+	OffsetNumber off;
+	Page page = BufferGetPage(buffer);
+	bool retained_storage;
+
+	visibilitymap_pin(rel, 0, &vmbuffer);
+	LockBuffer(buffer, BUFFER_LOCK_EXCLUSIVE);
+	params.relation = rel;
+	params.buffer = buffer;
+	params.vmbuffer = vmbuffer;
+	params.reason = PRUNE_ON_ACCESS;
+	params.options = HEAP_PAGE_PRUNE_MARK_UNUSED_NOW |
+		HEAP_PAGE_PRUNE_NO_REPAIR_FRAGMENTATION;
+	params.vistest = GlobalVisTestFor(rel);
+	heap_page_prune_and_freeze(&params, &result, &off, NULL, NULL);
+	if (PageGetMaxOffsetNumber(page) != 1 ||
+		ItemIdIsUsed(PageGetItemId(page, 1)))
+		elog(ERROR, "expected one unused slot after pruning");
+	/* A free-line-pointer hint makes insertion reuse slot 1. */
+	PageSetHasFreeLinePointers(page);
+	MarkBufferDirtyHint(buffer, true);
+	retained_storage = ((PageHeader) page)->pd_upper !=
+		((PageHeader) page)->pd_special;
+	UnlockReleaseBuffer(buffer);
+	ReleaseBuffer(vmbuffer);
+	table_close(rel, RowExclusiveLock);
+	PG_RETURN_BOOL(retained_storage);
 }

@@ -1,0 +1,61 @@
+From a613c77b2ba51f2acbfffa9113fa0b66d11686a8 Mon Sep 17 00:00:00 2001
+From: Maxim Orlov <orlovmg@gmail.com>
+Date: Wed, 21 Oct 2026 19:44:13 +0800
+Subject: [PATCH v1900 07/12] Mask unreferenced heap storage without overwriting pinned
+ tuples
+
+Adapt xid64 patch 0007: mask orphaned tuple bytes in private WAL consistency images instead of zeroing shared dead tuple storage. Preserve pin-only references and continue checking live tuples, line pointers and page bases.
+
+Original authors: Evgeny Voropaev and Maxim Orlov.
+---
+ src/backend/access/heap/heapam_xlog.c | 19 +++++++++++++++++++
+ 1 file changed, 19 insertions(+)
+
+diff --git a/src/backend/access/heap/heapam_xlog.c b/src/backend/access/heap/heapam_xlog.c
+index 32d4c4d4176..be1c75f2df8 100644
+--- a/src/backend/access/heap/heapam_xlog.c
++++ b/src/backend/access/heap/heapam_xlog.c
+@@ -1441,7 +1441,9 @@ void
+ heap_mask(char *pagedata, BlockNumber blkno)
+ {
+ 	Page		page = (Page) pagedata;
++	PageHeader	phdr = (PageHeader) page;
+ 	OffsetNumber off;
++	PGAlignedBlock tuple_storage;
+ 
+ 	mask_page_lsn_and_checksum(page);
+ 
+@@ -1452,6 +1454,16 @@ heap_mask(char *pagedata, BlockNumber blkno)
+ 
+ 	mask_unused_space(page);
+ 
++	/*
++	 * Pruning without fragmentation repair leaves dead tuple bytes in place
++	 * for backends holding pins.  Their hint bits can differ during replay,
++	 * and no normal line pointer remains through which to mask those hints.
++	 * Build a copy containing only referenced storage; mask the holes in this
++	 * private consistency image, never in the shared heap page.
++	 */
++	memset(tuple_storage.data + phdr->pd_upper, MASK_MARKER,
++		   phdr->pd_special - phdr->pd_upper);
++
+ 	for (off = 1; off <= PageGetMaxOffsetNumber(page); off++)
+ 	{
+ 		ItemId		iid = PageGetItemId(page, off);
+@@ -1518,6 +1530,13 @@ heap_mask(char *pagedata, BlockNumber blkno)
+ 
+ 			if (padlen > 0)
+ 				memset(page_item + len, MASK_MARKER, padlen);
++
++			memcpy(tuple_storage.data + ItemIdGetOffset(iid), page_item,
++				   MAXALIGN(len));
+ 		}
+ 	}
++
++	memcpy(pagedata + phdr->pd_upper,
++		   tuple_storage.data + phdr->pd_upper,
++		   phdr->pd_special - phdr->pd_upper);
+ }
+-- 
+2.55.0
+

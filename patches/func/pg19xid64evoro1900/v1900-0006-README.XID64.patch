@@ -1,7 +1,7 @@
-From dcab983adef07aac905ca4ad1f8546f7ad3b89f3 Mon Sep 17 00:00:00 2001
+From 7b5ca03ef475071c3d3db02c86da653fc53d3586 Mon Sep 17 00:00:00 2001
 From: Maxim Orlov <m.orlov@postgrespro.ru>
 Date: Fri, 11 Mar 2022 11:35:16 +0300
-Subject: [PATCH v67 06/12] README.XID64
+Subject: [PATCH v1900 06/12] README.XID64
 
 Authors:
 - Alexander Korotkov <aekorotkov@gmail.com>
@@ -19,7 +19,7 @@ Discussion: https://postgr.es/m/CAJ7c6TPDOYBYrnCAeyndkBktO0WG2xSdYduTF0nxq%2Bvfk
 
 diff --git a/src/backend/access/heap/README.XID64 b/src/backend/access/heap/README.XID64
 new file mode 100644
-index 0000000000..9b4e6e03a2
+index 00000000000..9b4e6e03a22
 --- /dev/null
 +++ b/src/backend/access/heap/README.XID64
 @@ -0,0 +1,134 @@
@@ -158,5 +158,5 @@ index 0000000000..9b4e6e03a2
 +descriptor. When in read-write state this will trigger full page write xlog
 +record.
 -- 
-2.51.0
+2.55.0
 
