@@ -1,0 +1,49 @@
+diff --git a/src/test/modules/test_lfind/test_lfind.c b/src/test/modules/test_lfind/test_lfind.c
+index 037f4923175..6b77e5376eb 100644
+--- a/src/test/modules/test_lfind/test_lfind.c
++++ b/src/test/modules/test_lfind/test_lfind.c
+@@ -115,6 +115,36 @@ test_lfind8_le(PG_FUNCTION_ARGS)
+ 	PG_RETURN_VOID();
+ }
+ 
++static void
++test_lfind64_internal(void)
++{
++#define TEST_ARRAY_SIZE 135
++	uint64		test_array[TEST_ARRAY_SIZE] = {0};
++
++	test_array[8] = UINT64CONST(0x100000001);
++	test_array[64] = UINT64CONST(0x100000002);
++	test_array[TEST_ARRAY_SIZE - 1] = UINT64CONST(0x100000003);
++
++	if (pg_lfind64(UINT64CONST(0x100000001), test_array, 4))
++		elog(ERROR, "pg_lfind64() found nonexistent element");
++	if (!pg_lfind64(UINT64CONST(0x100000001), test_array, TEST_ARRAY_SIZE))
++		elog(ERROR, "pg_lfind64() did not find existing element");
++
++	if (pg_lfind64(UINT64CONST(0x100000002), test_array, 32))
++		elog(ERROR, "pg_lfind64() found nonexistent element");
++	if (!pg_lfind64(UINT64CONST(0x100000002), test_array, TEST_ARRAY_SIZE))
++		elog(ERROR, "pg_lfind64() did not find existing element");
++
++	if (pg_lfind64(UINT64CONST(0x100000003), test_array, 96))
++		elog(ERROR, "pg_lfind64() found nonexistent element");
++	if (!pg_lfind64(UINT64CONST(0x100000003), test_array, TEST_ARRAY_SIZE))
++		elog(ERROR, "pg_lfind64() did not find existing element");
++
++	if (pg_lfind64(UINT64CONST(0x100000004), test_array, TEST_ARRAY_SIZE))
++		elog(ERROR, "pg_lfind64() found nonexistent element");
++
++}
++
+ PG_FUNCTION_INFO_V1(test_lfind32);
+ Datum
+ test_lfind32(PG_FUNCTION_ARGS)
+@@ -144,5 +174,7 @@ test_lfind32(PG_FUNCTION_ARGS)
+ 	if (pg_lfind32(4, test_array, TEST_ARRAY_SIZE))
+ 		elog(ERROR, "pg_lfind32() found nonexistent element");
+ 
++	test_lfind64_internal();
++
+ 	PG_RETURN_VOID();
+ }

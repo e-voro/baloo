@@ -1,0 +1,32 @@
+diff --git a/src/include/c.h b/src/include/c.h
+index c641f004eff..c4f20e2404a 100644
+--- a/src/include/c.h
++++ b/src/include/c.h
+@@ -740,11 +740,12 @@ typedef double float8;
+ typedef Oid regproc;
+ typedef regproc RegProcedure;
+ 
+-typedef uint32 TransactionId;
++typedef uint64 TransactionId;
+ 
+-typedef uint32 LocalTransactionId;
++typedef uint32 ShortTransactionId;
++typedef uint64 LocalTransactionId;
+ 
+-typedef uint32 SubTransactionId;
++typedef uint64 SubTransactionId;
+ 
+ #define InvalidSubTransactionId		((SubTransactionId) 0)
+ #define TopSubTransactionId			((SubTransactionId) 1)
+@@ -754,6 +755,11 @@ typedef TransactionId MultiXactId;
+ 
+ typedef uint64 MultiXactOffset;
+ 
++#define MAX_START_XID			UINT64CONST(0x3FFFFFFFFFFFFFFF)	/* 2^62 - 1 */
++#define StartTransactionIdIsValid(xid)		((xid) <= MAX_START_XID)
++#define StartMultiXactIdIsValid(mxid)		((mxid) <= MAX_START_XID)
++#define StartMultiXactOffsetIsValid(mxoff)	((mxoff) <= MAX_START_XID)
++
+ typedef uint32 CommandId;
+ 
+ #define FirstCommandId	((CommandId) 0)

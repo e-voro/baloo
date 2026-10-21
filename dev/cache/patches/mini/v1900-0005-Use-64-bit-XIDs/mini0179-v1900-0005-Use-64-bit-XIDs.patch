@@ -1,0 +1,14 @@
+diff --git a/src/test/Makefile b/src/test/Makefile
+index 3eb0a06abb4..a1b486dc4f2 100644
+--- a/src/test/Makefile
++++ b/src/test/Makefile
+@@ -20,7 +20,8 @@ SUBDIRS = \
+ 	postmaster \
+ 	recovery \
+ 	regress \
+-	subscription
++	subscription \
++	xid-64
+ 
+ ifeq ($(with_icu),yes)
+ SUBDIRS += icu

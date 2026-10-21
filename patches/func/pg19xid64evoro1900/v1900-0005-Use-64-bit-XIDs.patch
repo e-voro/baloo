@@ -166,7 +166,7 @@ Discussion: https://postgr.es/m/CAJ7c6TPDOYBYrnCAeyndkBktO0WG2xSdYduTF0nxq%2Bvfk
  src/include/access/heaptoast.h                     |   11 
  src/include/access/htup.h                          |   20 
  src/include/access/htup_details.h                  |  267 +++++
- src/include/access/multixact.h                     |    4 
+ src/include/access/multixact.h                     |   16 
  src/include/access/multixact_internal.h            |   10 
  src/include/access/nbtree.h                        |   10 
  src/include/access/reloptions.h                    |    2 
@@ -178,14 +178,14 @@ Discussion: https://postgr.es/m/CAJ7c6TPDOYBYrnCAeyndkBktO0WG2xSdYduTF0nxq%2Bvfk
  src/include/access/xact.h                          |   13 
  src/include/access/xloginsert.h                    |    1 
  src/include/access/xlogrecord.h                    |    4 
- src/include/c.h                                    |   20 
+ src/include/c.h                                    |   12 
  src/include/catalog/catversion.h                   |    2 
  src/include/catalog/pg_class.h                     |    3 
  src/include/catalog/pg_operator.dat                |    8 
  src/include/catalog/pg_proc.dat                    |   12 
  src/include/catalog/pg_type.dat                    |    4 
  src/include/catalog/pg_type.h                      |    5 
- src/include/commands/vacuum.h                      |   22 
+ src/include/commands/vacuum.h                      |   20 
  src/include/fmgr.h                                 |    2 
  src/include/nodes/pg_list.h                        |    4 
  src/include/port/pg_lfind.h                        |   62 +
@@ -204,13 +204,11 @@ Discussion: https://postgr.es/m/CAJ7c6TPDOYBYrnCAeyndkBktO0WG2xSdYduTF0nxq%2Bvfk
  src/include/utils/xid8.h                           |    4 
  src/pl/plperl/plperl.c                             |    4 
  src/pl/plpgsql/src/pl_exec.c                       |    2 
- src/pl/plpython/plpy_procedure.c                   |    4 
  src/pl/tcl/pltcl.c                                 |    4 
  src/test/Makefile                                  |    3 
  src/test/meson.build                               |    1 
- .../modules/injection_points/regress_injection.c   |    3 
- src/test/modules/test_lfind/test_lfind.c           |   30 -
- src/test/modules/xid_wraparound/xid_wraparound.c   |    1 
+ .../modules/injection_points/regress_injection.c   |   10 
+ src/test/modules/test_lfind/test_lfind.c           |   32 +
  src/test/perl/PostgreSQL/Test/AdjustUpgrade.pm     |    4 
  src/test/perl/PostgreSQL/Test/Cluster.pm           |   25 -
  src/test/recovery/t/003_recovery_targets.pl        |    2 
@@ -242,7 +240,7 @@ Discussion: https://postgr.es/m/CAJ7c6TPDOYBYrnCAeyndkBktO0WG2xSdYduTF0nxq%2Bvfk
  src/test/xid-64/t/006_zeropage.pl                  |   33 +
  src/test/xid-64/t/007_first_multi.pl               |   83 ++
  src/tools/pgindent/typedefs.list                   |    4 
- 220 files changed, 6864 insertions(+), 2299 deletions(-)
+ 218 files changed, 6882 insertions(+), 2287 deletions(-)
 
 diff --git a/contrib/amcheck/verify_heapam.c b/contrib/amcheck/verify_heapam.c
 index e5ea68b801..14ce47cf80 100644
@@ -14950,10 +14948,29 @@ index 77a6c48fd71..6f9a6311f50 100644
  extern Size heap_compute_data_size(TupleDesc tupleDesc,
  								   const Datum *values, const bool *isnull);
 diff --git a/src/include/access/multixact.h b/src/include/access/multixact.h
-index 6be5299ab68..7f5a6108124 100644
+index 6be5299ab68..e84e3935b4e 100644
 --- a/src/include/access/multixact.h
 +++ b/src/include/access/multixact.h
-@@ -107,7 +107,7 @@ extern bool MultiXactIdIsRunning(MultiXactId multi, bool isLockOnly);
+@@ -17,14 +17,10 @@
+ #include "storage/sync.h"
+ 
+ 
+-/*
+- * The first two MultiXactId values are reserved to store the truncation Xid
+- * and epoch of the first segment, so we start assigning multixact values from
+- * 2.
+- */
+-#define InvalidMultiXactId	((MultiXactId) 0)
+-#define FirstMultiXactId	((MultiXactId) 1)
+-#define MaxMultiXactId		((MultiXactId) 0xFFFFFFFF)
++/* MultiXactId zero is invalid; assignment starts at one. */
++#define InvalidMultiXactId	UINT64CONST(0)
++#define FirstMultiXactId	UINT64CONST(1)
++#define MaxMultiXactId		UINT64CONST(0xFFFFFFFFFFFFFFFF)
+ 
+ #define MultiXactIdIsValid(multi) ((multi) != InvalidMultiXactId)
+ 
+@@ -107,7 +103,7 @@ extern bool MultiXactIdIsRunning(MultiXactId multi, bool isLockOnly);
  extern void MultiXactIdSetOldestMember(void);
  extern int	GetMultiXactIdMembers(MultiXactId multi, MultiXactMember **members,
  								  bool from_pgupgrade, bool isLockOnly);
@@ -14962,7 +14979,7 @@ index 6be5299ab68..7f5a6108124 100644
  							 MultiXactId *oldestMultiXactId,
  							 MultiXactOffset *oldestOffset);
  extern bool MultiXactIdPrecedes(MultiXactId multi1, MultiXactId multi2);
-@@ -140,7 +140,7 @@ extern void MultiXactSetNextMXact(MultiXactId nextMulti,
+@@ -140,7 +136,7 @@ extern void MultiXactSetNextMXact(MultiXactId nextMulti,
  extern void MultiXactAdvanceNextMXact(MultiXactId minMulti,
  									  MultiXactOffset minMultiOffset);
  extern void MultiXactAdvanceOldest(MultiXactId oldestMulti, Oid oldestMultiDB);
@@ -15000,14 +15017,14 @@ index ba73b3c2e14..b52aa5609ec 100644
  	(MULTIXACT_FLAGBYTES_PER_GROUP * MXACT_MEMBER_FLAGS_PER_BYTE)
  /* size in bytes of a complete group */
 diff --git a/src/include/access/nbtree.h b/src/include/access/nbtree.h
-index 16be5c7a9c..2b684a8e96 100644
+index 3097e9bb1af..631e0953886 100644
 --- a/src/include/access/nbtree.h
 +++ b/src/include/access/nbtree.h
 @@ -63,8 +63,10 @@ typedef uint16 BTCycleId;
  typedef struct BTPageOpaqueData
  {
  	BlockNumber btpo_prev;		/* left sibling, or P_NONE if leftmost */
-+	/* ... or next transaction ID (lower part) */
++	/* ... or next transaction ID (upper part) */
  	BlockNumber btpo_next;		/* right sibling, or P_NONE if rightmost */
  	uint32		btpo_level;		/* tree level --- zero for leaf pages */
 +	/* ... or next transaction ID (lower part) */
@@ -15030,10 +15047,10 @@ index 16be5c7a9c..2b684a8e96 100644
  /*
   * The Meta page is always the first page in the btree index.
 diff --git a/src/include/access/reloptions.h b/src/include/access/reloptions.h
-index ebe13889ac..e6aac5545d 100644
+index 41c4e69b9dc..3d35a026fcd 100644
 --- a/src/include/access/reloptions.h
 +++ b/src/include/access/reloptions.h
-@@ -110,7 +110,7 @@ typedef struct relopt_int64
+@@ -117,7 +117,7 @@ typedef struct relopt_int64
  	int64		default_val;
  	int64		min;
  	int64		max;
@@ -15043,7 +15060,7 @@ index ebe13889ac..e6aac5545d 100644
  typedef struct relopt_real
  {
 diff --git a/src/include/access/rewriteheap.h b/src/include/access/rewriteheap.h
-index 99c3f362ad..82cbd46b87 100644
+index 6ccf7b45c04..1eaed7ab90b 100644
 --- a/src/include/access/rewriteheap.h
 +++ b/src/include/access/rewriteheap.h
 @@ -51,7 +51,7 @@ typedef struct LogicalRewriteMappingData
@@ -15057,19 +15074,19 @@ index 99c3f362ad..82cbd46b87 100644
  
  #endif							/* REWRITE_HEAP_H */
 diff --git a/src/include/access/rmgrlist.h b/src/include/access/rmgrlist.h
-index 8e7fc9db87..3584a5d8cb 100644
+index ae32ef16d67..f5811adfcea 100644
 --- a/src/include/access/rmgrlist.h
 +++ b/src/include/access/rmgrlist.h
-@@ -47,3 +47,4 @@ PG_RMGR(RM_COMMIT_TS_ID, "CommitTs", commit_ts_redo, commit_ts_desc, commit_ts_i
- PG_RMGR(RM_REPLORIGIN_ID, "ReplicationOrigin", replorigin_redo, replorigin_desc, replorigin_identify, NULL, NULL, NULL, NULL)
+@@ -48,3 +48,4 @@ PG_RMGR(RM_REPLORIGIN_ID, "ReplicationOrigin", replorigin_redo, replorigin_desc,
  PG_RMGR(RM_GENERIC_ID, "Generic", generic_redo, generic_desc, generic_identify, NULL, NULL, generic_mask, NULL)
  PG_RMGR(RM_LOGICALMSG_ID, "LogicalMessage", logicalmsg_redo, logicalmsg_desc, logicalmsg_identify, NULL, NULL, NULL, logicalmsg_decode)
+ PG_RMGR(RM_XLOG2_ID, "XLOG2", xlog2_redo, xlog2_desc, xlog2_identify, NULL, NULL, NULL, xlog2_decode)
 +PG_RMGR(RM_HEAP3_ID, "Heap3", heap3_redo, heap3_desc, heap3_identify, NULL, NULL, heap_mask, NULL)
 diff --git a/src/include/access/tableam.h b/src/include/access/tableam.h
-index e16bf02569..c51a69a205 100644
+index f2c36696bca..df921f3a487 100644
 --- a/src/include/access/tableam.h
 +++ b/src/include/access/tableam.h
-@@ -138,7 +138,7 @@ typedef enum TU_UpdateIndexes
+@@ -160,7 +160,7 @@ typedef enum TU_UpdateIndexes
   * cmax is the outdating command's CID, but only when the failure code is
   * TM_SelfModified (i.e., something in the current transaction outdated the
   * tuple); otherwise cmax is zero.  (We make this restriction because
@@ -15079,7 +15096,7 @@ index e16bf02569..c51a69a205 100644
   *
   * traversed indicates if an update chain was followed in order to try to lock
 diff --git a/src/include/access/transam.h b/src/include/access/transam.h
-index c9e2041827..1feabccf83 100644
+index 55a4ab26b34..4ca9ad01ff0 100644
 --- a/src/include/access/transam.h
 +++ b/src/include/access/transam.h
 @@ -17,6 +17,10 @@
@@ -15292,7 +15309,7 @@ index c9e2041827..1feabccf83 100644
  	return (diff >= 0);
  }
  
-@@ -381,7 +378,7 @@ ReadNextTransactionId(void)
+@@ -379,7 +376,7 @@ ReadNextTransactionId(void)
  
  /* return transaction ID backed up by amount, handling wraparound correctly */
  static inline TransactionId
@@ -15301,7 +15318,7 @@ index c9e2041827..1feabccf83 100644
  {
  	xid -= amount;
  
-@@ -432,49 +429,6 @@ FullTransactionIdNewer(FullTransactionId a, FullTransactionId b)
+@@ -430,49 +427,6 @@ FullTransactionIdNewer(FullTransactionId a, FullTransactionId b)
  	return b;
  }
  
@@ -15377,7 +15394,7 @@ index 84b3e7fd89..39ce513369 100644
  #ifndef FRONTEND
  			elog(ERROR, "invalid typalign value: %c", typalign);
 diff --git a/src/include/access/xact.h b/src/include/access/xact.h
-index 4528e51829..3fe50fcfcd 100644
+index a8cbdf247c8..fb50af3e669 100644
 --- a/src/include/access/xact.h
 +++ b/src/include/access/xact.h
 @@ -250,7 +250,7 @@ typedef struct xl_xact_xinfo
@@ -15422,7 +15439,7 @@ index 4528e51829..3fe50fcfcd 100644
  	/* xl_xact_origin follows if XINFO_HAS_ORIGIN, stored unaligned! */
  } xl_xact_abort;
 diff --git a/src/include/access/xloginsert.h b/src/include/access/xloginsert.h
-index d6a71415d4..7baab1ba76 100644
+index 91dfbd5627f..e7f0aa54d8a 100644
 --- a/src/include/access/xloginsert.h
 +++ b/src/include/access/xloginsert.h
 @@ -39,6 +39,7 @@
@@ -15434,7 +15451,7 @@ index d6a71415d4..7baab1ba76 100644
  /* prototypes for public functions in xloginsert.c: */
  extern void XLogBeginInsert(void);
 diff --git a/src/include/access/xlogrecord.h b/src/include/access/xlogrecord.h
-index a06833ce0a..1ceb0b8194 100644
+index e8999d3fe91..233f5bd8d60 100644
 --- a/src/include/access/xlogrecord.h
 +++ b/src/include/access/xlogrecord.h
 @@ -41,11 +41,11 @@
@@ -15452,10 +15469,10 @@ index a06833ce0a..1ceb0b8194 100644
  
  	/* XLogRecordBlockHeaders and XLogRecordDataHeader follow, no padding */
 diff --git a/src/include/c.h b/src/include/c.h
-index cb8a38669b..f4b70edc09 100644
+index c641f004eff..c4f20e2404a 100644
 --- a/src/include/c.h
 +++ b/src/include/c.h
-@@ -658,19 +658,24 @@ typedef double float8;
+@@ -740,11 +740,12 @@ typedef double float8;
  typedef Oid regproc;
  typedef regproc RegProcedure;
  
@@ -15465,45 +15482,33 @@ index cb8a38669b..f4b70edc09 100644
 -typedef uint32 LocalTransactionId;
 +typedef uint32 ShortTransactionId;
 +typedef uint64 LocalTransactionId;
-+typedef uint64 SubTransactionId;
  
 -typedef uint32 SubTransactionId;
--
--#define InvalidSubTransactionId		((SubTransactionId) 0)
--#define TopSubTransactionId			((SubTransactionId) 1)
-+#define InvalidSubTransactionId        ((SubTransactionId) 0)
-+#define TopSubTransactionId            ((SubTransactionId) 1)
++typedef uint64 SubTransactionId;
  
- /* MultiXactId must be equivalent to TransactionId, to fit in t_xmax */
- typedef TransactionId MultiXactId;
+ #define InvalidSubTransactionId		((SubTransactionId) 0)
+ #define TopSubTransactionId			((SubTransactionId) 1)
+@@ -754,6 +755,11 @@ typedef TransactionId MultiXactId;
  
--typedef uint32 MultiXactOffset;
-+typedef uint64 MultiXactOffset;
-+
+ typedef uint64 MultiXactOffset;
+ 
 +#define MAX_START_XID			UINT64CONST(0x3FFFFFFFFFFFFFFF)	/* 2^62 - 1 */
 +#define StartTransactionIdIsValid(xid)		((xid) <= MAX_START_XID)
 +#define StartMultiXactIdIsValid(mxid)		((mxid) <= MAX_START_XID)
 +#define StartMultiXactOffsetIsValid(mxoff)	((mxoff) <= MAX_START_XID)
- 
++
  typedef uint32 CommandId;
  
-@@ -838,7 +843,6 @@ typedef NameData *Name;
- /* we don't currently need wider versions of the other ALIGN macros */
- #define MAXALIGN64(LEN)			TYPEALIGN64(MAXIMUM_ALIGNOF, (LEN))
- 
--
- /* ----------------------------------------------------------------
-  *				Section 6:	assertions
-  * ----------------------------------------------------------------
+ #define FirstCommandId	((CommandId) 0)
 diff --git a/src/include/catalog/catversion.h b/src/include/catalog/catversion.h
-index c061a2ec7d..6a13fa3cdb 100644
+index 80c2070f358..70f784c2d6d 100644
 --- a/src/include/catalog/catversion.h
 +++ b/src/include/catalog/catversion.h
 @@ -57,6 +57,6 @@
   */
  
  /*							yyyymmddN */
--#define CATALOG_VERSION_NO	202511181
+-#define CATALOG_VERSION_NO	202607272
 +#define CATALOG_VERSION_NO	999999999
  
  #endif
@@ -15522,7 +15527,7 @@ index c4af599dc90..ec3d7f42d4f 100644
  #define		  RELKIND_INDEX			  'i'	/* secondary index */
  #define		  RELKIND_SEQUENCE		  'S'	/* sequence object */
 diff --git a/src/include/catalog/pg_operator.dat b/src/include/catalog/pg_operator.dat
-index 6d9dc1528d..6b1f1fdfed 100644
+index c7f860c442b..4558b8b411b 100644
 --- a/src/include/catalog/pg_operator.dat
 +++ b/src/include/catalog/pg_operator.dat
 @@ -183,16 +183,16 @@
@@ -15547,10 +15552,10 @@ index 6d9dc1528d..6b1f1fdfed 100644
  { oid => '5068', descr => 'equal',
    oprname => '=', oprcanmerge => 't', oprcanhash => 't', oprleft => 'xid8',
 diff --git a/src/include/catalog/pg_proc.dat b/src/include/catalog/pg_proc.dat
-index aaadfd8c74..ae65c6228e 100644
+index aa5ac43aff0..0f039a06c20 100644
 --- a/src/include/catalog/pg_proc.dat
 +++ b/src/include/catalog/pg_proc.dat
-@@ -2501,10 +2501,10 @@
+@@ -2519,10 +2519,10 @@
  { oid => '1181',
    descr => 'age of a transaction ID, in transactions before current transaction',
    proname => 'age', provolatile => 's', proparallel => 'r',
@@ -15563,7 +15568,7 @@ index aaadfd8c74..ae65c6228e 100644
    proargtypes => 'xid', prosrc => 'mxid_age' },
  
  { oid => '1188',
-@@ -2855,11 +2855,11 @@
+@@ -2879,11 +2879,11 @@
    prosrc => 'bpcharlen' },
  
  { oid => '1319',
@@ -15580,7 +15585,7 @@ index aaadfd8c74..ae65c6228e 100644
  { oid => '1326',
    proname => 'interval_div', prorettype => 'interval',
 diff --git a/src/include/catalog/pg_type.dat b/src/include/catalog/pg_type.dat
-index cb730aeac8..8eec2c3a6c 100644
+index 42ee494601b..bb95a64e0a5 100644
 --- a/src/include/catalog/pg_type.dat
 +++ b/src/include/catalog/pg_type.dat
 @@ -95,9 +95,9 @@
@@ -15596,10 +15601,10 @@ index cb730aeac8..8eec2c3a6c 100644
    descr => 'command identifier type, sequence in transaction id',
    typname => 'cid', typlen => '4', typbyval => 't', typcategory => 'U',
 diff --git a/src/include/catalog/pg_type.h b/src/include/catalog/pg_type.h
-index ff666711a5..a52133e01b 100644
+index 74183ec5a2e..a6e5c6eb700 100644
 --- a/src/include/catalog/pg_type.h
 +++ b/src/include/catalog/pg_type.h
-@@ -303,6 +303,11 @@ MAKE_SYSCACHE(TYPENAMENSP, pg_type_typname_nsp_index, 64);
+@@ -307,6 +307,11 @@ MAKE_SYSCACHE(TYPENAMENSP, pg_type_typname_nsp_index, 64);
  #define  TYPALIGN_SHORT			's' /* short alignment (typically 2 bytes) */
  #define  TYPALIGN_INT			'i' /* int alignment (typically 4 bytes) */
  #define  TYPALIGN_DOUBLE		'd' /* double alignment (often 8 bytes) */
@@ -15612,18 +15617,16 @@ index ff666711a5..a52133e01b 100644
  #define  TYPSTORAGE_PLAIN		'p' /* type not prepared for toasting */
  #define  TYPSTORAGE_EXTERNAL	'e' /* toastable, don't try to compress */
 diff --git a/src/include/commands/vacuum.h b/src/include/commands/vacuum.h
-index 1f3290c7fb..8531e2ffdf 100644
+index 956d9cea36d..14e7513c98d 100644
 --- a/src/include/commands/vacuum.h
 +++ b/src/include/commands/vacuum.h
-@@ -216,12 +216,12 @@ typedef enum VacOptValue
-  */
+@@ -216,11 +216,11 @@ typedef enum VacOptValue
  typedef struct VacuumParams
  {
--	bits32		options;		/* bitmask of VACOPT_* */
+ 	uint32		options;		/* bitmask of VACOPT_* */
 -	int			freeze_min_age; /* min freeze age, -1 to use default */
 -	int			freeze_table_age;	/* age at which to scan whole table */
 -	int			multixact_freeze_min_age;	/* min multixact freeze age, -1 to
-+	bits32		options;		/* bitmask of VacuumOption */
 +	int64		freeze_min_age; /* min freeze age, -1 to use default */
 +	int64		freeze_table_age;	/* age at which to scan whole table */
 +	int64		multixact_freeze_min_age;	/* min multixact freeze age, -1 to
@@ -15633,7 +15636,7 @@ index 1f3290c7fb..8531e2ffdf 100644
  											 * whole table */
  	bool		is_wraparound;	/* force a for-wraparound vacuum */
  	int			log_vacuum_min_duration;	/* minimum execution threshold in
-@@ -302,12 +302,12 @@ typedef struct VacDeadItemsInfo
+@@ -323,12 +323,12 @@ typedef struct PVWorkerUsage
  
  /* GUC parameters */
  extern PGDLLIMPORT int default_statistics_target;	/* PGDLLIMPORT for PostGIS */
@@ -15653,18 +15656,18 @@ index 1f3290c7fb..8531e2ffdf 100644
  extern PGDLLIMPORT bool vacuum_truncate;
  
 diff --git a/src/include/fmgr.h b/src/include/fmgr.h
-index 74fe3ea057..1ad1a85ee0 100644
+index 38e143ac670..76d799832b6 100644
 --- a/src/include/fmgr.h
 +++ b/src/include/fmgr.h
-@@ -281,6 +281,7 @@ extern struct varlena *pg_detoast_datum_packed(struct varlena *datum);
+@@ -282,6 +282,7 @@ extern varlena *pg_detoast_datum_packed(varlena *datum);
  #define PG_GETARG_FLOAT4(n)  DatumGetFloat4(PG_GETARG_DATUM(n))
  #define PG_GETARG_FLOAT8(n)  DatumGetFloat8(PG_GETARG_DATUM(n))
  #define PG_GETARG_INT64(n)	 DatumGetInt64(PG_GETARG_DATUM(n))
 +#define PG_GETARG_TRANSACTIONID(n)	DatumGetTransactionId(PG_GETARG_DATUM(n))
  /* use this if you want the raw, possibly-toasted input datum: */
- #define PG_GETARG_RAW_VARLENA_P(n)	((struct varlena *) PG_GETARG_POINTER(n))
+ #define PG_GETARG_RAW_VARLENA_P(n)	((varlena *) PG_GETARG_POINTER(n))
  /* use this if you want the input datum de-toasted: */
-@@ -367,6 +368,7 @@ extern struct varlena *pg_detoast_datum_packed(struct varlena *datum);
+@@ -369,6 +370,7 @@ extern varlena *pg_detoast_datum_packed(varlena *datum);
  #define PG_RETURN_FLOAT8(x)  return Float8GetDatum(x)
  #define PG_RETURN_INT64(x)	 return Int64GetDatum(x)
  #define PG_RETURN_UINT64(x)  return UInt64GetDatum(x)
@@ -15673,7 +15676,7 @@ index 74fe3ea057..1ad1a85ee0 100644
  #define PG_RETURN_BYTEA_P(x)   PG_RETURN_POINTER(x)
  #define PG_RETURN_TEXT_P(x)    PG_RETURN_POINTER(x)
 diff --git a/src/include/nodes/pg_list.h b/src/include/nodes/pg_list.h
-index 4d1cdbbcfd..136745d932 100644
+index e93bcbf2698..1bceafef41a 100644
 --- a/src/include/nodes/pg_list.h
 +++ b/src/include/nodes/pg_list.h
 @@ -46,6 +46,7 @@ typedef union ListCell
@@ -15700,7 +15703,7 @@ index 4d1cdbbcfd..136745d932 100644
  #define llast_oid(l)			lfirst_oid(list_last_cell(l))
  #define llast_xid(l)			lfirst_xid(list_last_cell(l))
  #define llast_node(type,l)		castNode(type, llast(l))
-@@ -610,6 +613,7 @@ extern List *list_make5_impl(NodeTag t, ListCell datum1, ListCell datum2,
+@@ -642,6 +645,7 @@ extern List *list_make5_impl(NodeTag t, ListCell datum1, ListCell datum2,
  
  pg_nodiscard extern List *lappend(List *list, void *datum);
  pg_nodiscard extern List *lappend_int(List *list, int datum);
@@ -15709,7 +15712,7 @@ index 4d1cdbbcfd..136745d932 100644
  pg_nodiscard extern List *lappend_xid(List *list, TransactionId datum);
  
 diff --git a/src/include/port/pg_lfind.h b/src/include/port/pg_lfind.h
-index 20f7497dcb..164acbc73d 100644
+index 18856c7a8c9..f808118b4f6 100644
 --- a/src/include/port/pg_lfind.h
 +++ b/src/include/port/pg_lfind.h
 @@ -206,4 +206,66 @@ pg_lfind32(uint32 key, const uint32 *base, uint32 nelem)
@@ -15723,7 +15726,7 @@ index 20f7497dcb..164acbc73d 100644
 + * return false.
 + */
 +static inline bool
-+pg_lfind64(uint64 key, uint64 *base, uint32 nelem)
++pg_lfind64(uint64 key, const uint64 *base, uint32 nelem)
 +{
 +	uint32		i,
 +				iterations;
@@ -15780,7 +15783,7 @@ index 20f7497dcb..164acbc73d 100644
 +
  #endif							/* PG_LFIND_H */
 diff --git a/src/include/postgres.h b/src/include/postgres.h
-index 357cbd6fd9..d1b7cd3880 100644
+index 660c1791a8e..771b0aaf637 100644
 --- a/src/include/postgres.h
 +++ b/src/include/postgres.h
 @@ -90,6 +90,9 @@ typedef struct NullableDatum
@@ -15793,7 +15796,7 @@ index 357cbd6fd9..d1b7cd3880 100644
  /*
   * DatumGetBool
   *		Returns boolean value of a datum.
-@@ -271,7 +274,7 @@ ObjectIdGetDatum(Oid X)
+@@ -281,7 +284,7 @@ ObjectId8GetDatum(Oid8 X)
  static inline TransactionId
  DatumGetTransactionId(Datum X)
  {
@@ -15802,7 +15805,7 @@ index 357cbd6fd9..d1b7cd3880 100644
  }
  
  /*
-@@ -281,7 +284,7 @@ DatumGetTransactionId(Datum X)
+@@ -291,7 +294,7 @@ DatumGetTransactionId(Datum X)
  static inline Datum
  TransactionIdGetDatum(TransactionId X)
  {
@@ -15811,7 +15814,7 @@ index 357cbd6fd9..d1b7cd3880 100644
  }
  
  /*
-@@ -291,7 +294,7 @@ TransactionIdGetDatum(TransactionId X)
+@@ -301,7 +304,7 @@ TransactionIdGetDatum(TransactionId X)
  static inline Datum
  MultiXactIdGetDatum(MultiXactId X)
  {
@@ -15821,7 +15824,7 @@ index 357cbd6fd9..d1b7cd3880 100644
  
  /*
 diff --git a/src/include/postmaster/autovacuum.h b/src/include/postmaster/autovacuum.h
-index 023ac6d5fa..a4b89f696b 100644
+index 8954f6b28ee..1eefb6108db 100644
 --- a/src/include/postmaster/autovacuum.h
 +++ b/src/include/postmaster/autovacuum.h
 @@ -39,8 +39,8 @@ extern PGDLLIMPORT int autovacuum_vac_ins_thresh;
@@ -15834,7 +15837,7 @@ index 023ac6d5fa..a4b89f696b 100644
 +extern PGDLLIMPORT int64 autovacuum_multixact_freeze_max_age;
  extern PGDLLIMPORT double autovacuum_vac_cost_delay;
  extern PGDLLIMPORT int autovacuum_vac_cost_limit;
- 
+ extern PGDLLIMPORT double autovacuum_freeze_score_weight;
 diff --git a/src/include/storage/aio_types.h b/src/include/storage/aio_types.h
 index 17b59aeed7c..bf6dfd82df7 100644
 --- a/src/include/storage/aio_types.h
@@ -16236,7 +16239,7 @@ index 634e1e49ee5..ffe213a4847 100644
  extern Size PageGetFreeSpace(const PageData *page);
  extern Size PageGetFreeSpaceForMultipleTuples(const PageData *page, int ntups);
 diff --git a/src/include/storage/itemid.h b/src/include/storage/itemid.h
-index bbe48aa732..a2d1f1e537 100644
+index f902e66bae5..ff22222bf61 100644
 --- a/src/include/storage/itemid.h
 +++ b/src/include/storage/itemid.h
 @@ -78,6 +78,8 @@ typedef uint16 ItemLength;
@@ -16385,15 +16388,15 @@ index 6b122497ec6..1a315ee1e12 100644
  	 (locktag).locktag_lockmethodid = DEFAULT_LOCKMETHOD)
  
 diff --git a/src/include/storage/proc.h b/src/include/storage/proc.h
-index c6f5ebceef..2cf9a53b3e 100644
+index 3e1d1fad5f9..37813d77f7b 100644
 --- a/src/include/storage/proc.h
 +++ b/src/include/storage/proc.h
-@@ -192,12 +192,12 @@ struct PGPROC
- 	Latch		procLatch;		/* generic latch for process */
- 
+@@ -240,12 +240,12 @@ typedef struct PGPROC
+ 									 * InvalidLocalTransactionId */
+ 	}			vxid;
  
 -	TransactionId xid;			/* id of top-level transaction currently being
-+	pg_atomic_uint64 xid;		/* id of top-level transaction currently being
++	pg_atomic_uint64 xid;			/* id of top-level transaction currently being
  								 * executed by this proc, if running and XID
  								 * is assigned; else InvalidTransactionId.
  								 * mirrored in ProcGlobal->xids[pgxactoff] */
@@ -16403,7 +16406,7 @@ index c6f5ebceef..2cf9a53b3e 100644
  								 * starting our xact, excluding LAZY VACUUM:
  								 * vacuum must not remove tuples deleted by
  								 * xid >= xmin ! */
-@@ -394,7 +394,7 @@ typedef struct PROC_HDR
+@@ -447,7 +447,7 @@ typedef struct PROC_HDR
  	PGPROC	   *allProcs;
  
  	/* Array mirroring PGPROC.xid for each PGPROC currently in the procarray */
@@ -16450,7 +16453,7 @@ index 00000000000..365f61a7c45
 +
 +#endif /* RELATION_EXTRA_DATA_H */
 diff --git a/src/include/utils/combocid.h b/src/include/utils/combocid.h
-index 4a2069b286..4fcb899fcd 100644
+index 6cd3cdd4035..fcf742545ad 100644
 --- a/src/include/utils/combocid.h
 +++ b/src/include/utils/combocid.h
 @@ -15,7 +15,7 @@
@@ -16463,10 +16466,10 @@ index 4a2069b286..4fcb899fcd 100644
   * those functions replaced used to be.
   */
 diff --git a/src/include/utils/rel.h b/src/include/utils/rel.h
-index 80286076a1..8fc3e2bd36 100644
+index 89c159b133f..cb0f72725f3 100644
 --- a/src/include/utils/rel.h
 +++ b/src/include/utils/rel.h
-@@ -316,12 +316,12 @@ typedef struct AutoVacOpts
+@@ -318,12 +318,12 @@ typedef struct AutoVacOpts
  	int			vacuum_ins_threshold;
  	int			analyze_threshold;
  	int			vacuum_cost_limit;
@@ -16486,7 +16489,7 @@ index 80286076a1..8fc3e2bd36 100644
  	int			log_analyze_min_duration;
  	float8		vacuum_cost_delay;
 diff --git a/src/include/utils/xid8.h b/src/include/utils/xid8.h
-index 35399b7f6f..4185e5c34f 100644
+index d1cefb3e053..6b02e373378 100644
 --- a/src/include/utils/xid8.h
 +++ b/src/include/utils/xid8.h
 @@ -17,13 +17,13 @@
@@ -16506,10 +16509,10 @@ index 35399b7f6f..4185e5c34f 100644
  
  #define PG_GETARG_FULLTRANSACTIONID(X) DatumGetFullTransactionId(PG_GETARG_DATUM(X))
 diff --git a/src/pl/plperl/plperl.c b/src/pl/plperl/plperl.c
-index 73ba1748fe..d8eabb14f0 100644
+index eba91f2d7d6..16f848060a1 100644
 --- a/src/pl/plperl/plperl.c
 +++ b/src/pl/plperl/plperl.c
-@@ -2678,7 +2678,7 @@ validate_plperl_function(plperl_proc_ptr *proc_ptr, HeapTuple procTup)
+@@ -2688,7 +2688,7 @@ validate_plperl_function(plperl_proc_ptr *proc_ptr, HeapTuple procTup)
  		 * This is needed because CREATE OR REPLACE FUNCTION can modify the
  		 * function's pg_proc entry without changing its OID.
  		 ************************************************************/
@@ -16518,7 +16521,7 @@ index 73ba1748fe..d8eabb14f0 100644
  					ItemPointerEquals(&prodesc->fn_tid, &procTup->t_self));
  
  		if (uptodate)
-@@ -2802,7 +2802,7 @@ compile_plperl_function(Oid fn_oid, bool is_trigger, bool is_event_trigger)
+@@ -2812,7 +2812,7 @@ compile_plperl_function(Oid fn_oid, bool is_trigger, bool is_event_trigger)
  		MemoryContextSetIdentifier(proc_cxt, prodesc->proname);
  		prodesc->fn_cxt = proc_cxt;
  		prodesc->fn_refcount = 0;
@@ -16526,12 +16529,12 @@ index 73ba1748fe..d8eabb14f0 100644
 +		prodesc->fn_xmin = HeapTupleGetRawXmin(procTup);
  		prodesc->fn_tid = procTup->t_self;
  		prodesc->nargs = procStruct->pronargs;
- 		prodesc->arg_out_func = (FmgrInfo *) palloc0(prodesc->nargs * sizeof(FmgrInfo));
+ 		prodesc->arg_out_func = palloc0_array(FmgrInfo, prodesc->nargs);
 diff --git a/src/pl/plpgsql/src/pl_exec.c b/src/pl/plpgsql/src/pl_exec.c
-index d19425b7a7..18b054b73f 100644
+index 341beb496b8..79b9b323d4e 100644
 --- a/src/pl/plpgsql/src/pl_exec.c
 +++ b/src/pl/plpgsql/src/pl_exec.c
-@@ -7570,6 +7570,7 @@ deconstruct_composite_datum(Datum value, HeapTupleData *tmptup)
+@@ -7657,6 +7657,7 @@ deconstruct_composite_datum(Datum value, HeapTupleData *tmptup)
  	tmptup->t_len = HeapTupleHeaderGetDatumLength(td);
  	ItemPointerSetInvalid(&(tmptup->t_self));
  	tmptup->t_tableOid = InvalidOid;
@@ -16539,7 +16542,7 @@ index d19425b7a7..18b054b73f 100644
  	tmptup->t_data = td;
  
  	/* Extract rowtype info and find a tupdesc */
-@@ -7744,6 +7745,7 @@ exec_move_row_from_datum(PLpgSQL_execstate *estate,
+@@ -7831,6 +7832,7 @@ exec_move_row_from_datum(PLpgSQL_execstate *estate,
  		tmptup.t_len = HeapTupleHeaderGetDatumLength(td);
  		ItemPointerSetInvalid(&(tmptup.t_self));
  		tmptup.t_tableOid = InvalidOid;
@@ -16547,33 +16550,11 @@ index d19425b7a7..18b054b73f 100644
  		tmptup.t_data = td;
  
  		/* Extract rowtype info */
-diff --git a/src/pl/plpython/plpy_procedure.c b/src/pl/plpython/plpy_procedure.c
-index 655ab1d09e..349fcbe2c4 100644
---- a/src/pl/plpython/plpy_procedure.c
-+++ b/src/pl/plpython/plpy_procedure.c
-@@ -191,7 +191,7 @@ PLy_procedure_create(HeapTuple procTup, Oid fn_oid, PLyTrigType is_trigger)
- 		proc->proname = pstrdup(NameStr(procStruct->proname));
- 		MemoryContextSetIdentifier(cxt, proc->proname);
- 		proc->pyname = pstrdup(procName);
--		proc->fn_xmin = HeapTupleHeaderGetRawXmin(procTup->t_data);
-+		proc->fn_xmin = HeapTupleGetRawXmin(procTup);
- 		proc->fn_tid = procTup->t_self;
- 		proc->fn_readonly = (procStruct->provolatile != PROVOLATILE_VOLATILE);
- 		proc->is_setof = procStruct->proretset;
-@@ -434,7 +434,7 @@ PLy_procedure_valid(PLyProcedure *proc, HeapTuple procTup)
- 		return false;
- 
- 	/* If the pg_proc tuple has changed, it's not valid */
--	if (!(proc->fn_xmin == HeapTupleHeaderGetRawXmin(procTup->t_data) &&
-+	if (!(proc->fn_xmin == HeapTupleGetRawXmin(procTup) &&
- 		  ItemPointerEquals(&proc->fn_tid, &procTup->t_self)))
- 		return false;
- 
 diff --git a/src/pl/tcl/pltcl.c b/src/pl/tcl/pltcl.c
-index 73d660e88a..74cbb79ac4 100644
+index e2c6d99a6de..197feb6e662 100644
 --- a/src/pl/tcl/pltcl.c
 +++ b/src/pl/tcl/pltcl.c
-@@ -1458,7 +1458,7 @@ compile_pltcl_function(Oid fn_oid, Oid tgreloid,
+@@ -1461,7 +1461,7 @@ compile_pltcl_function(Oid fn_oid, Oid tgreloid,
  	 ************************************************************/
  	if (prodesc != NULL &&
  		prodesc->internal_proname != NULL &&
@@ -16582,7 +16563,7 @@ index 73d660e88a..74cbb79ac4 100644
  		ItemPointerEquals(&prodesc->fn_tid, &procTup->t_self))
  	{
  		/* It's still up-to-date, so we can use it */
-@@ -1592,7 +1592,7 @@ compile_pltcl_function(Oid fn_oid, Oid tgreloid,
+@@ -1595,7 +1595,7 @@ compile_pltcl_function(Oid fn_oid, Oid tgreloid,
  		prodesc->internal_proname = pstrdup(internal_proname);
  		prodesc->fn_cxt = proc_cxt;
  		prodesc->fn_refcount = 0;
@@ -16590,23 +16571,23 @@ index 73d660e88a..74cbb79ac4 100644
 +		prodesc->fn_xmin = HeapTupleGetRawXmin(procTup);
  		prodesc->fn_tid = procTup->t_self;
  		prodesc->nargs = procStruct->pronargs;
- 		prodesc->arg_out_func = (FmgrInfo *) palloc0(prodesc->nargs * sizeof(FmgrInfo));
+ 		prodesc->arg_out_func = palloc0_array(FmgrInfo, prodesc->nargs);
 diff --git a/src/test/Makefile b/src/test/Makefile
-index 511a72e623..b986d0e324 100644
+index 3eb0a06abb4..a1b486dc4f2 100644
 --- a/src/test/Makefile
 +++ b/src/test/Makefile
-@@ -12,7 +12,8 @@ subdir = src/test
- top_builddir = ../..
- include $(top_builddir)/src/Makefile.global
- 
--SUBDIRS = perl postmaster regress isolation modules authentication recovery subscription
-+SUBDIRS = perl postmaster regress isolation modules authentication recovery subscription \
-+		xid-64
+@@ -20,7 +20,8 @@ SUBDIRS = \
+ 	postmaster \
+ 	recovery \
+ 	regress \
+-	subscription
++	subscription \
++	xid-64
  
  ifeq ($(with_icu),yes)
  SUBDIRS += icu
 diff --git a/src/test/meson.build b/src/test/meson.build
-index ccc31d6a86..4680141c92 100644
+index cd45cbf57fb..879bab3444f 100644
 --- a/src/test/meson.build
 +++ b/src/test/meson.build
 @@ -8,6 +8,7 @@ subdir('postmaster')
@@ -16618,10 +16599,24 @@ index ccc31d6a86..4680141c92 100644
  if ssl.found()
    subdir('ssl')
 diff --git a/src/test/modules/injection_points/regress_injection.c b/src/test/modules/injection_points/regress_injection.c
-index 7bba1c97d0..0164e7ff07 100644
+index 0c3113eac2f..9affcf8226c 100644
 --- a/src/test/modules/injection_points/regress_injection.c
 +++ b/src/test/modules/injection_points/regress_injection.c
-@@ -73,6 +73,5 @@ removable_cutoff(PG_FUNCTION_ARGS)
+@@ -56,10 +56,9 @@ removable_cutoff(PG_FUNCTION_ARGS)
+ 
+ 	/*
+ 	 * No lock or snapshot necessarily prevents oldestXid from advancing past
+-	 * "xid" while this function runs.  That concerns us only in that we must
+-	 * not ascribe "xid" to the wrong epoch.  (That may never arise in
+-	 * isolation testing, but let's set a good example.)  As a crude solution,
+-	 * retry until nextXid doesn't change.
++	 * "xid" while this function runs.  Keep the cutoff sampling retry until
++	 * nextXid doesn't change.  The cutoff is already a full-width XID, so
++	 * it needs no epoch reconstruction.
+ 	 */
+ 	next_fxid = ReadNextFullTransactionId();
+ 	do
+@@ -73,6 +72,5 @@ removable_cutoff(PG_FUNCTION_ARGS)
  	if (rel)
  		table_close(rel, AccessShareLock);
  
@@ -16630,66 +16625,54 @@ index 7bba1c97d0..0164e7ff07 100644
 +	PG_RETURN_FULLTRANSACTIONID(FullTransactionIdFromXid(xid));
  }
 diff --git a/src/test/modules/test_lfind/test_lfind.c b/src/test/modules/test_lfind/test_lfind.c
-index 8dcaa8f9fd..b1e7f3f71e 100644
+index 037f4923175..6b77e5376eb 100644
 --- a/src/test/modules/test_lfind/test_lfind.c
 +++ b/src/test/modules/test_lfind/test_lfind.c
-@@ -120,29 +120,29 @@ Datum
- test_lfind32(PG_FUNCTION_ARGS)
- {
- #define TEST_ARRAY_SIZE 135
--	uint32		test_array[TEST_ARRAY_SIZE] = {0};
-+	uint64		test_array[TEST_ARRAY_SIZE] = {0};
- 
- 	test_array[8] = 1;
- 	test_array[64] = 2;
- 	test_array[TEST_ARRAY_SIZE - 1] = 3;
- 
--	if (pg_lfind32(1, test_array, 4))
--		elog(ERROR, "pg_lfind32() found nonexistent element");
--	if (!pg_lfind32(1, test_array, TEST_ARRAY_SIZE))
--		elog(ERROR, "pg_lfind32() did not find existing element");
-+	if (pg_lfind64(1, test_array, 4))
-+		elog(ERROR, "pg_lfind64() found nonexistent element");
-+	if (!pg_lfind64(1, test_array, TEST_ARRAY_SIZE))
-+		elog(ERROR, "pg_lfind64() did not find existing element");
- 
--	if (pg_lfind32(2, test_array, 32))
--		elog(ERROR, "pg_lfind32() found nonexistent element");
--	if (!pg_lfind32(2, test_array, TEST_ARRAY_SIZE))
--		elog(ERROR, "pg_lfind32() did not find existing element");
-+	if (pg_lfind64(2, test_array, 32))
-+		elog(ERROR, "pg_lfind64() found nonexistent element");
-+	if (!pg_lfind64(2, test_array, TEST_ARRAY_SIZE))
-+		elog(ERROR, "pg_lfind64() did not find existing element");
- 
--	if (pg_lfind32(3, test_array, 96))
--		elog(ERROR, "pg_lfind32() found nonexistent element");
--	if (!pg_lfind32(3, test_array, TEST_ARRAY_SIZE))
--		elog(ERROR, "pg_lfind32() did not find existing element");
-+	if (pg_lfind64(3, test_array, 96))
-+		elog(ERROR, "pg_lfind64() found nonexistent element");
-+	if (!pg_lfind64(3, test_array, TEST_ARRAY_SIZE))
-+		elog(ERROR, "pg_lfind64() did not find existing element");
- 
--	if (pg_lfind32(4, test_array, TEST_ARRAY_SIZE))
--		elog(ERROR, "pg_lfind32() found nonexistent element");
-+	if (pg_lfind64(4, test_array, TEST_ARRAY_SIZE))
-+		elog(ERROR, "pg_lfind64() found nonexistent element");
- 
+@@ -115,6 +115,36 @@ test_lfind8_le(PG_FUNCTION_ARGS)
  	PG_RETURN_VOID();
  }
-diff --git a/src/test/modules/xid_wraparound/xid_wraparound.c b/src/test/modules/xid_wraparound/xid_wraparound.c
-index ba288b6117..83cb3d3d2c 100644
---- a/src/test/modules/xid_wraparound/xid_wraparound.c
-+++ b/src/test/modules/xid_wraparound/xid_wraparound.c
-@@ -138,7 +138,6 @@ consume_xids_common(FullTransactionId untilxid, uint64 nxids)
- 			if (nxids > 0)
- 				elog(NOTICE, "consumed %" PRIu64 " / %" PRIu64 " XIDs, latest %llu",
- 					 consumed, nxids,
--					 EpochFromFullTransactionId(lastxid),
- 					 (unsigned long long) U64FromFullTransactionId(lastxid));
- 			else
- 				elog(NOTICE, "consumed up to %llu / %llu",
+ 
++static void
++test_lfind64_internal(void)
++{
++#define TEST_ARRAY_SIZE 135
++	uint64		test_array[TEST_ARRAY_SIZE] = {0};
++
++	test_array[8] = UINT64CONST(0x100000001);
++	test_array[64] = UINT64CONST(0x100000002);
++	test_array[TEST_ARRAY_SIZE - 1] = UINT64CONST(0x100000003);
++
++	if (pg_lfind64(UINT64CONST(0x100000001), test_array, 4))
++		elog(ERROR, "pg_lfind64() found nonexistent element");
++	if (!pg_lfind64(UINT64CONST(0x100000001), test_array, TEST_ARRAY_SIZE))
++		elog(ERROR, "pg_lfind64() did not find existing element");
++
++	if (pg_lfind64(UINT64CONST(0x100000002), test_array, 32))
++		elog(ERROR, "pg_lfind64() found nonexistent element");
++	if (!pg_lfind64(UINT64CONST(0x100000002), test_array, TEST_ARRAY_SIZE))
++		elog(ERROR, "pg_lfind64() did not find existing element");
++
++	if (pg_lfind64(UINT64CONST(0x100000003), test_array, 96))
++		elog(ERROR, "pg_lfind64() found nonexistent element");
++	if (!pg_lfind64(UINT64CONST(0x100000003), test_array, TEST_ARRAY_SIZE))
++		elog(ERROR, "pg_lfind64() did not find existing element");
++
++	if (pg_lfind64(UINT64CONST(0x100000004), test_array, TEST_ARRAY_SIZE))
++		elog(ERROR, "pg_lfind64() found nonexistent element");
++
++}
++
+ PG_FUNCTION_INFO_V1(test_lfind32);
+ Datum
+ test_lfind32(PG_FUNCTION_ARGS)
+@@ -144,5 +174,7 @@ test_lfind32(PG_FUNCTION_ARGS)
+ 	if (pg_lfind32(4, test_array, TEST_ARRAY_SIZE))
+ 		elog(ERROR, "pg_lfind32() found nonexistent element");
+ 
++	test_lfind64_internal();
++
+ 	PG_RETURN_VOID();
+ }
 diff --git a/src/test/perl/PostgreSQL/Test/AdjustUpgrade.pm b/src/test/perl/PostgreSQL/Test/AdjustUpgrade.pm
 index 7224c286e1..0097d4062d 100644
 --- a/src/test/perl/PostgreSQL/Test/AdjustUpgrade.pm

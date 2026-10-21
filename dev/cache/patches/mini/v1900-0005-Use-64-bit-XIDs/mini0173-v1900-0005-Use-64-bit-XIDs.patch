@@ -1,0 +1,23 @@
+diff --git a/src/include/utils/rel.h b/src/include/utils/rel.h
+index 89c159b133f..cb0f72725f3 100644
+--- a/src/include/utils/rel.h
++++ b/src/include/utils/rel.h
+@@ -318,12 +318,12 @@ typedef struct AutoVacOpts
+ 	int			vacuum_ins_threshold;
+ 	int			analyze_threshold;
+ 	int			vacuum_cost_limit;
+-	int			freeze_min_age;
+-	int			freeze_max_age;
+-	int			freeze_table_age;
+-	int			multixact_freeze_min_age;
+-	int			multixact_freeze_max_age;
+-	int			multixact_freeze_table_age;
++	int64		freeze_min_age;
++	int64		freeze_max_age;
++	int64		freeze_table_age;
++	int64		multixact_freeze_min_age;
++	int64		multixact_freeze_max_age;
++	int64		multixact_freeze_table_age;
+ 	int			log_vacuum_min_duration;
+ 	int			log_analyze_min_duration;
+ 	float8		vacuum_cost_delay;

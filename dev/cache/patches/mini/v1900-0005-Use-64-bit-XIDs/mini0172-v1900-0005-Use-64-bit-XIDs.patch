@@ -1,0 +1,13 @@
+diff --git a/src/include/utils/combocid.h b/src/include/utils/combocid.h
+index 6cd3cdd4035..fcf742545ad 100644
+--- a/src/include/utils/combocid.h
++++ b/src/include/utils/combocid.h
+@@ -15,7 +15,7 @@
+ #define COMBOCID_H
+ 
+ /*
+- * HeapTupleHeaderGetCmin and HeapTupleHeaderGetCmax function prototypes
++ * HeapTupleGetCmin and HeapTupleGetCmax function prototypes
+  * are in access/htup.h, because that's where the macro definitions that
+  * those functions replaced used to be.
+  */

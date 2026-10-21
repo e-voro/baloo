@@ -1,0 +1,4 @@
+# mini0148(tupmacs.h): already incorporated by adapted mini0027(tupmacs.h).
+# PG19 routes att_align_nominal through typalign_to_alignby(). Its existing
+# TYPALIGN_DOUBLE/TYPALIGN_XID cases share ALIGNOF_DOUBLE as requested.
+# Do not reintroduce the removed PG18 alignment switch; no source edit needed.

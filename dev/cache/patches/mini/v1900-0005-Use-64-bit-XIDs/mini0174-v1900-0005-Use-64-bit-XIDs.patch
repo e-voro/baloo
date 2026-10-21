@@ -1,0 +1,20 @@
+diff --git a/src/include/utils/xid8.h b/src/include/utils/xid8.h
+index d1cefb3e053..6b02e373378 100644
+--- a/src/include/utils/xid8.h
++++ b/src/include/utils/xid8.h
+@@ -17,13 +17,13 @@
+ static inline FullTransactionId
+ DatumGetFullTransactionId(Datum X)
+ {
+-	return FullTransactionIdFromU64(DatumGetUInt64(X));
++	return FullTransactionIdFromXid(DatumGetUInt64(X));
+ }
+ 
+ static inline Datum
+ FullTransactionIdGetDatum(FullTransactionId X)
+ {
+-	return UInt64GetDatum(U64FromFullTransactionId(X));
++	return UInt64GetDatum(XidFromFullTransactionId(X));
+ }
+ 
+ #define PG_GETARG_FULLTRANSACTIONID(X) DatumGetFullTransactionId(PG_GETARG_DATUM(X))

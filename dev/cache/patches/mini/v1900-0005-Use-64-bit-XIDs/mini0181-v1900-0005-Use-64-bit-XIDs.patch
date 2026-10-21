@@ -1,0 +1,26 @@
+diff --git a/src/test/modules/injection_points/regress_injection.c b/src/test/modules/injection_points/regress_injection.c
+index 0c3113eac2f..9affcf8226c 100644
+--- a/src/test/modules/injection_points/regress_injection.c
++++ b/src/test/modules/injection_points/regress_injection.c
+@@ -56,10 +56,9 @@ removable_cutoff(PG_FUNCTION_ARGS)
+ 
+ 	/*
+ 	 * No lock or snapshot necessarily prevents oldestXid from advancing past
+-	 * "xid" while this function runs.  That concerns us only in that we must
+-	 * not ascribe "xid" to the wrong epoch.  (That may never arise in
+-	 * isolation testing, but let's set a good example.)  As a crude solution,
+-	 * retry until nextXid doesn't change.
++	 * "xid" while this function runs.  Keep the cutoff sampling retry until
++	 * nextXid doesn't change.  The cutoff is already a full-width XID, so
++	 * it needs no epoch reconstruction.
+ 	 */
+ 	next_fxid = ReadNextFullTransactionId();
+ 	do
+@@ -73,6 +72,5 @@ removable_cutoff(PG_FUNCTION_ARGS)
+ 	if (rel)
+ 		table_close(rel, AccessShareLock);
+ 
+-	PG_RETURN_FULLTRANSACTIONID(FullTransactionIdFromAllowableAt(next_fxid,
+-																 xid));
++	PG_RETURN_FULLTRANSACTIONID(FullTransactionIdFromXid(xid));
+ }

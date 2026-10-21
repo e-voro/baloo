@@ -1,0 +1,13 @@
+diff --git a/src/include/access/reloptions.h b/src/include/access/reloptions.h
+index 41c4e69b9dc..3d35a026fcd 100644
+--- a/src/include/access/reloptions.h
++++ b/src/include/access/reloptions.h
+@@ -117,7 +117,7 @@ typedef struct relopt_int64
+ 	int64		default_val;
+ 	int64		min;
+ 	int64		max;
+-}			relopt_int64;
++} relopt_int64;
+ 
+ typedef struct relopt_real
+ {

@@ -1,0 +1,15 @@
+diff --git a/src/include/postmaster/autovacuum.h b/src/include/postmaster/autovacuum.h
+index 8954f6b28ee..1eefb6108db 100644
+--- a/src/include/postmaster/autovacuum.h
++++ b/src/include/postmaster/autovacuum.h
+@@ -39,8 +39,8 @@ extern PGDLLIMPORT int autovacuum_vac_ins_thresh;
+ extern PGDLLIMPORT double autovacuum_vac_ins_scale;
+ extern PGDLLIMPORT int autovacuum_anl_thresh;
+ extern PGDLLIMPORT double autovacuum_anl_scale;
+-extern PGDLLIMPORT int autovacuum_freeze_max_age;
+-extern PGDLLIMPORT int autovacuum_multixact_freeze_max_age;
++extern PGDLLIMPORT int64 autovacuum_freeze_max_age;
++extern PGDLLIMPORT int64 autovacuum_multixact_freeze_max_age;
+ extern PGDLLIMPORT double autovacuum_vac_cost_delay;
+ extern PGDLLIMPORT int autovacuum_vac_cost_limit;
+ extern PGDLLIMPORT double autovacuum_freeze_score_weight;

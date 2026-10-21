@@ -1,0 +1,13 @@
+diff --git a/src/include/storage/itemid.h b/src/include/storage/itemid.h
+index f902e66bae5..ff22222bf61 100644
+--- a/src/include/storage/itemid.h
++++ b/src/include/storage/itemid.h
+@@ -78,6 +78,8 @@ typedef uint16 ItemLength;
+ #define ItemIdGetRedirect(itemId) \
+    ((itemId)->lp_off)
+ 
++#define ItemIdGetTupleEnd(itemId) \
++	(MAXALIGN(ItemIdGetLength((itemId))) + ItemIdGetOffset((itemId)))
+ /*
+  * ItemIdIsValid
+  *		True iff item identifier is valid.

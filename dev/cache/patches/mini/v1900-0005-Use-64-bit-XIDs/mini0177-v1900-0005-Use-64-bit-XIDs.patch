@@ -1,0 +1,4 @@
+# mini0177(plpy_procedure.c): superseded by PG19 shared function cache.
+# PL/Python no longer stores or compares fn_xmin here. The PG19 funccache.c
+# producer/comparison already use HeapTupleGetRawXmin(procTup), adapted earlier.
+# Preserve PG19 CachedFunction callbacks; no source edit is needed.

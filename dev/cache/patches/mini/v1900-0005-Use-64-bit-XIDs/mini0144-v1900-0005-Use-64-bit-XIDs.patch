@@ -1,0 +1,14 @@
+diff --git a/src/include/access/rewriteheap.h b/src/include/access/rewriteheap.h
+index 6ccf7b45c04..1eaed7ab90b 100644
+--- a/src/include/access/rewriteheap.h
++++ b/src/include/access/rewriteheap.h
+@@ -51,7 +51,7 @@ typedef struct LogicalRewriteMappingData
+  * 6) xid of the xact performing the mapping
+  * ---
+  */
+-#define LOGICAL_REWRITE_FORMAT "map-%x-%x-%X_%X-%x-%x"
+-extern void CheckPointLogicalRewriteHeap(void);
++#define LOGICAL_REWRITE_FORMAT "map-%x-%x-%X_%X-%x_%x-%x_%x"
++extern void	CheckPointLogicalRewriteHeap(void);
+ 
+ #endif							/* REWRITE_HEAP_H */
