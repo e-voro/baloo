@@ -700,3 +700,77 @@ XID width alone does not identify a source MultiXact layout:
   found in those supplied patches. Live --swap/copy/link and cross-version
   validation, including checksums and actual parallel jobs, remains required
   after the full series builds.
+
+
+## IMPORTANT: through mini0139(htup.h); pause before mini0140(htup_details.h)
+
+- Applied mini0132(003_corruption.pl), **`5ca5ee85faa`**: retain PG19 tar
+  portability, scenario gating and archived-WAL parsing. Initialize XID=3,
+  MXID=1 and **offset=1**, preserving PG19's nonzero offset invariant; add
+  the original checkpoint/long CLOG-name expectation. These initdb switches
+  depend on later series patch 0009, whose offset defaults also need review.
+- Applied mini0133(001_basic.pl), **`de061eec473`**: append Heap3 after
+  native XLOG2; retain PG19 archive/compression and continuation-record tests.
+  The corresponding rmgr-list addition awaits mini0145(rmgrlist.h).
+- Applied mini0134(ginblock.h), **`0e65092d12a`**: store the full deletion
+  XID before GIN opaque data, not in the short heap pruning-hint field.
+  Traced deletion, ginxlogDeletePage WAL, redo and recyclable-page checks.
+  mini0135(gist.h), **`889c1651957`**, changes only the full-XID constructor;
+  retain PG19's pointer-based NSN accessors.
+- Applied mini0136(heapam.h), **`5912d4d494f`**, and
+  mini0137(heapam_xlog.h), **`052fa6d0683`**: merge remaining full-XID scan
+  arrays, tuple-aware freeze/accessor signatures, freeze-to-page helpers and
+  Heap3 base-shift WAL declarations with the earlier prune adaptations.
+  Preserve PG19 PruneFreezeParams, VM flags/block references, batch MVCC API,
+  FreezePageConflictXid and removal of XLOG_HEAP2_VISIBLE. Freeze helpers
+  execute only supplied plans; no new freeze eligibility rule is introduced.
+- Applied mini0138(heaptoast.h), **`7e7939b2721`**: reserve page special
+  space in tuple/chunk sizing, retaining native options/varlena interfaces.
+  mini0139(htup.h), **`11401997f28`**, adds full in-memory xmin/xmax and
+  matching accessor prototypes; JIT's t_data field index becomes 5. PG19's
+  JIT derives the struct type from the real C declaration.
+- Validation: both changed Perl scripts pass syntax checks. The existing
+  page-conversion/UBSan probe now extracts freeze helpers from applied
+  heapam.h and passes at all six supported page sizes. Eight saved minis
+  reverse-check; eight aggregate sections replay on `8ca324058af` and match
+  committed source exactly. Artifacts in Baloo **`909334b`**, parent
+  **`110d56b05c0`**. No full build, live TAP, WAL replay or upgrade run;
+  remaining 0005 definitions and later initdb switches are still absent.
+
+### NEW LOGIC FINDING: TOAST xmax reader assertion (not applied)
+
+**First unapplied: mini0140(htup_details.h). Stop for discussion under the
+user's instruction to pause on a new logic correction.**
+
+- Its new HeapTupleHeaderGetRawXmax(page, tuple) uses
+  HeapPageGetSpecial(page)->pd_xid_base for every non-MultiXact xmax.
+  A TOAST page has ToastPageSpecialData (one base), whereas an ordinary
+  heap page has HeapPageSpecialData (two bases). HeapPageGetSpecial asserts
+  the ordinary heap layout and rejects a valid TOAST page.
+- Existing consumer: UpdateXmaxHintBits() calls this reader inside an
+  assertion; heap_delete()/heap_update()/heap_lock_tuple() use that helper
+  after waiting for a non-MultiXact xmax. TOAST chunk deletion uses
+  simple_heap_delete(). A live concurrent TOAST execution reaching the
+  failing assertion has **not** been demonstrated. The helper's rejection
+  of valid TOAST input is reproduced independently.
+- This is inherited from the original PG18 xid64 patch; supplied0001 has
+  the same code. It is not a PG19 API change. In the tested layouts the XID
+  base is the first field of both special structs: do not claim release-mode
+  value corruption from this finding; the confirmed failure is an assertion.
+- Proposed narrow correction, retaining ordinary heap/MultiXact/double-xmax
+  behavior and all PG19 visibility rules:
+
+  ```c
+  base = (tup->t_infomask & HEAP_XMAX_IS_MULTI) ?
+      HeapPageGetSpecial(page)->pd_multi_base :
+      PageGetSpecialXidBase(page);
+  ```
+
+- Temporary probe `/tmp/xid64_toast_accessor_probe.py` reconstructs the
+  original mini0140 getter and combines it with actual bufpage.h helpers
+  and fixed-width tuple scaffolding. Valid TOAST base=4294967296, raw
+  xmax=77 aborts at the real layout assertion. Replacing only the non-multi
+  accessor in temporary generated code yields 4294967373 under UBSan.
+  No production fix or mini0140 application has been made. After approval,
+  extend checks across heap/TOAST/double-xmax and MultiXact layouts, then
+  validate actual backend paths once the complete series builds.
