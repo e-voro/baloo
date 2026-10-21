@@ -1084,3 +1084,97 @@ that the original PG18 caller used the wrong PG18 API.**
   This correction is being implemented and requires dense legacy-page/AIO
   and wrapped-MultiXact validation. Ordinary prune callers rely on Horizon
   to initialize their tuple cache; do not remove that ownership globally.
+
+## IMPORTANT: applied overnight conversion, upgrade and VACUUM corrections
+
+- **1547efbb710 — visibility ownership and AIO:** ordinary Vacuum/Horizon
+  calls decode full XIDs from the current page under their existing content
+  lock. InvalidBuffer explicitly selects predecoded XIDs and no hint writes;
+  conversion uses it after expanding source MultiXacts. Merely gating recopy
+  by page version was insufficient: dense unfrozen conversion then crashed
+  an AIO worker in BufferIsPermanent(), because SetHintBits needed a private
+  pin. SetHintBitsExt now returns before buffer APIs in the no-hints mode.
+  Current-layout assertions replace special-space assertions in Update and
+  Visibility, accepting genuine double-xmax pages. Legacy pages also lack
+  special space and must never be decoded as double-xmax. Do not revert to
+  the earlier unconditional legacy recopy or remove ordinary callers' copy.
+- **bdb4e4b907a — user XID storage checks:** require attnum > 0 in both
+  recursive composite propagation and final stored-column reporting. A real
+  PG15.19 int/text-only source otherwise failed on every table's xmin/xmax;
+  filtering only the final query would still contaminate safe row types.
+  Continue rejecting actual xid columns, xid arrays and xid composites.
+- **b052fd6b675 — supplied0015 port to PG19:** converted images override
+  NO_IMAGE/full_page_writes; preserve WILL_INIT and retain BM_CONVERTED on
+  NO_CHANGE references. PG19 prune WAL forces a converted heap image and
+  advances its heap LSN, replacing PG18's log_heap_visible/VM location.
+  Existing regression library supplies the relcache-less extension helper;
+  no test-module relocation is needed. Add native Meson registration and
+  pg_visibility installation. Cluster.pm supports explicit xid32 initialization
+  and suppresses high-counter defaults for external initdb binaries that lack
+  those options, using capabilities rather than major-version guesses.
+- **Cross-version evidence:** adapted pg_upgrade/t/009_xid32_to_xid64_recovery.pl
+  passes **19 assertions with actual PG15.19**, including positive/negative
+  user-column checks, safe row types, dense frozen/unfrozen AIO conversion,
+  double-xmax UPDATE, streaming FPI/incremental replay, missing-block and
+  existing-block relcache-less extension, and visibility WAL with checksums,
+  wal_log_hints and full_page_writes disabled. Test-only freeze ages prevent
+  forced autovacuum from pre-converting the legacy fixture. This run precedes
+  the independent age-cutoff fix below; rerun against the final tested tree.
+- **0828bf07ff3 — VACUUM ages:** full-XID subtraction wrapped young counters
+  when configured ages exceeded them. This produced spurious warnings,
+  aggressive freezing and failsafe activation. All eight cutoff computations
+  in vacuum_get_cutoffs()/vacuum_xid_failsafe_check() now saturate at the first
+  valid ID. The 105% failsafe margin uses bounded integer arithmetic, capped
+  at INT64_MAX; UBSan reproduced the original float-to-int64 overflow at a
+  valid INT64_MAX GUC. Keep PG19's existing 95% aggressive policy, cutoffs'
+  oldest-snapshot caps and freeze eligibility. Autovacuum's score threshold
+  remains double and its force cutoffs already had underflow guards.
+  Actual-function/actual-transam fixture passes **123 cases with UBSan and
+  float-cast-overflow checks**; new live xid-64/t/008_vacuum_ages.pl passes
+  **7 assertions** for low counters/default/MAX ages and explicit zero-age
+  freezing. It does not disable ordinary or required freezing/failsafe work.
+- All four follow-up patches and a usable `series` manifest are saved in
+  patches/func/pg19xid64evoro1900/. The complete ordered series replays exactly
+  on vanilla 3421b154340 across **259 source paths**. Original v67 patches are
+  preserved. Do not rewrite/squash the main or overnight history unasked.
+- Gate 1 stopped during test-module compilation: test_slru's error callback
+  still printed a TransactionId with %u. Fixed in 87aca2ff8ca; saved patch
+  pg19-test-slru-xid-format.patch. The ordered series through that commit
+  replays exactly on vanilla 3421b154340 across 260 source paths.
+- Gate 2, source 87aca2ff8ca, completed: recovery **54 files/755 assertions**
+  passes with WAL consistency checking, subscription **39/595** passes,
+  xid64 **8/61** passes, and core regression passes. Overall check-world
+  fails on three test fixtures, corrected below; do not report a full pass.
+
+### IMPORTANT: converted hint durability; regression adaptations
+
+- **42a0b1c973e — conversion must survive hint writes.** With checksums,
+  wal_log_hints and full_page_writes off, SELECT could dirty an AIO-converted
+  page via a commit hint without WAL. CHECKPOINT persisted layout 5; primary
+  restart discarded BM_CONVERTED. Later incremental UPDATE WAL crashed the
+  standby's read of its still-layout-4 page in heap_convert.c, asserting
+  relkind != RELKIND_UNKNOWN. Reproduced with actual PG15.19 upgrade.
+- MarkSharedBufferDirtyHint now requires WAL for a converted permanent page,
+  preserving the native recovery/skip-WAL guards. A conditional critical
+  section spans dirtying through image insertion and page-LSN publication.
+  XLogSaveBufferForHint logs conversion even if the page LSN exceeds redo.
+  XLogRegisterBuffer's converted-image handling supplies the forced image;
+  AIO workers still never insert WAL. Ordinary hint-only pages are unchanged.
+- Extended pg_upgrade/t/009_xid32_to_xid64_recovery.pl passes **23 assertions**
+  with PG15.19, including hint-only SELECT, checkpoint, primary restart and
+  incremental standby replay. Failed unfixed probe logs are preserved at
+  /tmp/xid64-hint-durability-58qjkrg0. Backport to pg18xid64/Tantor 18.
+- **380de11735c — test fixtures:** restore PG19's >65535-TID-array case in
+  heap_surgery_1.out; retain xid64's existing frozen-row expectations. Use
+  the supplied combine-backup filler size 192 rather than 200 to preserve
+  the same-page update after reserving xid64 page bases. The SLRU test now
+  checks monotonic IDs across 2^32 for xid64, retaining wraparound for xid32.
+  Native surgery regression, combine-backup **39 assertions**, and SLRU
+  regression/TAP **18 assertions** pass. These are harness adaptations.
+- **d4cff03bb40 — PG19 Pointer portability:** Pointer is void *, unlike the
+  PG18 assumption in imported byte arithmetic. Use char * for WAL offsets
+  in heapam_xlog/decode and page offsets in bufpage. Affected files/world-bin
+  compile with -Werror=pointer-arith and -Werror=format. No MSVC run claimed.
+- Supplied0014 CREATE DATABASE metadata and supplied0013 double-xmax test are
+  being adapted next. Source changes remain isolated on the overnight branch.
+  Full check-world must be repeated after all pending source fixes.
