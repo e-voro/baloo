@@ -5,6 +5,16 @@ Read the tail of baloo/codex.log, inspect git status in both the main repository
 and baloo, and inspect branch history before changing anything. The report is
 historical; verify it against the actual checkout.
 
+> **CURRENT (2026-10-22): 0005 is fully adapted/applied; all mini steps
+> mini0000(verify_heapam.c) through mini0214(typedefs.list) are processed.
+> Main series through 0012 is
+> applied or explicitly superseded. Follow-up fixes are separate patches
+> listed in `patches/func/pg19xid64evoro1900/series`. Full check-world passed
+> on 9a36538da22; the subsequent VACUUM range guard 19da20487ca passed its
+> live probe and is undergoing another full gate. Automatic handling of
+> unrepresentable freeze replacements remains unresolved. See the latest
+> checkpoint below; older partial-application statements are historical.**
+
 ## IMPORTANT: PG19 prune/VM WAL and xid64 checkpoint (2026-10-02)
 
 **Standing review rule:** At every mini, inspect PG19-only code against the PG18
@@ -1233,3 +1243,116 @@ that the original PG18 caller used the wrong PG18 API.**
   handling and the already-documented hint-durability fix to Tantor 18 after
   comparing the supplied fixes. No MSVC or generic mixed-format wire protocol
   compatibility is claimed.
+
+## IMPORTANT: completed adaptation, HOT roots and freeze range limit (2026-10-22)
+
+- **0005 is complete:** all 215 mini steps are processed. The saved
+  0005 aggregate at 6400ddc9891 covers 221 files and replays on 8ca324058af.
+  Preserve that boundary: later series changes and audited fixes are separate
+  supplemental patches, not a newly expanded 0005 aggregate. Both repositories
+  remain on `pg19beta3xid64_CODEX_OVERNIGHT_20261021`; original branches and v67
+  artifacts are preserved.
+- **fbeca95f940, mini0088(heap_convert.c) follow-up:** dense legacy conversion
+  marked a dead HOT index root LP_DEAD while retaining its live heap-only
+  successor. An actual PG15 source reproduced a missing row through the
+  primary-key Index Scan while a sequential scan found it. The private-copy
+  converter now prunes HOT chains before freezing xmin: preserve original
+  updater/xmin chain identity, redirect indexed roots to surviving versions,
+  retain LP_DEAD for wholly dead indexed chains and remove eligible dead
+  heap-only items. Reject broken chains; do not freeze active/recent tuples
+  merely to fit a page. The first conversion image includes the resulting
+  line-pointer changes. Backport to pg18xid64/Tantor 18 after comparison.
+- New pg_upgrade/t/012_xid32_to_xid64_hot.pl passes **36 assertions** covering
+  dense live chains, existing redirects, deleted chains, aborted updates and
+  aborted inserts. Fixtures assert same-page storage and less than 16 free
+  bytes; forced Index Scan matches sequential scan. Streaming and primary
+  crash replay run with full_page_writes off and WAL consistency checking.
+  Failed unfixed probe: /tmp/xid64-dense-hot-2hgebgvn. An earlier probe whose
+  filler landed on another page did not exercise this case.
+- **6eca8f6c039:** live binary-XID COPY test passes **6 assertions** for full
+  unsigned-64 boundaries, low-half-first golden bytes and seven-byte input
+  rejection without changing existing rows. This completes the live follow-up
+  to the mini0103(xid.c) receiver fix; it does not change its wire layout.
+- **9a36538da22:** supplied upgrade tests enable source checksums only when
+  disabled. PG18's already-enabled default is accepted. Actual **PG15.19 and
+  PG18.4** each pass the five upgrade suites 007/009/010/011/012, **98 assertions**
+  per source. These exercise real xid32 sources, including wrapped MultiXacts,
+  nonzero epochs, backend AIO conversion, durability, CREATE DATABASE and HOT.
+  Already-xid64 source upgrades, native PG19 eight-byte offset sources and
+  live --swap remain separate validation tasks.
+
+### Visibility invocation-chain audit
+
+Repository callers and buffer-lock ownership were reviewed; retain these
+contracts when backporting or changing callers:
+
+| Entry/path | Full-XID initialization and ownership |
+| --- | --- |
+| HeapTupleSatisfiesVisibility | Dispatcher copies from the locked page before static snapshot implementations. |
+| HeapTupleSatisfiesUpdate | Entry initializes its cache; caller copies before earlier HOT/SSI checks and again after relocking when required. |
+| Vacuum / VacuumHorizon | Valid-buffer entry owns decoding, including direct prune callers; do not remove it globally. |
+| Private legacy conversion | Converter prepares full source XIDs and expands wrapped MXIDs; InvalidBuffer selects no recopy and no hint writes. |
+| PG19 batched MVCC / all-visible scan | page_collect_tuples initializes every tuple under lock before batch use or unlocked tuple delivery. |
+| HOT index search / HeapTupleIsSurelyDead | Index path initializes full XIDs before chain checks; its surely-dead call consumes that cache under the lock. |
+
+Nested Visibility -> NonVacuumable -> Horizon copies follow independent entry
+contracts and are intentional. Preserve hidden updater-XID accounting in page
+base scans. This is a repository call-chain review, not a proof about external
+extensions or every concurrent interleaving. Ordinary valid-page visibility
+and private legacy conversion must retain their distinct ownership contracts.
+
+### IMPORTANT: normal-page freeze range crash protection and remaining design
+
+- **Confirmed on 9a36538da22:** with old MultiXact 2 at page base 0, one finished
+  locker and two live lockers, freezing creates replacement MultiXact
+  2147484672. Storing it exceeds the 31-bit short-XID range and PANICs inside
+  the critical section. This is an xid64 storage issue, not evidence of a
+  vanilla PG19 regression. Reproducer explicitly jumps the counter and
+  supplies the skipped offset page in a disposable cluster; it is not a
+  natural-duration workload or a crash-recovery fixture. Failed valid probe:
+  /tmp/xid64-freeze-range-gxs3p6r5. A prior missing-offset-file fixture was
+  corrected and is not evidence for this crash.
+- **19da20487ca:** existing heap_pre_freeze_checks validates every selected
+  planned xmax before executing any freeze plans. Select the base using the
+  planned infomask (MultiXact can become an updater XID), preserve absolute
+  special IDs and reject relative special encodings or out-of-range values
+  with SQLSTATE 54000. Subtract only after checking the lower bound to avoid
+  unsigned overflow. Double-xmax pages retain direct full-width storage.
+  Freeze eligibility, snapshot cutoffs, failsafe and PG19 VM/WAL paths are
+  unchanged. Earlier visibility checks may still set ordinary hint bits.
+- Live probe `dev/tests/xid64_freeze_range/check.py PREFIX BUILD_DIR` passes
+  **10 assertions**: normal SQL error, actual planned value/base diagnostic,
+  server availability, unchanged tuple xmax and visible row, then successful
+  VACUUM and cleared xmax after lockers finish. It compiles a test-only helper
+  and changes counters/offset files only in new /tmp data. Backport crash
+  protection to pg18xid64/Tantor 18 after comparing supplied fixes.
+- **NOT a complete range solution:** the guard stops a server crash; VACUUM
+  can still fail while the incompatible range remains. Automatic rebasing
+  must account for surviving tuples and all final freeze plans, including
+  hidden updater XIDs, and WAL-log matching base changes. Calling ordinary
+  page preparation from freeze planning risks recursion through the freeze
+  fallback and cannot guarantee a representable range. Promotion to double
+  xmax is permitted only if every surviving xmin is already frozen or
+  independently eligible; active/recent tuples cannot be forcibly frozen.
+  Skipping required replacements would change FreezeLimit postconditions and
+  horizon tracking. Those alternatives are proposals for user discussion,
+  not applied fixes or completed compatibility claims.
+
+### Validation and saved artifacts
+
+- Fresh build `/tmp/pg19-xid64-final-0LJDks` enables dependency tracking,
+  assertions, TAP and injection points with -O0/-g/-Werror=format and
+  -Werror=pointer-arith. Full world-bin and full check-world with
+  `PG_TEST_EXTRA=wal_consistency_checking` **passed on 9a36538da22**: recovery
+  **54 files/755 assertions**, AIO **4/597**, xid64 **9/67**, core **246 tests**.
+  Cross-version tests are separately run with actual old installations;
+  the default full gate skips those requiring oldinstall. Log: build directory
+  `check-world.stdout`. This supersedes the stale-object gate-3 concern.
+- The guard's rebuild/live probe pass; full check-world is being repeated
+  on **19da20487ca**, log `check-world-freeze-range.stdout`. Do not attribute
+  the preceding full pass to the later guard until that run completes.
+- The manifest now contains **26 patches**. Replay against 3421b154340 matches
+  19da20487ca byte-for-byte across **268 source paths**. Baloo artifact commit
+  952a733 is recorded by separate parent 014b541c211; source fixes and artifacts
+  remain separate commits. No MSVC run or generic mixed-format replication
+  protocol compatibility is claimed.
