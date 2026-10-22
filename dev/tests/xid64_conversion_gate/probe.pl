@@ -89,16 +89,22 @@ $b->query_safe("SET application_name = 'gate_competing_reader'");
 $b->query_until(qr/reader_start/, qq{\\echo reader_start
 SELECT gate_read('gate_table','$dir/reader_returned');
 });
+my $reader_waited = 0;
 for (1 .. 100)
 {
 	last if -e "$dir/reader_returned";
-	last if $node->safe_psql('postgres', q{
+	if ($node->safe_psql('postgres', q{
 		SELECT count(*) FROM pg_stat_activity
-		WHERE application_name = 'gate_competing_reader' AND wait_event_type = 'LWLock'
-	}) eq '1';
+		WHERE application_name = 'gate_competing_reader' AND wait_event = 'BufferExclusive'
+	}) eq '1')
+	{
+		$reader_waited = 1;
+		last;
+	}
 	sleep 0.01;
 }
-ok(!-e "$dir/reader_returned", 'cache-hit read cannot return during partial publication');
+ok($reader_waited && !-e "$dir/reader_returned",
+	'cache-hit read waits on the content lock during partial publication');
 is($node->safe_psql('postgres', "SELECT gate_recent('gate_table',$buffer)"), 'f',
 	'ReadRecentBuffer rejects a partially published page');
 open(my $release, '>', "$dir/release") or die $!;
