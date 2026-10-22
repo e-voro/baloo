@@ -1,0 +1,80 @@
+From 6eca8f6c0394c9c593c16100c7ded7f90629ac2d Mon Sep 17 00:00:00 2001
+From: Evgeny Voropaev <evorop@gmail.com>
+Date: Thu, 22 Oct 2026 14:42:34 +0800
+Subject: [PATCH] Verify full-width binary xid COPY and truncated-field
+ rejection
+
+Exercise the actual sender/receiver at reserved, 32-bit, signed-64 and unsigned-64 boundaries. Assert the existing low-half-first wire bytes and normal error handling for a seven-byte datum. Six live TAP assertions pass.
+---
+ src/test/xid-64/meson.build         |  1 +
+ src/test/xid-64/t/009_binary_xid.pl | 46 +++++++++++++++++++++++++++++
+ 2 files changed, 47 insertions(+)
+ create mode 100644 src/test/xid-64/t/009_binary_xid.pl
+
+diff --git a/src/test/xid-64/meson.build b/src/test/xid-64/meson.build
+index 80153da8237..1a21d11a70d 100644
+--- a/src/test/xid-64/meson.build
++++ b/src/test/xid-64/meson.build
+@@ -12,6 +12,7 @@ tests += {
+       't/006_zeropage.pl',
+       't/007_first_multi.pl',
+       't/008_vacuum_ages.pl',
++      't/009_binary_xid.pl',
+     ],
+   },
+ }
+diff --git a/src/test/xid-64/t/009_binary_xid.pl b/src/test/xid-64/t/009_binary_xid.pl
+new file mode 100644
+index 00000000000..02ecc209dc9
+--- /dev/null
++++ b/src/test/xid-64/t/009_binary_xid.pl
+@@ -0,0 +1,46 @@
++# Verify the actual binary xid sender/receiver, including both 32-bit halves.
++use strict;
++use warnings FATAL => 'all';
++use PostgreSQL::Test::Cluster;
++use PostgreSQL::Test::Utils;
++use Test::More;
++
++my $node = PostgreSQL::Test::Cluster->new('binary_xid');
++$node->init;
++$node->start;
++my @values = qw(0 1 2 3 2147483647 2147483648 4294967295 4294967296
++  4294967299 9223372036854775807 9223372036854775808 18446744073709551615);
++my $rows = join(',', map { "('$_'::xid)" } @values);
++$node->safe_psql('postgres', "CREATE TABLE binary_xids(v xid); INSERT INTO binary_xids VALUES $rows");
++my $dir = PostgreSQL::Test::Utils::tempdir;
++my $file = "$dir/xids.copy";
++(my $sqlfile = $file) =~ s/'/''/g;
++$node->safe_psql('postgres', qq{
++	COPY binary_xids TO '$sqlfile' (FORMAT binary);
++	TRUNCATE binary_xids;
++	COPY binary_xids FROM '$sqlfile' (FORMAT binary);
++});
++is($node->safe_psql('postgres', 'SELECT v::text FROM binary_xids ORDER BY v::text::numeric'),
++	join("\n", @values), 'binary COPY round-trips reserved and full-width unsigned XIDs');
++is($node->safe_psql('postgres',
++	q{SELECT encode(xidsend('4294967299'::xid), 'hex')}),
++	'0000000300000001', 'wire format sends low 32 bits before high 32 bits');
++is($node->safe_psql('postgres',
++	q{SELECT encode(xidsend('9223372036854775808'::xid), 'hex')}),
++	'0000000080000000', 'wire format preserves the unsigned high bit');
++
++# The field declares seven bytes. The receiver must reject the missing byte
++# instead of reading across the field boundary while assembling the high half.
++open(my $fh, '>:raw', $file) or die "open $file: $!";
++print $fh "PGCOPY\n\377\r\n\0", pack('NN', 0, 0), pack('nN', 1, 7),
++	substr(pack('NN', 3, 1), 0, 7), pack('n', 65535);
++close($fh);
++my ($ret, $out, $err) = $node->psql('postgres',
++	"COPY binary_xids FROM '$sqlfile' (FORMAT binary)");
++is($ret, 3, 'binary receiver rejects a truncated XID field');
++like($err, qr/insufficient data left in message/,
++	'error identifies the incomplete binary field');
++is($node->safe_psql('postgres', 'SELECT count(*) FROM binary_xids'),
++	scalar(@values), 'failed COPY leaves existing rows unchanged');
++$node->stop;
++done_testing();
+-- 
+2.55.0
+

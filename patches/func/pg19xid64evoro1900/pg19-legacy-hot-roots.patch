@@ -1,0 +1,374 @@
+From fbeca95f94030da7e2442474e4f3e0910ac82a06 Mon Sep 17 00:00:00 2001
+From: Evgeny Voropaev <evorop@gmail.com>
+Date: Thu, 22 Oct 2026 14:32:13 +0800
+Subject: [PATCH] Preserve legacy HOT index roots when pruning during page
+ conversion
+
+Reproduce a dense xid32 source page whose surviving HOT tuple remains visible to sequential scans but disappears through its primary-key index: conversion marked the dead root LP_DEAD without redirecting it. Classify and prune complete source chains before freezing xmin, preserve roots as redirects to survivors, and free dead heap-only members. Handle existing redirects, fully dead chains and aborted HOT versions on the backend-private conversion copy. The dedicated cross-version PG15 TAP passes 36 assertions, including actual dense pages, forced index scans, standby replay and primary crash recovery with FPW disabled.
+---
+ src/backend/storage/buffer/heap_convert.c     | 158 ++++++++++++++++--
+ src/bin/pg_upgrade/meson.build                |   1 +
+ .../pg_upgrade/t/012_xid32_to_xid64_hot.pl    | 156 +++++++++++++++++
+ 3 files changed, 299 insertions(+), 16 deletions(-)
+ create mode 100644 src/bin/pg_upgrade/t/012_xid32_to_xid64_hot.pl
+
+diff --git a/src/backend/storage/buffer/heap_convert.c b/src/backend/storage/buffer/heap_convert.c
+index 525846ab234..12304398626 100644
+--- a/src/backend/storage/buffer/heap_convert.c
++++ b/src/backend/storage/buffer/heap_convert.c
+@@ -397,6 +397,145 @@ heap_page_set_base(Page page,
+ 	}
+ }
+ 
++/*
++ * Prune source HOT chains before xmin identities are frozen for double xmax.
++ * All source transactions precede the target's first normal counter.  This
++ * runs on the reading backend's private copy, before any page is exposed, so
++ * eligible tuple storage can be reclaimed and the conversion image will log
++ * the resulting redirects/dead/unused items together with the new format.
++ */
++static void
++prune_legacy_heap_page(Page page, MultiXactId source_multi_base,
++					   BlockNumber blkno)
++{
++	HeapTupleData tuples[MaxHeapTuplesPerPage + 1];
++	bool		dead[MaxHeapTuplesPerPage + 1] = {false};
++	bool		processed[MaxHeapTuplesPerPage + 1] = {false};
++	OffsetNumber maxoff = PageGetMaxOffsetNumber(page);
++
++	for (OffsetNumber off = FirstOffsetNumber; off <= maxoff; ++off)
++	{
++		ItemId		item = PageGetItemId(page, off);
++		HeapTuple	tuple = &tuples[off];
++		HTSV_Result status;
++
++		if (!ItemIdIsNormal(item))
++			continue;
++		tuple->t_data = (HeapTupleHeader) PageGetItem(page, item);
++		tuple->t_len = ItemIdGetLength(item);
++		tuple->t_tableOid = 1;
++		ItemPointerSet(&tuple->t_self, blkno, off);
++		HeapTupleCopyHeaderXids(tuple);
++		if ((tuple->t_data->t_infomask & HEAP_XMAX_IS_MULTI) &&
++			!(tuple->t_data->t_infomask & HEAP_XMAX_INVALID))
++			tuple->t_xmax = full_source_multixact(tuple->t_xmax,
++												 source_multi_base);
++		status = HeapTupleSatisfiesVacuum(tuple, UINT64CONST(1) << 32,
++									 InvalidBuffer);
++		if (status != HEAPTUPLE_LIVE && status != HEAPTUPLE_DEAD)
++			ereport(ERROR,
++					(errcode(ERRCODE_DATA_CORRUPTED),
++					 errmsg("unexpected in-progress source tuple during legacy conversion")));
++		dead[off] = status == HEAPTUPLE_DEAD;
++
++		/*
++		 * Visibility's no-buffer mode does not write hints.  On this private
++		 * copy, mark aborted insertions explicitly so their HOT flag cannot
++		 * make an unlinked aborted heap-only tuple look like a live chain.
++		 */
++		if (dead[off] && !HeapTupleHeaderXminCommitted(tuple->t_data) &&
++			!TransactionIdDidCommit(HeapTupleGetRawXmin(tuple)))
++			tuple->t_data->t_infomask |= HEAP_XMIN_INVALID;
++	}
++
++	for (OffsetNumber root = FirstOffsetNumber; root <= maxoff; ++root)
++	{
++		ItemId		rootitem = PageGetItemId(page, root);
++		OffsetNumber off;
++		OffsetNumber chain[MaxHeapTuplesPerPage];
++		int			ndead = 0;
++		TransactionId prior_xmax = InvalidTransactionId;
++
++		if (ItemIdIsRedirected(rootitem))
++			off = ItemIdGetRedirect(rootitem);
++		else if (ItemIdIsNormal(rootitem) &&
++				 !HeapTupleIsHeapOnly(&tuples[root]))
++			off = root;
++		else
++			continue;
++
++		for (;;)
++		{
++			ItemId		item;
++			HeapTuple	tuple;
++
++			if (off < FirstOffsetNumber || off > maxoff || processed[off])
++				ereport(ERROR,
++						(errcode(ERRCODE_DATA_CORRUPTED),
++						 errmsg("invalid legacy HOT chain at offset %u", root)));
++			item = PageGetItemId(page, off);
++			if (!ItemIdIsNormal(item))
++				ereport(ERROR,
++						(errcode(ERRCODE_DATA_CORRUPTED),
++						 errmsg("invalid legacy HOT successor at offset %u", off)));
++			tuple = &tuples[off];
++			if ((off != root && !HeapTupleIsHeapOnly(tuple)) ||
++				(TransactionIdIsValid(prior_xmax) &&
++				 !TransactionIdEquals(prior_xmax, HeapTupleGetXmin(tuple))))
++				ereport(ERROR,
++						(errcode(ERRCODE_DATA_CORRUPTED),
++						 errmsg("broken legacy HOT chain at offset %u", off)));
++			if (!dead[off])
++				break;
++
++			processed[off] = true;
++			chain[ndead++] = off;
++			if (!HeapTupleIsHotUpdated(tuple))
++			{
++				off = InvalidOffsetNumber;
++				break;
++			}
++			if (ItemPointerGetBlockNumber(&tuple->t_data->t_ctid) != blkno)
++				ereport(ERROR,
++						(errcode(ERRCODE_DATA_CORRUPTED),
++						 errmsg("legacy HOT chain leaves its source page")));
++			prior_xmax = HeapTupleGetUpdateXidAny(tuple);
++			off = ItemPointerGetOffsetNumber(&tuple->t_data->t_ctid);
++		}
++
++		if (ndead == 0)
++			continue;
++		for (int i = 0; i < ndead; ++i)
++		{
++			if (chain[i] != root)
++			{
++				ItemIdSetUnused(PageGetItemId(page, chain[i]));
++				PageSetHasFreeLinePointers(page);
++			}
++		}
++		if (OffsetNumberIsValid(off))
++			ItemIdSetRedirect(rootitem, off);
++		else
++			ItemIdSetDead(rootitem);
++	}
++
++	/* Aborted heap-only versions need not be linked from a surviving chain. */
++	for (OffsetNumber off = FirstOffsetNumber; off <= maxoff; ++off)
++	{
++		ItemId		item = PageGetItemId(page, off);
++
++		if (!ItemIdIsNormal(item) || !dead[off])
++			continue;
++		if (!HeapTupleIsHeapOnly(&tuples[off]) ||
++			HeapTupleIsHotUpdated(&tuples[off]))
++			ereport(ERROR,
++					(errcode(ERRCODE_DATA_CORRUPTED),
++					 errmsg("unlinked dead legacy HOT tuple at offset %u", off)));
++		ItemIdSetUnused(item);
++		PageSetHasFreeLinePointers(page);
++	}
++}
++
+ /*
+  * repack_heap_tuples
+  *		Convert heap page format reusing space of dead tuples
+@@ -430,6 +569,9 @@ repack_heap_tuples(RelationExtraData *rel_extra, RelFileLocator *relfilelocator,
+ 
+ 	toast = rel_extra->relkind == RELKIND_TOASTVALUE;
+ 
++	if (try_double_xmax)
++		prune_legacy_heap_page(page, source_multi_base, blkno);
++
+ 	if (TransactionIdIsNormal(hdr->pd_prune_xid))
+ 		xid_min = xid_max = hdr->pd_prune_xid;
+ 
+@@ -456,22 +598,6 @@ repack_heap_tuples(RelationExtraData *rel_extra, RelFileLocator *relfilelocator,
+ 		tuple.t_len = ItemIdGetLength(lp);
+ 		ItemPointerSet(&(tuple.t_self), blkno, idx + 1);
+ 
+-		/*
+-		 * This is only needed to determine whether tuple is HEAPTUPLE_DEAD or
+-		 * HEAPTUPLE_RECENTLY_DEAD. And since this is the first time we read
+-		 * page after pg_upgrade, it cannot be HEAPTUPLE_RECENTLY_DEAD. See
+-		 * HeapTupleSatisfiesVacuum() for details
+-		 *
+-		 * InvalidBuffer preserves the predecoded source XIDs and suppresses
+-		 * hint writes: conversion is working on a private page copy.
+-		 */
+-		if (try_double_xmax &&
+-			HeapTupleSatisfiesVacuum(&tuple,
+-									 (TransactionId) 1 << 32,
+-									 InvalidBuffer) == HEAPTUPLE_DEAD)
+-		{
+-			ItemIdSetDead(lp);
+-		}
+ 
+ 		if (ItemIdIsNormal(lp) && ItemIdHasStorage(lp))
+ 		{
+diff --git a/src/bin/pg_upgrade/meson.build b/src/bin/pg_upgrade/meson.build
+index eb43533e9cf..9708566845c 100644
+--- a/src/bin/pg_upgrade/meson.build
++++ b/src/bin/pg_upgrade/meson.build
+@@ -73,6 +73,7 @@ tests += {
+       't/009_xid32_to_xid64_recovery.pl',
+       't/010_xid32_to_xid64_createdb.pl',
+       't/011_xid32_to_xid64_double_xmax.pl',
++      't/012_xid32_to_xid64_hot.pl',
+     ],
+     'deps': [test_ext],
+     'test_kwargs': {'priority': 40}, # pg_upgrade tests are slow
+diff --git a/src/bin/pg_upgrade/t/012_xid32_to_xid64_hot.pl b/src/bin/pg_upgrade/t/012_xid32_to_xid64_hot.pl
+new file mode 100644
+index 00000000000..33fbfea8ea0
+--- /dev/null
++++ b/src/bin/pg_upgrade/t/012_xid32_to_xid64_hot.pl
+@@ -0,0 +1,156 @@
++# Copyright (c) 2026, Tantor Labs
++# Legacy conversion must preserve index roots while pruning source HOT chains.
++use strict;
++use warnings FATAL => 'all';
++use PostgreSQL::Test::Cluster;
++use PostgreSQL::Test::Utils;
++use Test::More;
++
++plan skip_all => 'oldinstall is required for legacy HOT conversion test'
++  unless defined $ENV{oldinstall};
++my $old = PostgreSQL::Test::Cluster->new('hot_old',
++	install_path => $ENV{oldinstall});
++$old->init(force_initdb => 1, xid32 => 1);
++$old->append_conf('postgresql.conf', 'autovacuum = off');
++$old->start;
++plan skip_all => 'source must use xid32'
++  unless $old->safe_psql('postgres',
++	q{SELECT typlen FROM pg_type WHERE oid = 'xid'::regtype}) == 4;
++if ($old->safe_psql('postgres', 'SHOW data_checksums') eq 'on')
++{
++	$old->stop;
++	$old->command_ok([$old->installed_command('pg_checksums'), '--disable',
++		'--no-sync', '--pgdata' => $old->data_dir], 'disable source checksums');
++	$old->start;
++}
++my @cases = (
++	['hot_live', 'c'], ['hot_redirect', 'd'], ['hot_deleted', ''],
++	['hot_abort_update', 'a'], ['hot_abort_insert', '']);
++my %paths;
++for my $case (@cases)
++{
++	my ($table, $value) = @$case;
++	$old->safe_psql('postgres', qq{
++		CREATE TABLE $table(id int PRIMARY KEY, payload text);
++		ALTER TABLE $table ALTER COLUMN payload SET STORAGE PLAIN;
++	});
++	$old->safe_psql('postgres', "INSERT INTO $table VALUES (1, 'a')")
++	  unless $table eq 'hot_abort_insert';
++	if ($table eq 'hot_redirect')
++	{
++		$old->safe_psql('postgres', "UPDATE $table SET payload = 'b' WHERE id = 1");
++		$old->safe_psql('postgres', "VACUUM $table");
++	}
++	# Retain old versions while the source page is filled. No heap SELECT may
++	# run after this snapshot ends: on-access pruning would hide the defect.
++	my $hold = $old->background_psql('postgres');
++	$hold->query_safe("BEGIN ISOLATION LEVEL REPEATABLE READ; SELECT count(*) FROM $table");
++	if ($table eq 'hot_abort_insert')
++	{
++		$old->safe_psql('postgres', qq{
++			BEGIN; INSERT INTO $table VALUES (1, 'a');
++			UPDATE $table SET payload = 'b' WHERE id = 1;
++			UPDATE $table SET payload = 'c' WHERE id = 1; ROLLBACK;
++		});
++	}
++	elsif ($table eq 'hot_abort_update')
++	{
++		$old->safe_psql('postgres', qq{
++			BEGIN; UPDATE $table SET payload = 'b' WHERE id = 1;
++			UPDATE $table SET payload = 'c' WHERE id = 1; ROLLBACK;
++		});
++	}
++	else
++	{
++		my ($first, $second) = $table eq 'hot_redirect' ? ('c', 'd') : ('b', 'c');
++		$old->safe_psql('postgres', "UPDATE $table SET payload = '$first' WHERE id = 1");
++		$old->safe_psql('postgres', "UPDATE $table SET payload = '$second' WHERE id = 1");
++		$old->safe_psql('postgres', "DELETE FROM $table WHERE id = 1")
++		  if $table eq 'hot_deleted';
++	}
++	# PLAIN text retains its four-byte varlena header, including for 'a'.
++	my $filler = $table eq 'hot_redirect' ? 7984 : 8000;
++	my $slot = $table eq 'hot_redirect' ? 5 : 4;
++	$old->safe_psql('postgres', "INSERT INTO $table VALUES (2, repeat('z', $filler))");
++	is($old->safe_psql('postgres', "SELECT ctid FROM $table WHERE id = 2"),
++		"(0,$slot)", "$table filler shares the original HOT page");
++	$paths{$table} = $old->safe_psql('postgres',
++		"SELECT pg_relation_filepath('$table')");
++	$hold->quit;
++}
++$old->stop;
++for my $case (@cases)
++{
++	my $table = $case->[0];
++	open(my $fh, '<:raw', $old->data_dir . '/' . $paths{$table}) or die $!;
++	read($fh, my $header, 24) == 24 or die 'short page header';
++	close($fh);
++	my ($lower, $upper) = unpack('SS', substr($header, 12, 4));
++	cmp_ok($upper - $lower, '<', 16, "$table must enter conversion's dense-page path");
++}
++
++my $new = PostgreSQL::Test::Cluster->new('hot_primary');
++$new->init(allows_streaming => 1, extra => ['--no-data-checksums']);
++$new->append_conf('postgresql.conf', qq{
++autovacuum = off
++autovacuum_freeze_max_age = 1000000000000
++autovacuum_multixact_freeze_max_age = 1000000000000
++io_method = worker
++full_page_writes = off
++wal_log_hints = off
++wal_consistency_checking = all
++});
++command_ok([
++	$new->installed_command('pg_upgrade'), '--no-sync', '--copy',
++	'--old-datadir' => $old->data_dir, '--new-datadir' => $new->data_dir,
++	'--old-bindir' => $old->config_data('--bindir'),
++	'--new-bindir' => $new->config_data('--bindir'),
++	'--socketdir' => $new->host, '--old-port' => $old->port,
++	'--new-port' => $new->port], 'upgrade source HOT chains');
++$new->backup_fs_cold('before_conversion');
++my $standby = PostgreSQL::Test::Cluster->new('hot_standby');
++$standby->init_from_backup($new, 'before_conversion', has_streaming => 1);
++$new->start;
++$standby->start;
++for my $case (@cases)
++{
++	my ($table, $value) = @$case;
++	like($new->safe_psql('postgres', qq{
++		SET enable_seqscan = off;
++		EXPLAIN SELECT payload FROM $table WHERE id = 1;
++	}), qr/Index Scan/, "$table actually uses the preserved primary-key index");
++	is($new->safe_psql('postgres', qq{
++		SET enable_seqscan = off;
++		SELECT payload FROM $table WHERE id = 1;
++	}), $value, "$table index reaches the surviving row after conversion");
++	is($new->safe_psql('postgres', qq{
++		SET enable_indexscan = off; SET enable_bitmapscan = off;
++		SELECT payload FROM $table WHERE id = 1;
++	}), $value, "$table sequential scan agrees");
++	# Force the conversion image into WAL, including the rewritten root.
++	$new->safe_psql('postgres', "UPDATE $table SET payload = repeat('q', length(payload)) WHERE id = 2");
++	$new->safe_psql('postgres', "UPDATE $table SET payload = 'new' WHERE id = 1")
++	  if length $value;
++}
++$new->wait_for_catchup($standby);
++for my $case (@cases)
++{
++	my ($table, $value) = @$case;
++	is($standby->safe_psql('postgres', qq{
++		SET enable_seqscan = off;
++		SELECT payload FROM $table WHERE id = 1;
++	}), length($value) ? 'new' : '', "$table index and HOT updates survive standby replay");
++}
++$standby->stop;
++$new->stop('immediate');
++$new->start;
++for my $case (@cases)
++{
++	my ($table, $value) = @$case;
++	is($new->safe_psql('postgres', qq{
++		SET enable_seqscan = off;
++		SELECT payload FROM $table WHERE id = 1;
++	}), length($value) ? 'new' : '', "$table index survives primary crash recovery");
++}
++$new->stop;
++done_testing();
+-- 
+2.55.0
+

@@ -21,3 +21,7 @@ pg19-byte-pointer-arithmetic.patch
 pg19-createdb-conversion-metadata.patch
 pg19-double-xmax-upgrade-test.patch
 pg19-backend-page-conversion.patch
+pg19-legacy-hot-roots.patch
+pg19-binary-xid-test.patch
+pg19-upgrade-source-checksums.patch
+pg19-freeze-xmax-range-check.patch

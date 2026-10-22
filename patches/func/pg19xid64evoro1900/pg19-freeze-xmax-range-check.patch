@@ -1,0 +1,63 @@
+From 19da20487caaa5e03c92a3f42d3687d32cfd4e2d Mon Sep 17 00:00:00 2001
+From: Evgeny Voropaev <evorop@gmail.com>
+Date: Thu, 22 Oct 2026 15:11:55 +0800
+Subject: [PATCH] Reject unrepresentable freeze xmax before entering critical
+ section
+
+A replacement MultiXact or extracted updater XID need not fit a normal heap page's existing base. Validate the planned value and infomask in heap_pre_freeze_checks so a storage-range limit raises SQL ERROR before any freeze plan is applied, rather than PANIC during the short-XID store. Double-xmax pages retain their full-width storage path. Automatic range rebasing or layout promotion remains separate work.
+---
+ src/backend/access/heap/heapam.c | 31 +++++++++++++++++++++++++++++--
+ 1 file changed, 29 insertions(+), 2 deletions(-)
+
+diff --git a/src/backend/access/heap/heapam.c b/src/backend/access/heap/heapam.c
+index cd8a48b880f..9e5cfa03aa6 100644
+--- a/src/backend/access/heap/heapam.c
++++ b/src/backend/access/heap/heapam.c
+@@ -7759,8 +7759,8 @@ heap_prepare_freeze_tuple(HeapTuple htup,
+ }
+ 
+ /*
+- * Perform xmin/xmax XID status sanity checks before actually executing freeze
+- * plans.
++ * Check planned xmax storage and xmin/xmax transaction status before actually
++ * executing freeze plans.
+  *
+  * heap_prepare_freeze_tuple doesn't perform these checks directly because
+  * pg_xact lookups are relatively expensive.  They shouldn't be repeated by
+@@ -7778,6 +7778,33 @@ heap_pre_freeze_checks(Relation rel, Buffer buffer,
+ 		ItemId		itemid = PageGetItemId(page, frz->offset);
+ 		HeapTupleData tuple;
+ 
++		/*
++		 * Freezing can replace an old MultiXact with a newly allocated one,
++		 * or with its updater XID.  Neither is guaranteed to fit the page's
++		 * existing base.  Reject an unrepresentable plan before modifying any
++		 * tuples in the critical section, where the short-XID store would
++		 * otherwise PANIC.  Use the planned infomask to select the new base.
++		 * Double-xmax pages store the full value and need no range check.
++		 */
++		if (!HeapPageIsDoubleXmax(page) && TransactionIdIsNormal(frz->xmax))
++		{
++			bool		multi = (frz->t_infomask & HEAP_XMAX_IS_MULTI) != 0;
++			TransactionId base = multi ? HeapPageGetSpecial(page)->pd_multi_base :
++				PageGetSpecialXidBase(page);
++
++			/* Short values 0, 1 and 2 decode as absolute special IDs. */
++			if (frz->xmax < base ||
++				frz->xmax - base < FirstNormalTransactionId ||
++				frz->xmax - base > MaxShortTransactionId)
++				ereport(ERROR,
++						(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
++						 errmsg("cannot freeze tuple with an xmax outside the heap page's XID range"),
++						 errdetail("Tuple at offset %u in block %u has planned xmax %" PRIu64 " with page base %" PRIu64 ".",
++								   frz->offset, BufferGetBlockNumber(buffer),
++								   frz->xmax, base),
++						 errhint("Retry after older transactions have finished.")));
++		}
++
+ 		tuple.t_data = (HeapTupleHeader) PageGetItem(page, itemid);
+ 		tuple.t_len = ItemIdGetLength(itemid);
+ 		tuple.t_tableOid = RelationGetRelid(rel);
+-- 
+2.55.0
+

@@ -1,0 +1,90 @@
+From 9a36538da2241be975f4bcb3c5f4d1aef378e1de Mon Sep 17 00:00:00 2001
+From: Evgeny Voropaev <evorop@gmail.com>
+Date: Thu, 22 Oct 2026 14:42:35 +0800
+Subject: [PATCH] Respect source checksum state in xid64 upgrade regression
+ setup
+
+PG18 enables checksums by default, so enable only when SHOW reports off instead of failing on an already-enabled source. Check source XID width before optional checksum assertions. All five cross-version suites pass 98 assertions with native PG18.4; the two affected PG15.19 suites still pass 22 assertions.
+---
+ .../t/010_xid32_to_xid64_createdb.pl          | 15 ++++++++---
+ .../t/011_xid32_to_xid64_double_xmax.pl       | 26 +++++++++++--------
+ 2 files changed, 26 insertions(+), 15 deletions(-)
+
+diff --git a/src/bin/pg_upgrade/t/010_xid32_to_xid64_createdb.pl b/src/bin/pg_upgrade/t/010_xid32_to_xid64_createdb.pl
+index 06fe8c82d6e..8dddd51c807 100644
+--- a/src/bin/pg_upgrade/t/010_xid32_to_xid64_createdb.pl
++++ b/src/bin/pg_upgrade/t/010_xid32_to_xid64_createdb.pl
+@@ -14,15 +14,22 @@ my $oldnode = PostgreSQL::Test::Cluster->new(
+ 	'createdb_old', install_path => $ENV{oldinstall});
+ $oldnode->init(force_initdb => 1, xid32 => 1);
+ $oldnode->append_conf('postgresql.conf', 'autovacuum = off');
+-$oldnode->command_ok([
+-	$oldnode->installed_command('pg_checksums'), '--enable', '--no-sync',
+-	'--pgdata' => $oldnode->data_dir
+-], 'enable source checksums to match the target cluster');
+ $oldnode->start;
+ plan skip_all => 'source cluster must use xid32'
+   unless $oldnode->safe_psql('postgres',
+ 	q{SELECT typlen FROM pg_type WHERE oid = 'xid'::regtype}) eq '4';
+ 
++# PG18 enables checksums by default; older sources may need enabling.
++if ($oldnode->safe_psql('postgres', 'SHOW data_checksums') eq 'off')
++{
++	$oldnode->stop;
++	$oldnode->command_ok([
++		$oldnode->installed_command('pg_checksums'), '--enable', '--no-sync',
++		'--pgdata' => $oldnode->data_dir
++	], 'enable source checksums to match the target cluster');
++	$oldnode->start;
++}
++
+ my $newnode = PostgreSQL::Test::Cluster->new('createdb_new');
+ $newnode->init;
+ $newnode->append_conf('postgresql.conf', qq{
+diff --git a/src/bin/pg_upgrade/t/011_xid32_to_xid64_double_xmax.pl b/src/bin/pg_upgrade/t/011_xid32_to_xid64_double_xmax.pl
+index b13b3a923f9..aad41b1fdf8 100644
+--- a/src/bin/pg_upgrade/t/011_xid32_to_xid64_double_xmax.pl
++++ b/src/bin/pg_upgrade/t/011_xid32_to_xid64_double_xmax.pl
+@@ -44,17 +44,6 @@ $oldnode->init(
+ 	xid32 => 1);
+ $oldnode->append_conf('postgresql.conf', "autovacuum = off\n");
+ 
+-# initdb on pre-18 sources does not enable data checksums, but the target
+-# cluster has them on by default and pg_upgrade refuses mismatched settings.
+-$oldnode->command_ok(
+-	[
+-		$oldnode->installed_command('pg_checksums'),
+-		'--enable',
+-		'--no-sync',
+-		'--pgdata' => $oldnode->data_dir
+-	],
+-	'data checksums enabled in old cluster');
+-
+ $oldnode->start;
+ 
+ my $old_xid_size = $oldnode->safe_psql(
+@@ -69,6 +58,21 @@ my $old_xid_size = $oldnode->safe_psql(
+ plan skip_all => "source cluster is not xid32 (xid size $old_xid_size)"
+   unless $old_xid_size eq '4';
+ 
++# PG18 enables checksums by default; older sources may need enabling.
++if ($oldnode->safe_psql('postgres', 'SHOW data_checksums') eq 'off')
++{
++	$oldnode->stop;
++	$oldnode->command_ok(
++		[
++			$oldnode->installed_command('pg_checksums'),
++			'--enable',
++			'--no-sync',
++			'--pgdata' => $oldnode->data_dir
++		],
++		'data checksums enabled in old cluster');
++	$oldnode->start;
++}
++
+ my $newnode = PostgreSQL::Test::Cluster->new('dxmax_new');
+ $newnode->init;
+ $newnode->append_conf('postgresql.conf', qq{
+-- 
+2.55.0
+
