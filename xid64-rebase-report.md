@@ -2,13 +2,19 @@
 
 ## Current status (2026-10-22)
 
+Latest source 12ff893c75f corrects a confirmed early-return race during page
+conversion publication using an atomic pending flag. The targeted access-path
+probe passes 17 assertions; full check-world and both actual-source upgrade
+runs pass on this correction (exit 0). The complete access matrix and test
+limits are in the pending-access re-audit section of AGENTS.md.
+
 **0005 is fully adapted and applied**, including all 215 mini steps.
 The main series through 0012 is applied or explicitly superseded. Follow-up
 fixes are saved separately in `patches/func/pg19xid64evoro1900/series`;
 the original v67 patches and original branches remain preserved. Active source
 and Baloo branch: `pg19beta3xid64_CODEX_OVERNIGHT_20261021`.
 
-- Source 19da20487ca passes a fresh full build and check-world with assertions,
+- Source 12ff893c75f passes a fresh full build and check-world with assertions,
   TAP, injection points and WAL consistency checking (recovery 755 assertions).
 - Actual PG15.19 and PG18.4 each pass five cross-version upgrade suites,
   98 assertions per source. This does not cover every source layout or --swap.

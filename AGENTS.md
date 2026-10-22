@@ -10,7 +10,8 @@ historical; verify it against the actual checkout.
 > Main series through 0012 is
 > applied or explicitly superseded. Follow-up fixes are separate patches
 > listed in `patches/func/pg19xid64evoro1900/series`. Full check-world passed
-> on 19da20487ca, including the VACUUM range guard and recovery's 755
+> on 12ff893c75f, including the atomic conversion-readiness correction,
+> the VACUUM range guard and recovery's 755
 > assertions. Actual PG15.19 and PG18.4 upgrades each pass 98 assertions.
 > Automatic handling of
 > unrepresentable freeze replacements remains unresolved. See the latest
@@ -1366,3 +1367,79 @@ and private legacy conversion must retain their distinct ownership contracts.
   952a733 is recorded by separate parent 014b541c211; source fixes and artifacts
   remain separate commits. No MSVC run or generic mixed-format replication
   protocol compatibility is claimed.
+
+## IMPORTANT: re-audit of pending page access and publication (2026-10-22)
+
+**This supersedes the earlier claim that an unlocked current-version test
+proves conversion complete.** The user challenged that assumption and asked
+for a renewed audit of every access path. No source changes preceded the
+audit. The checked-in core/contrib acquisition paths are covered by the
+contracts below; this is not a claim about arbitrary external extensions.
+
+- **Confirmed race, corrected in 12ff893c75f:** full-page memcpy can publish
+  layout version 5 before line pointers, special space and tuple bytes. Both
+  FinishReadBufferConversion and ReadRecentBuffer could then return early.
+  A deterministic injection point pauses after the header copy: both checks
+  fail on the old implementation and pass after the correction. This proves
+  premature API return, not a demonstrated incorrect SQL tuple result;
+  ordinary tuple readers also take a content lock.
+- **New readiness protocol:** successful legacy I/O publishes BM_VALID,
+  BM_CONVERTED and BM_CONVERSION_PENDING in the same buffer-state update.
+  BM_VALID still denotes completed physical input. A pin prevents eviction;
+  it does not imply conversion readiness. Any ordinary reader with relation
+  metadata may finish conversion. An exclusive content lock serializes
+  converters; recheck the pending bit after locking. Clear it with a full
+  barrier atomic operation only after installing the full copy. Fast readers
+  use the pending bit plus a read barrier, never an unlocked page version.
+  BM_CONVERTED independently retains the first-image WAL obligation.
+- The in-memory flag field grows from 12 to 13 bits within the existing
+  uint64 state, moving derived content-lock bit positions by one. All masks
+  and invalidation/reuse reset paths use the shared definitions. Rebuild
+  core and modules together. Page/WAL formats and BufferDesc size are unchanged.
+  CheckReadBuffersOperation asserts no pending conversion on complete returns.
+
+| Access/acquisition path | Required handling |
+| --- | --- |
+| ReadBuffer / Extended / Normal / ZERO_ON_ERROR | Normal StartReadBuffer + WaitReadBuffers path completes conversion before return; zero-damaged/new pages have no legacy tuple payload. |
+| StartReadBuffer(s), first cache hit | FinishReadBufferConversion before the false/ready return. |
+| Already-pinned forwarded buffers | Re-enter StartReadBuffersImpl, test BM_VALID, then run the same conversion gate before delivery. |
+| Race where another backend completes I/O before AsyncReadBuffers | The no-I/O return runs the gate for every accepted buffer. |
+| WaitReadBuffers: own I/O, foreign I/O, partial reads, synchronous reads | Every completed range reaches the final conversion loop before return. |
+| read_stream fast path, batching, queue wrap, forwarding | Only entries completed through Start/Wait may be returned; forwarded entries are resubmitted, not consumed directly. |
+| ReadRecentBuffer and recovery's recent-buffer shortcut | Reject pending buffers and unpin; caller falls back to the ordinary read path. |
+| ReadBufferWithoutRelcache / smgr read streams | Pending legacy pages require explicit by-value metadata; missing metadata raises ordinary ERROR without returning legacy tuple bytes. Current/overwritten pages need none. CREATE DATABASE supplies source metadata. |
+| ZERO_AND_LOCK / ZERO_AND_CLEANUP_LOCK, new pages, relation extension | Explicit initialization/overwrite contract, not ordinary tuple access. Hash init callers initialize; redo WILL_INIT/FPI replaces contents under the lock. Normal later readers clear a conservative pending bit only after checking the replacement under lock. |
+| Incremental redo / full-image redo | Normal reads use the gate; conversion's first-image WAL restores current layout via the overwrite path. Never interpret an unknown legacy heap using absent relcache metadata. |
+| Checkpoint, bgwriter, flush, eviction, drop/truncate | Direct pins inspect metadata or write dirty pages under native locks. A newly read pending legacy page is clean; an explicit overwrite initializes before dirtying. Invalidation clears all flags. No tuple interpretation is performed by these scans. |
+| Existing private pins, scan/index/contrib tuple consumers, parallel scans | A usable page originates from a completed read; retain native pin/content-lock rules. IncrBufferRefCount alone does not turn an unfinished I/O buffer into a readable page. |
+| Local buffers / temporary relations | Old temporary files are not transferred by upgrade; local pages start in current format. Normal relation reads reject another backend's temporary relation. |
+| pg_buffercache / autoprewarm direct descriptor scans | Inspect descriptors, statistics or residency; do not interpret heap tuple layout. pageinspect/visibility/amcheck/pgstattuple use normal reads and their content locks. |
+| Direct smgr/file copies, base backup and unlogged reset | Physical copies may retain legacy bytes intentionally; subsequent buffered tuple reads still use the gate. Offline/raw bytes are not promised to be current heap layout. |
+
+- `dev/tests/xid64_conversion_gate/check.py PREFIX BUILD OLDINSTALL` passes
+  **17 assertions** with actual PG15 source: partial publication with two
+  readers, recent-buffer rejection/acceptance, metadata-free ERROR twice and
+  successful retry, abandoned physical I/O, explicit logged overwrite and
+  metadata-free access afterward, plus waited/forwarded blocks in a split
+  read. The overwrite uses XLogRegisterBlock and may conservatively retain
+  markers; the next normal read clears pending after verifying the new page.
+- Valid unfixed failure: /tmp/xid64-conversion-gate-q0h1gszu (2/6 failures).
+  Corrected strengthened probe: /tmp/xid64-conversion-gate-kqeidup6 (17 passes),
+  including observed BufferExclusive waiting by the competing reader.
+  Earlier fixture library-lookup failure is not evidence of the race.
+- Full world-bin and **full check-world on 12ff893c75f pass (exit 0)** with
+  dependency tracking/assertions/injection points and WAL consistency
+  checking: recovery **54/755**, AIO **4/597**, xid64 **9/67**, subscription
+  **39/595**, core **246 tests**. Log:
+  /tmp/pg19-xid64-final-0LJDks/check-world-conversion-pending.stdout.
+  Source stayed fixed throughout; subsequent commits save artifacts/docs only.
+- Actual PG15.19 and PG18.4 each pass the five upgrade/recovery suites,
+  **98 assertions per source**, against this correction (both exit 0).
+  Log: build directory check-legacy-conversion-pending.stdout. New module and
+  core flag-layout compatibility was checked by the full dependency rebuild.
+- All **27 patches** replay from 3421b154340 to 12ff893c75f byte-for-byte
+  across **268 source paths**. Source correction and saved probe/artifacts
+  remain separate commits on the alternate branch.
+- **Needed for rebase to Tantor 18:** compare/backport atomic conversion
+  readiness, including all normal/recent read gates, publication barriers,
+  overwrite handling and the in-memory flag-layout rebuild requirement.
