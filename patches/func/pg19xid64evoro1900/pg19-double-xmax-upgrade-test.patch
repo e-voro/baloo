@@ -1,0 +1,246 @@
+From 56da45eb194f37b7b7425dd26f4bea6a48be7d07 Mon Sep 17 00:00:00 2001
+From: Evgeny Voropaev <evorop@gmail.com>
+Date: Wed, 21 Oct 2026 20:57:33 +0800
+Subject: [PATCH] Exercise supplied double-xmax VACUUM regression on PG19
+ upgrades
+
+Retain the partial-update workload without an intervening heap SELECT. Verify genuine converted double-xmax pages directly after checkpoint, so hint-setting cannot mask the original bug. Use PG19 test number 011 and prevent forced autovacuum from pre-converting the fixture. Both CREATE DATABASE and double-xmax TAP files pass 22 assertions against PG15.19.
+---
+ src/bin/pg_upgrade/meson.build                |   1 +
+ .../t/011_xid32_to_xid64_double_xmax.pl       | 212 ++++++++++++++++++
+ 2 files changed, 213 insertions(+)
+ create mode 100644 src/bin/pg_upgrade/t/011_xid32_to_xid64_double_xmax.pl
+
+diff --git a/src/bin/pg_upgrade/meson.build b/src/bin/pg_upgrade/meson.build
+index 0030031d816..eb43533e9cf 100644
+--- a/src/bin/pg_upgrade/meson.build
++++ b/src/bin/pg_upgrade/meson.build
+@@ -72,6 +72,7 @@ tests += {
+       't/008_extension_control_path.pl',
+       't/009_xid32_to_xid64_recovery.pl',
+       't/010_xid32_to_xid64_createdb.pl',
++      't/011_xid32_to_xid64_double_xmax.pl',
+     ],
+     'deps': [test_ext],
+     'test_kwargs': {'priority': 40}, # pg_upgrade tests are slow
+diff --git a/src/bin/pg_upgrade/t/011_xid32_to_xid64_double_xmax.pl b/src/bin/pg_upgrade/t/011_xid32_to_xid64_double_xmax.pl
+new file mode 100644
+index 00000000000..b13b3a923f9
+--- /dev/null
++++ b/src/bin/pg_upgrade/t/011_xid32_to_xid64_double_xmax.pl
+@@ -0,0 +1,212 @@
++# Copyright (c) 2026, Tantor Labs
++#
++# TTDB-2707: 32-bit -> 64-bit XID upgrade leaves duplicate PRIMARY KEY rows
++# after UPDATE + VACUUM.
++#
++# When a 32-bit XID cluster is converted to the 64-bit XID format, a heap page
++# that has less than MAXALIGN(sizeof(HeapPageSpecialData)) bytes of free space
++# cannot hold the page special area, so it is converted to the "double xmax"
++# layout instead.  A double xmax page reports pd_special == BLCKSZ; its tuples
++# no longer store a short xmin at all -- t_xmin and t_xmax are reused to keep
++# the full 64-bit xmax and the xmin is implicitly frozen.
++#
++# HeapTupleSatisfiesVacuumHorizon() guarded HeapTupleCopyXidsFromPage() with
++# "if (PageGetSpecialSize(page))", intending to skip only unconverted 32-bit
++# pages.  A double xmax page reports PageGetSpecialSize() == 0 as well, so its
++# tuple XIDs were never decoded: t_xmin/t_xmax were left at whatever the caller
++# had.  VACUUM therefore resolved the updating XID from a bogus value, decided
++# the (committed) update had aborted, set HEAP_XMAX_INVALID and kept the
++# superseded tuple as HEAPTUPLE_LIVE.  Both row versions stay visible, which
++# shows up as duplicated PRIMARY KEY values.
++#
++# A SELECT between UPDATE and VACUUM hides the bug: the MVCC path does decode
++# double xmax pages, so it records HEAP_XMAX_COMMITTED and VACUUM no longer
++# has to resolve the status itself.
++
++use strict;
++use warnings FATAL => 'all';
++
++use PostgreSQL::Test::Cluster;
++use PostgreSQL::Test::Utils;
++use Test::More;
++
++plan skip_all => 'oldinstall is required for xid32 to xid64 test'
++  unless defined $ENV{oldinstall};
++
++my $mode = $ENV{PG_TEST_PG_UPGRADE_MODE} || '--copy';
++
++my $oldnode = PostgreSQL::Test::Cluster->new(
++	'dxmax_old',
++	install_path => $ENV{oldinstall});
++
++$oldnode->init(
++	force_initdb => 1,
++	xid32 => 1);
++$oldnode->append_conf('postgresql.conf', "autovacuum = off\n");
++
++# initdb on pre-18 sources does not enable data checksums, but the target
++# cluster has them on by default and pg_upgrade refuses mismatched settings.
++$oldnode->command_ok(
++	[
++		$oldnode->installed_command('pg_checksums'),
++		'--enable',
++		'--no-sync',
++		'--pgdata' => $oldnode->data_dir
++	],
++	'data checksums enabled in old cluster');
++
++$oldnode->start;
++
++my $old_xid_size = $oldnode->safe_psql(
++	'postgres',
++	q{
++        SELECT typlen
++        FROM pg_type
++        WHERE typname = 'xid'
++          AND typnamespace = 'pg_catalog'::regnamespace
++    });
++
++plan skip_all => "source cluster is not xid32 (xid size $old_xid_size)"
++  unless $old_xid_size eq '4';
++
++my $newnode = PostgreSQL::Test::Cluster->new('dxmax_new');
++$newnode->init;
++$newnode->append_conf('postgresql.conf', qq{
++autovacuum = off
++autovacuum_freeze_max_age = 1000000000000
++autovacuum_multixact_freeze_max_age = 1000000000000
++});
++$newnode->start;
++
++my $new_xid_size = $newnode->safe_psql(
++	'postgres',
++	q{
++        SELECT typlen
++        FROM pg_type
++        WHERE typname = 'xid'
++          AND typnamespace = 'pg_catalog'::regnamespace
++    });
++
++$newnode->stop;
++
++plan skip_all => "target cluster is not xid64 (xid size $new_xid_size)"
++  unless $new_xid_size eq '8';
++
++# Reproduce the source table from the report.  Variable-width rows pack pages
++# almost exactly, so a good fraction of them end up with less than 16 bytes of
++# free space and are converted to the double xmax layout.
++$oldnode->safe_psql(
++	'postgres',
++	q{
++        CREATE TABLE t (
++            id uuid PRIMARY KEY,
++            code varchar(25),
++            value numeric(16,8),
++            min_amount numeric(17,2),
++            max_amount numeric(17,2),
++            start_date date,
++            end_date date,
++            effective_date timestamptz,
++            is_actual boolean,
++            entity_version int DEFAULT 1,
++            id_in_2230 uuid,
++            update_time timestamp
++        );
++
++        INSERT INTO t
++        SELECT md5('id' || g)::uuid,
++               left(md5(g::text), 1 + (g * 7) % 25),
++               round((g % 1000) + (g % 97) / 97.0, g % 8),
++               CASE WHEN g % 3 = 0 THEN NULL ELSE 100 END,
++               CASE WHEN g % 5 = 0 THEN NULL ELSE 999999.99 END,
++               date '2025-11-25', date '2026-05-24',
++               timestamptz '2025-11-25 04:56:16+03', true, 1,
++               CASE WHEN g % 2 = 0 THEN md5('ext' || g)::uuid END,
++               CASE WHEN g % 4 = 0 THEN NULL ELSE timestamp '2025-11-25 01:56:16' END
++        FROM generate_series(1, 50000) g;
++
++        VACUUM FREEZE t;
++    });
++
++is(
++	$oldnode->safe_psql('postgres', 'SELECT count(*) FROM t'),
++	'50000',
++	'source table populated');
++
++$oldnode->stop;
++
++my $oldbindir = $oldnode->config_data('--bindir');
++my $newbindir = $newnode->config_data('--bindir');
++
++command_ok(
++	[
++		$newnode->installed_command('pg_upgrade'),
++		'--no-sync',
++		'--old-datadir' => $oldnode->data_dir,
++		'--new-datadir' => $newnode->data_dir,
++		'--old-bindir' => $oldbindir,
++		'--new-bindir' => $newbindir,
++		'--socketdir' => $newnode->host,
++		'--old-port' => $oldnode->port,
++		'--new-port' => $newnode->port,
++		$mode,
++	],
++	'upgrade xid32 cluster with nearly-full heap pages');
++
++$newnode->start;
++
++# The reproducer from the report: update a few rows that live on the heap pages
++# the converter places in the double xmax layout, then VACUUM.
++#
++# Only a part of each such page is superseded on purpose.  Updating every row
++# of the table hides the bug, because the whole page then becomes dead and
++# pruning can throw the line pointers away without having to classify each
++# tuple.  Taking the first tuple of each early page keeps those pages partially
++# dead and does not depend on one particular page number.
++$newnode->safe_psql(
++	'postgres',
++	q{
++        UPDATE t SET entity_version = entity_version + 1
++            WHERE (ctid::text::point)[0]::int BETWEEN 2 AND 200
++              AND (ctid::text::point)[1]::int = 1;
++    });
++
++# Verify that this run exercises genuine double-xmax pages, without a heap
++# SELECT that could set commit hints and hide the original VACUUM defect.
++$newnode->safe_psql('postgres', 'CHECKPOINT');
++my $path = $newnode->safe_psql('postgres',
++	q{SELECT pg_relation_filepath('t')});
++my $blcksz = $newnode->safe_psql('postgres', 'SHOW block_size');
++open(my $fh, '<:raw', $newnode->data_dir . '/' . $path) or die "open $path: $!";
++my $double_pages = 0;
++while (read($fh, my $page, $blcksz) == $blcksz)
++{
++	my ($special, $size_version) = unpack('SS', substr($page, 16, 4));
++	$double_pages++ if $special == $blcksz && ($size_version & 0xff) == 5;
++}
++close($fh);
++ok($double_pages > 0, 'updated table contains converted double-xmax pages');
++
++$newnode->safe_psql('postgres', 'VACUUM t');
++
++is(
++	$newnode->safe_psql('postgres', 'SELECT count(*) FROM t'),
++	'50000',
++	'VACUUM removed the superseded row versions');
++
++# Principal regression assertion: without the bug this is 0.  The buggy code
++# reports one duplicate per row that lived on a converted double xmax page.
++is(
++	$newnode->safe_psql(
++		'postgres',
++		q{
++        SELECT count(*) FROM (
++            SELECT id FROM t GROUP BY id HAVING count(*) > 1
++        ) d
++    }),
++	'0',
++	'no duplicate PRIMARY KEY values after UPDATE + VACUUM');
++
++$newnode->stop;
++
++done_testing();
+-- 
+2.55.0
+

@@ -18,3 +18,6 @@ pg19-test-slru-xid-format.patch
 pg19-hint-conversion-durability.patch
 pg19-regression-fixtures.patch
 pg19-byte-pointer-arithmetic.patch
+pg19-createdb-conversion-metadata.patch
+pg19-double-xmax-upgrade-test.patch
+pg19-backend-page-conversion.patch

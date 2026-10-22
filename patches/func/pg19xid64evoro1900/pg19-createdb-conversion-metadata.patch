@@ -1,0 +1,402 @@
+From e994dd04c515919d4ec004a220ab6f5ca44d572b Mon Sep 17 00:00:00 2001
+From: Evgeny Voropaev <evorop@gmail.com>
+Date: Wed, 21 Oct 2026 20:57:33 +0800
+Subject: [PATCH] Pass source relation conversion metadata through PG19
+ database copy reads
+
+Adapt supplied0014 while preserving PG19 read-stream batching, callbacks and worker configuration. Copy relation kind and freeze horizons from source pg_class through per-operation and shared AIO value fields, without backend-private pointers. Register a distinct TAP number because PG19 already has test 008. CREATE DATABASE coverage passes against PG15.19 using sync/worker and WAL_LOG/FILE_COPY paths.
+---
+ src/backend/commands/dbcommands.c             |   9 +-
+ src/backend/storage/aio/read_stream.c         |  15 +-
+ src/backend/storage/buffer/bufmgr.c           |  25 ++--
+ src/backend/storage/buffer/heap_convert.c     |   9 +-
+ src/bin/pg_upgrade/meson.build                |   1 +
+ .../t/010_xid32_to_xid64_createdb.pl          | 128 ++++++++++++++++++
+ src/include/storage/bufmgr.h                  |   4 +-
+ src/include/storage/read_stream.h             |   3 +-
+ 8 files changed, 178 insertions(+), 16 deletions(-)
+ create mode 100644 src/bin/pg_upgrade/t/010_xid32_to_xid64_createdb.pl
+
+diff --git a/src/backend/commands/dbcommands.c b/src/backend/commands/dbcommands.c
+index 24449f01ec9..add085e9515 100644
+--- a/src/backend/commands/dbcommands.c
++++ b/src/backend/commands/dbcommands.c
+@@ -110,6 +110,7 @@ typedef struct CreateDBRelInfo
+ 	RelFileLocator rlocator;	/* physical relation identifier */
+ 	Oid			reloid;			/* relation oid */
+ 	bool		permanent;		/* relation is permanent or unlogged */
++	RelationExtraData rel_extra; /* source tuple conversion metadata */
+ } CreateDBRelInfo;
+ 
+ 
+@@ -217,7 +218,8 @@ CreateDatabaseUsingWalLog(Oid src_dboid, Oid dst_dboid,
+ 		LockRelationId(&dstrelid, AccessShareLock);
+ 
+ 		/* Copy relation storage from source to the destination. */
+-		CreateAndCopyRelationData(srcrlocator, dstrlocator, relinfo->permanent);
++		CreateAndCopyRelationData(srcrlocator, dstrlocator, relinfo->permanent,
++								  &relinfo->rel_extra);
+ 
+ 		/* Release the relation locks. */
+ 		UnlockRelationId(&srcrelid, AccessShareLock);
+@@ -449,6 +451,11 @@ ScanSourceDatabasePgClassTuple(HeapTupleData *tuple, Oid tbid, Oid dbid,
+ 	relinfo->rlocator.relNumber = relfilenumber;
+ 	relinfo->reloid = classForm->oid;
+ 
++	/* Cross-database reads cannot use the connected database's relcache. */
++	relinfo->rel_extra.relfrozenxid = classForm->relfrozenxid;
++	relinfo->rel_extra.relminmxid = classForm->relminmxid;
++	relinfo->rel_extra.relkind = classForm->relkind;
++
+ 	/* Temporary relations were rejected above. */
+ 	Assert(classForm->relpersistence != RELPERSISTENCE_TEMP);
+ 	relinfo->permanent =
+diff --git a/src/backend/storage/aio/read_stream.c b/src/backend/storage/aio/read_stream.c
+index e7dbbe03326..f70b7a51b61 100644
+--- a/src/backend/storage/aio/read_stream.c
++++ b/src/backend/storage/aio/read_stream.c
+@@ -959,6 +959,8 @@ read_stream_begin_impl(int flags,
+ 	for (int i = 0; i < max_ios; ++i)
+ 	{
+ 		stream->ios[i].op.rel = rel;
++		stream->ios[i].op.rel_extra = (RelationExtraData)
++			{InvalidTransactionId, InvalidMultiXactId, RELKIND_UNKNOWN};
+ 		stream->ios[i].op.smgr = smgr;
+ 		stream->ios[i].op.persistence = persistence;
+ 		stream->ios[i].op.forknum = forknum;
+@@ -994,6 +996,7 @@ read_stream_begin_relation(int flags,
+ 
+ /*
+  * Create a new read stream for reading a SMgr relation.
++ * rel_extra supplies conversion metadata unavailable without a Relation.
+  * See read_stream_begin_impl() for the detailed explanation.
+  */
+ ReadStream *
+@@ -1004,9 +1007,10 @@ read_stream_begin_smgr_relation(int flags,
+ 								ForkNumber forknum,
+ 								ReadStreamBlockNumberCB callback,
+ 								void *callback_private_data,
+-								size_t per_buffer_data_size)
++								size_t per_buffer_data_size,
++								const RelationExtraData *rel_extra)
+ {
+-	return read_stream_begin_impl(flags,
++	ReadStream *stream = read_stream_begin_impl(flags,
+ 								  strategy,
+ 								  NULL,
+ 								  smgr,
+@@ -1015,6 +1019,13 @@ read_stream_begin_smgr_relation(int flags,
+ 								  callback,
+ 								  callback_private_data,
+ 								  per_buffer_data_size);
++
++	/* The caller may release its descriptor once the stream has been built. */
++	Assert(rel_extra != NULL);
++	for (int i = 0; i < stream->max_ios; ++i)
++		stream->ios[i].op.rel_extra = *rel_extra;
++
++	return stream;
+ }
+ 
+ /*
+diff --git a/src/backend/storage/buffer/bufmgr.c b/src/backend/storage/buffer/bufmgr.c
+index 11792f8453e..c230c3d9434 100644
+--- a/src/backend/storage/buffer/bufmgr.c
++++ b/src/backend/storage/buffer/bufmgr.c
+@@ -664,7 +664,8 @@ static void FindAndDropRelationBuffers(RelFileLocator rlocator,
+ 									   BlockNumber firstDelBlock);
+ static void RelationCopyStorageUsingBuffer(RelFileLocator srclocator,
+ 										   RelFileLocator dstlocator,
+-										   ForkNumber forkNum, bool permanent);
++										   ForkNumber forkNum, bool permanent,
++										   const RelationExtraData *rel_extra);
+ static void AtProcExit_Buffers(int code, Datum arg);
+ static void CheckForBufferLeaks(void);
+ #ifdef USE_ASSERT_CHECKING
+@@ -1355,6 +1356,8 @@ ReadBuffer_common(Relation rel, SMgrRelation smgr, char smgr_persistence,
+ 		flags |= READ_BUFFERS_ZERO_ON_ERROR;
+ 	operation.smgr = smgr;
+ 	operation.rel = rel;
++	operation.rel_extra = (RelationExtraData)
++		{InvalidTransactionId, InvalidMultiXactId, RELKIND_UNKNOWN};
+ 	operation.persistence = persistence;
+ 	operation.forknum = forkNum;
+ 	operation.strategy = strategy;
+@@ -2160,9 +2163,8 @@ AsyncReadBuffers(ReadBuffersOperation *operation, int *nblocks_progress)
+ 	}
+ 	else
+ 	{
+-		sd->smgr.relextradata.relfrozenxid = InvalidTransactionId;
+-		sd->smgr.relextradata.relminmxid = InvalidMultiXactId;
+-		sd->smgr.relextradata.relkind = RELKIND_UNKNOWN;
++		/* Copy values into the shared handle, never a backend-local pointer. */
++		sd->smgr.relextradata = operation->rel_extra;
+ 	}
+ 
+ 	io_start = pgstat_prepare_io_time(track_io_timing);
+@@ -5386,7 +5388,8 @@ FlushRelationsAllBuffers(SMgrRelation *smgrs, int nrels)
+ static void
+ RelationCopyStorageUsingBuffer(RelFileLocator srclocator,
+ 							   RelFileLocator dstlocator,
+-							   ForkNumber forkNum, bool permanent)
++							   ForkNumber forkNum, bool permanent,
++							   const RelationExtraData *rel_extra)
+ {
+ 	Buffer		srcBuf;
+ 	Buffer		dstBuf;
+@@ -5446,7 +5449,7 @@ RelationCopyStorageUsingBuffer(RelFileLocator srclocator,
+ 												 forkNum,
+ 												 block_range_read_stream_cb,
+ 												 &p,
+-												 0);
++												 0, rel_extra);
+ 
+ 	/* Iterate over each block of the source relation file. */
+ 	for (blkno = 0; blkno < nblocks; blkno++)
+@@ -5494,12 +5497,14 @@ RelationCopyStorageUsingBuffer(RelFileLocator srclocator,
+  *
+  *		Pass permanent as true for permanent relations and false for
+  *		unlogged relations.  Currently this API is not supported for
+- *		temporary relations.
++ *		temporary relations. rel_extra describes the source relation for
++ *		worker-side conversion without consulting backend-local relcache.
+  * --------------------------------------------------------------------
+  */
+ void
+ CreateAndCopyRelationData(RelFileLocator src_rlocator,
+-						  RelFileLocator dst_rlocator, bool permanent)
++						  RelFileLocator dst_rlocator, bool permanent,
++						  const RelationExtraData *rel_extra)
+ {
+ 	char		relpersistence;
+ 	SMgrRelation src_rel;
+@@ -5522,7 +5527,7 @@ CreateAndCopyRelationData(RelFileLocator src_rlocator,
+ 
+ 	/* copy main fork. */
+ 	RelationCopyStorageUsingBuffer(src_rlocator, dst_rlocator, MAIN_FORKNUM,
+-								   permanent);
++								   permanent, rel_extra);
+ 
+ 	/* copy those extra forks that exist */
+ 	for (ForkNumber forkNum = MAIN_FORKNUM + 1;
+@@ -5541,7 +5546,7 @@ CreateAndCopyRelationData(RelFileLocator src_rlocator,
+ 
+ 			/* Copy a fork's data, block by block. */
+ 			RelationCopyStorageUsingBuffer(src_rlocator, dst_rlocator, forkNum,
+-										   permanent);
++										   permanent, rel_extra);
+ 		}
+ 	}
+ }
+diff --git a/src/backend/storage/buffer/heap_convert.c b/src/backend/storage/buffer/heap_convert.c
+index 3baccd83800..39487cd43af 100644
+--- a/src/backend/storage/buffer/heap_convert.c
++++ b/src/backend/storage/buffer/heap_convert.c
+@@ -16,6 +16,7 @@
+ #include "access/heapam.h"
+ #include "access/multixact.h"
+ #include "catalog/catalog.h"
++#include "catalog/pg_class.h"
+ #include "storage/bufmgr.h"
+ #include "storage/checksum.h"
+ #include "storage/relation_extra_data.h"
+@@ -38,7 +39,13 @@ convert_page_internal(RelationExtraData *rel_extra, RelFileLocator *relfilelocat
+ 	bool		try_double_xmax;
+ 
+ 	Assert(rel_extra != NULL);
+-	Assert(rel_extra->relkind != RELKIND_UNKNOWN);
++	/* Accept only the relation kinds handled by the conversion switch below. */
++	Assert(rel_extra->relkind == RELKIND_RELATION ||
++		   rel_extra->relkind == RELKIND_INDEX ||
++		   rel_extra->relkind == RELKIND_SEQUENCE ||
++		   rel_extra->relkind == RELKIND_TOASTVALUE ||
++		   rel_extra->relkind == RELKIND_MATVIEW ||
++		   rel_extra->relkind == RELKIND_PARTITIONED_TABLE);
+ 
+ 	switch (rel_extra->relkind)
+ 	{
+diff --git a/src/bin/pg_upgrade/meson.build b/src/bin/pg_upgrade/meson.build
+index 62d5d1dbd77..0030031d816 100644
+--- a/src/bin/pg_upgrade/meson.build
++++ b/src/bin/pg_upgrade/meson.build
+@@ -71,6 +71,7 @@ tests += {
+       't/007_multixact_conversion.pl',
+       't/008_extension_control_path.pl',
+       't/009_xid32_to_xid64_recovery.pl',
++      't/010_xid32_to_xid64_createdb.pl',
+     ],
+     'deps': [test_ext],
+     'test_kwargs': {'priority': 40}, # pg_upgrade tests are slow
+diff --git a/src/bin/pg_upgrade/t/010_xid32_to_xid64_createdb.pl b/src/bin/pg_upgrade/t/010_xid32_to_xid64_createdb.pl
+new file mode 100644
+index 00000000000..06fe8c82d6e
+--- /dev/null
++++ b/src/bin/pg_upgrade/t/010_xid32_to_xid64_createdb.pl
+@@ -0,0 +1,128 @@
++# Copyright (c) 2026, Tantor Labs
++# CREATE DATABASE must pass source pg_class metadata to worker-side conversion.
++use strict;
++use warnings FATAL => 'all';
++
++use PostgreSQL::Test::Cluster;
++use PostgreSQL::Test::Utils;
++use Test::More;
++
++plan skip_all => 'oldinstall is required for xid32 to xid64 test'
++  unless defined $ENV{oldinstall};
++
++my $oldnode = PostgreSQL::Test::Cluster->new(
++	'createdb_old', install_path => $ENV{oldinstall});
++$oldnode->init(force_initdb => 1, xid32 => 1);
++$oldnode->append_conf('postgresql.conf', 'autovacuum = off');
++$oldnode->command_ok([
++	$oldnode->installed_command('pg_checksums'), '--enable', '--no-sync',
++	'--pgdata' => $oldnode->data_dir
++], 'enable source checksums to match the target cluster');
++$oldnode->start;
++plan skip_all => 'source cluster must use xid32'
++  unless $oldnode->safe_psql('postgres',
++	q{SELECT typlen FROM pg_type WHERE oid = 'xid'::regtype}) eq '4';
++
++my $newnode = PostgreSQL::Test::Cluster->new('createdb_new');
++$newnode->init;
++$newnode->append_conf('postgresql.conf', qq{
++autovacuum = off
++autovacuum_freeze_max_age = 1000000000000
++autovacuum_multixact_freeze_max_age = 1000000000000
++});
++$newnode->start;
++my $target_size = $newnode->safe_psql('postgres',
++	q{SELECT typlen FROM pg_type WHERE oid = 'xid'::regtype});
++$newnode->stop;
++plan skip_all => 'target cluster must use xid64' unless $target_size eq '8';
++
++# Each case gets an independent source database, keeping its old-format
++# physical pages untouched by reads performed in the preceding case.
++my @cases;
++for my $method ('sync', 'worker')
++{
++	for my $strategy ('WAL_LOG', 'FILE_COPY')
++	{
++		my $source = 'source_' . $method . '_' . lc($strategy);
++		push @cases, [$method, $strategy, $source];
++		$oldnode->safe_psql('postgres', "CREATE DATABASE $source");
++		$oldnode->safe_psql($source, q{
++			CREATE TABLE payload (id int PRIMARY KEY, body text);
++			ALTER TABLE payload ALTER COLUMN body SET STORAGE EXTERNAL;
++			INSERT INTO payload
++				SELECT g, repeat(md5(g::text), 400) FROM generate_series(1, 30) g;
++			CREATE MATERIALIZED VIEW summary AS SELECT count(*) AS n FROM payload;
++			CREATE SEQUENCE seq;
++			CREATE UNLOGGED TABLE unlogged_payload AS SELECT 42 AS n;
++			SELECT lo_from_bytea(90001, decode(repeat('ab', 16000), 'hex'));
++			CHECKPOINT;
++		});
++	}
++}
++
++# Prepare template1 for the default CREATE DATABASE command below.
++# Store a large object and flush its pg_largeobject pages to disk before
++# upgrade. pg_upgrade physically transfers those old-format pages, while
++# reconstructing pg_class in the new format. Later, CREATE DATABASE default_copy
++# uses template1 by default and reads these pages through the WAL_LOG copy path,
++# triggering conversion without relcache.
++$oldnode->safe_psql('template1', q{
++	SELECT lo_from_bytea(90002, decode(repeat('cd', 8000), 'hex'));
++	CHECKPOINT;
++});
++$oldnode->stop;
++
++command_ok([
++	$newnode->installed_command('pg_upgrade'), '--no-sync',
++	'--old-datadir' => $oldnode->data_dir,
++	'--new-datadir' => $newnode->data_dir,
++	'--old-bindir' => $oldnode->config_data('--bindir'),
++	'--new-bindir' => $newnode->config_data('--bindir'),
++	'--socketdir' => $newnode->host,
++	'--old-port' => $oldnode->port,
++	'--new-port' => $newnode->port,
++	$ENV{PG_TEST_PG_UPGRADE_MODE} || '--copy'
++], 'upgrade cluster with large objects in template1 and custom templates');
++
++$newnode->append_conf('postgresql.conf', 'io_method = worker');
++$newnode->start;
++my ($ret, $stdout, $stderr) = $newnode->psql('postgres',
++	'CREATE DATABASE default_copy');
++is($ret, 0, 'default CREATE DATABASE converts upgraded template1 large objects')
++  or diag("stdout:\n$stdout\nstderr:\n$stderr");
++if ($ret == 0)
++{
++	is($newnode->safe_psql('default_copy',
++		q{SELECT lo_get(90002) = decode(repeat('cd', 8000), 'hex')}),
++		't', 'default database preserves template1 large object');
++}
++
++for my $case (@cases)
++{
++	my ($method, $strategy, $source) = @$case;
++	my $destination = $source . '_copy';
++	# Clear shared_buffers so a prior cache hit cannot mask missing context.
++	$newnode->stop;
++	$newnode->append_conf('postgresql.conf', "io_method = $method");
++	$newnode->start;
++	($ret, $stdout, $stderr) = $newnode->psql('postgres',
++		"CREATE DATABASE $destination TEMPLATE $source STRATEGY $strategy");
++	is($ret, 0, "CREATE DATABASE $strategy with io_method=$method")
++	  or diag("stdout:\n$stdout\nstderr:\n$stderr");
++	next if $ret != 0;
++	is($newnode->safe_psql($destination, q{
++		SELECT count(*), bool_and(body = repeat(md5(id::text), 400)) FROM payload;
++		SELECT lo_get(90001) = decode(repeat('ab', 16000), 'hex');
++		SELECT n FROM summary;
++		SELECT nextval('seq');
++		SELECT n FROM unlogged_payload;
++	}), "30|t\nt\n30\n1\n42", 'heap, TOAST, large object, matview, sequence and unlogged data survive');
++	# Check persistence, rather than just the newly populated buffer cache.
++	$newnode->stop;
++	$newnode->start;
++	is($newnode->safe_psql($destination,
++		q{SELECT lo_get(90001) = decode(repeat('ab', 16000), 'hex')}),
++		't', 'copied large object remains readable after restart');
++}
++$newnode->stop;
++done_testing();
+diff --git a/src/include/storage/bufmgr.h b/src/include/storage/bufmgr.h
+index da2f515ff51..db821751ac5 100644
+--- a/src/include/storage/bufmgr.h
++++ b/src/include/storage/bufmgr.h
+@@ -133,6 +133,7 @@ struct ReadBuffersOperation
+ {
+ 	/* The following members should be set by the caller. */
+ 	Relation	rel;			/* optional */
++	RelationExtraData rel_extra; /* conversion context when rel is NULL */
+ 	SMgrRelation smgr;
+ 	char		persistence;
+ 	ForkNumber	forknum;
+@@ -298,7 +299,8 @@ extern void FlushRelationBuffers(Relation rel);
+ extern void FlushRelationsAllBuffers(SMgrRelation *smgrs, int nrels);
+ extern void CreateAndCopyRelationData(RelFileLocator src_rlocator,
+ 									  RelFileLocator dst_rlocator,
+-									  bool permanent);
++									  bool permanent,
++									  const RelationExtraData *rel_extra);
+ extern void FlushDatabaseBuffers(Oid dbid);
+ extern void DropRelationBuffers(SMgrRelation smgr_reln,
+ 								ForkNumber *forkNum,
+diff --git a/src/include/storage/read_stream.h b/src/include/storage/read_stream.h
+index e2dcf1be50a..9fc8a9ebe26 100644
+--- a/src/include/storage/read_stream.h
++++ b/src/include/storage/read_stream.h
+@@ -99,7 +99,8 @@ extern ReadStream *read_stream_begin_smgr_relation(int flags,
+ 												   ForkNumber forknum,
+ 												   ReadStreamBlockNumberCB callback,
+ 												   void *callback_private_data,
+-												   size_t per_buffer_data_size);
++												   size_t per_buffer_data_size,
++												   const RelationExtraData *rel_extra);
+ extern BlockNumber read_stream_pause(ReadStream *stream);
+ extern void read_stream_resume(ReadStream *stream);
+ extern void read_stream_clear_strategy(ReadStream *stream);
+-- 
+2.55.0
+

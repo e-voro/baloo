@@ -1,0 +1,457 @@
+From a09ce2c567d1179ddff58ea4dc8c8cb34c1a2d88 Mon Sep 17 00:00:00 2001
+From: Evgeny Voropaev <evorop@gmail.com>
+Date: Wed, 21 Oct 2026 21:16:36 +0800
+Subject: [PATCH] Finish legacy page conversion in an error-safe reading
+ backend
+
+AIO workers have no MultiXact visibility slot and shared completion cannot allocate or raise conversion errors safely. Publish pending conversion with BM_CONVERTED, then finish under the content lock before cached, forwarded, raced or waited read APIs expose the page. Reject pending recent-buffer pins so the normal API can handle them. Convert a validated private copy so ERROR leaves shared legacy data unchanged. Keep asynchronous physical I/O and deferred conversion images. Cross-version TAP passes 62 assertions against PG15.19, including wrapped MultiXacts, source epoch 1, repeated corrupt-header SQL errors, restart repair, standby recovery and CREATE DATABASE. Normalize wrapped target IDs only in xid32-source test comparisons.
+---
+ src/backend/access/heap/heapam_visibility.c   |   2 +-
+ src/backend/storage/buffer/bufmgr.c           | 101 ++++++++++++++----
+ src/backend/storage/buffer/heap_convert.c     |  77 +++++++++----
+ .../pg_upgrade/t/007_multixact_conversion.pl  |  19 +++-
+ .../t/009_xid32_to_xid64_recovery.pl          |  38 ++++++-
+ src/include/storage/buf_internals.h           |   2 +-
+ 6 files changed, 193 insertions(+), 46 deletions(-)
+
+diff --git a/src/backend/access/heap/heapam_visibility.c b/src/backend/access/heap/heapam_visibility.c
+index 50948bae1c4..98f906fa2f8 100644
+--- a/src/backend/access/heap/heapam_visibility.c
++++ b/src/backend/access/heap/heapam_visibility.c
+@@ -144,7 +144,7 @@ static inline void
+ SetHintBitsExt(HeapTupleHeader tuple, Buffer buffer,
+ 			   uint16 infomask, TransactionId xid, SetHintBitsState *state)
+ {
+-	/* Legacy conversion checks predecoded tuples without owning a buffer pin. */
++	/* Legacy conversion checks predecoded tuples in a private page copy. */
+ 	if (!BufferIsValid(buffer))
+ 	{
+ 		Assert(state == NULL);
+diff --git a/src/backend/storage/buffer/bufmgr.c b/src/backend/storage/buffer/bufmgr.c
+index c230c3d9434..6d8449a0f9b 100644
+--- a/src/backend/storage/buffer/bufmgr.c
++++ b/src/backend/storage/buffer/bufmgr.c
+@@ -860,7 +860,10 @@ ReadRecentBuffer(RelFileLocator rlocator, ForkNumber forkNum, BlockNumber blockN
+ 		if (BufferTagsEqual(&tag, &bufHdr->tag) &&
+ 			PinBuffer(bufHdr, NULL, true))
+ 		{
+-			if (BufferTagsEqual(&tag, &bufHdr->tag))
++			if (BufferTagsEqual(&tag, &bufHdr->tag) &&
++				(!(pg_atomic_read_u64(&bufHdr->state) & BM_CONVERTED) ||
++				 PageGetPageLayoutVersion(BufferGetPage(recent_buffer)) ==
++				 PG_PAGE_LAYOUT_VERSION))
+ 			{
+ 				pgBufferUsage.shared_blks_hit++;
+ 				return true;
+@@ -1268,6 +1271,69 @@ PinBufferForBlock(Relation rel,
+ 	return BufferDescriptorGetBuffer(bufHdr);
+ }
+ 
++/*
++ * Finish a legacy read that cannot be converted in shared AIO completion.
++ * BM_CONVERTED covers both pending legacy conversion and converted pages:
++ * neither may reach disk without the conversion image.  No read API returns
++ * pending legacy data to its caller.  Other readers serialize on the content
++ * lock, and a failed conversion leaves the shared page unchanged for retry.
++ */
++static void
++FinishReadBufferConversion(ReadBuffersOperation *operation, Buffer buffer)
++{
++	BufferDesc *bufHdr;
++	Page		page;
++	RelationExtraData rel_extra;
++	RelFileLocator locator;
++	ForkNumber forknum;
++	BlockNumber blocknum;
++	PGAlignedBlock copy;
++
++	if (BufferIsLocal(buffer))
++		return;
++	bufHdr = GetBufferDescriptor(buffer - 1);
++	if (!(pg_atomic_read_u64(&bufHdr->state) & BM_CONVERTED))
++		return;
++	page = BufferGetPage(buffer);
++	if (PageGetPageLayoutVersion(page) == PG_PAGE_LAYOUT_VERSION)
++		return;
++
++	LockBuffer(buffer, BUFFER_LOCK_EXCLUSIVE);
++	if (PageGetPageLayoutVersion(page) == PG_PAGE_LAYOUT_VERSION)
++	{
++		LockBuffer(buffer, BUFFER_LOCK_UNLOCK);
++		return;
++	}
++	Assert(CritSectionCount == 0);
++	BufferGetTag(buffer, &locator, &forknum, &blocknum);
++	if (PageGetPageLayoutVersion(page) != PG_PAGE_LAYOUT_VERSION - 1)
++		ereport(ERROR,
++				(errcode(ERRCODE_DATA_CORRUPTED),
++				 errmsg("unsupported page version %u in block %u of relation %s",
++						PageGetPageLayoutVersion(page), blocknum,
++						relpathperm(locator, forknum).str)));
++	if (operation->rel)
++	{
++		rel_extra.relfrozenxid = operation->rel->rd_rel->relfrozenxid;
++		rel_extra.relminmxid = operation->rel->rd_rel->relminmxid;
++		rel_extra.relkind = operation->rel->rd_rel->relkind;
++	}
++	else
++		rel_extra = operation->rel_extra;
++	if (forknum != MAIN_FORKNUM || rel_extra.relkind == RELKIND_UNKNOWN)
++		ereport(ERROR,
++				(errcode(ERRCODE_DATA_CORRUPTED),
++				 errmsg("cannot convert legacy block %u of relation %s without heap conversion metadata",
++						blocknum, relpathperm(locator, forknum).str)));
++
++	memcpy(copy.data, page, BLCKSZ);
++	convert_page(&rel_extra, &locator, forknum, copy.data, buffer, blocknum);
++	START_CRIT_SECTION();
++	memcpy(page, copy.data, BLCKSZ);
++	END_CRIT_SECTION();
++	LockBuffer(buffer, BUFFER_LOCK_UNLOCK);
++}
++
+ /*
+  * ReadBuffer_common -- common logic for all ReadBuffer variants
+  *
+@@ -1467,6 +1533,7 @@ StartReadBuffersImpl(ReadBuffersOperation *operation,
+ 			 */
+ 			if (i == 0)
+ 			{
++				FinishReadBufferConversion(operation, buffers[i]);
+ 				*nblocks = 1;
+ 
+ #ifdef USE_ASSERT_CHECKING
+@@ -1589,6 +1656,10 @@ StartReadBuffersImpl(ReadBuffersOperation *operation,
+ 		did_start_io = true;
+ 	}
+ 
++	if (!did_start_io)
++		for (int i = 0; i < operation->nblocks; ++i)
++			FinishReadBufferConversion(operation, operation->buffers[i]);
++
+ 	CheckReadBuffersOperation(operation, !did_start_io);
+ 
+ 	return did_start_io;
+@@ -1914,6 +1985,9 @@ WaitReadBuffers(ReadBuffersOperation *operation)
+ 		AsyncReadBuffers(operation, &ignored_nblocks_progress);
+ 	}
+ 
++	for (int i = 0; i < operation->nblocks; ++i)
++		FinishReadBufferConversion(operation, operation->buffers[i]);
++
+ 	CheckReadBuffersOperation(operation, true);
+ 
+ 	/* NB: READ_DONE tracepoint was already executed in completion callback */
+@@ -5900,6 +5974,8 @@ MarkBufferDirtyHint(Buffer buffer, bool buffer_std)
+  * Track a format conversion that must be covered by a full image in WAL.
+  * During read completion the AIO subsystem owns the buffer until BM_VALID
+  * is published, so the completing process need not have a private pin.
++ * A pending backend conversion also sets this marker while the page is still
++ * legacy; FinishReadBufferConversion completes it before exposing the page.
+  */
+ void
+ MarkBufferConverted(Buffer buffer, bool converted)
+@@ -8779,9 +8855,11 @@ buffer_readv_complete_one(PgAioTargetData *td, uint8 buf_off, Buffer buffer,
+ 	}
+ 
+ 	/*
+-	 * Convert before publishing BM_VALID.  The AIO pin and IO_IN_PROGRESS
+-	 * give this read exclusive access to the invalid buffer.  A shared
+-	 * completion callback cannot use the issuer's private pin or relcache.
++	 * Leave legacy conversion to a backend before the read API returns.
++	 * Conversion may resolve MultiXacts, allocate memory or raise an ERROR;
++	 * shared AIO completion has neither backend transaction state nor an
++	 * error-safe context.  The marker is published before BM_VALID, so every
++	 * reader knows it must finish conversion before exposing page contents.
+ 	 */
+ 	if (!failed &&
+ 		PageGetPageLayoutVersion((Page) bufdata) != 0 &&
+@@ -8789,20 +8867,7 @@ buffer_readv_complete_one(PgAioTargetData *td, uint8 buf_off, Buffer buffer,
+ 		!PageIsNew((Page) bufdata))
+ 	{
+ 		Assert(!is_temp);
+-		if (tag.forkNum != MAIN_FORKNUM)
+-		{
+-			RelPathStr path = relpathbackend(td->smgr.rlocator,
+-												 INVALID_PROC_NUMBER, tag.forkNum);
+-
+-			/* TODO: propagate conversion errors through the AIO result. */
+-			ereport(ERROR,
+-					(errcode(ERRCODE_DATA_CORRUPTED),
+-					 errmsg("invalid fork type (%d) in block %u of relation %s",
+-							tag.forkNum, tag.blockNum, path.str)));
+-		}
+-
+-		convert_page(&td->smgr.relextradata, &td->smgr.rlocator,
+-					 tag.forkNum, (Page) bufdata, buffer, tag.blockNum);
++		MarkBufferConverted(buffer, true);
+ 	}
+ 
+ 	/* Terminate I/O and set BM_VALID. */
+diff --git a/src/backend/storage/buffer/heap_convert.c b/src/backend/storage/buffer/heap_convert.c
+index 39487cd43af..525846ab234 100644
+--- a/src/backend/storage/buffer/heap_convert.c
++++ b/src/backend/storage/buffer/heap_convert.c
+@@ -93,6 +93,54 @@ itemoffcompare(const void *item1, const void *item2)
+ 		   ((ItemIdCompactData *) item1)->itemoff;
+ }
+ 
++/* Validate tuple storage before conversion can move or enlarge any data. */
++static void
++validate_legacy_heap_page(Page page)
++{
++	PageHeader header = (PageHeader) page;
++	ItemIdCompactData items[MaxHeapTuplesPerPage];
++	OffsetNumber maxoff = PageGetMaxOffsetNumber(page);
++	int nitems = 0;
++	int upper = header->pd_special;
++
++	if (maxoff > MaxHeapTuplesPerPage || header->pd_special != BLCKSZ)
++		ereport(ERROR,
++				(errcode(ERRCODE_DATA_CORRUPTED),
++				 errmsg("invalid legacy heap page layout")));
++	for (OffsetNumber off = FirstOffsetNumber; off <= maxoff; ++off)
++	{
++		ItemId item = PageGetItemId(page, off);
++		HeapTupleHeader tuple;
++		int length = ItemIdGetLength(item);
++		int offset = ItemIdGetOffset(item);
++
++		if (!ItemIdHasStorage(item))
++			continue;
++		if (!ItemIdIsNormal(item) || length < SizeofHeapTupleHeader ||
++			offset != MAXALIGN(offset) || offset < header->pd_upper ||
++			offset + MAXALIGN(length) > header->pd_special)
++			ereport(ERROR,
++					(errcode(ERRCODE_DATA_CORRUPTED),
++					 errmsg("invalid legacy tuple storage at offset %u", off)));
++		tuple = (HeapTupleHeader) PageGetItem(page, item);
++		if (tuple->t_hoff < SizeofHeapTupleHeader || tuple->t_hoff > length)
++			ereport(ERROR,
++					(errcode(ERRCODE_DATA_CORRUPTED),
++					 errmsg("invalid legacy tuple header at offset %u", off)));
++		items[nitems].itemoff = offset;
++		items[nitems++].alignedlen = MAXALIGN(length);
++	}
++	qsort(items, nitems, sizeof(ItemIdCompactData), itemoffcompare);
++	for (int i = 0; i < nitems; ++i)
++	{
++		if (items[i].itemoff + items[i].alignedlen > upper)
++			ereport(ERROR,
++					(errcode(ERRCODE_DATA_CORRUPTED),
++					 errmsg("overlapping legacy tuple storage")));
++		upper = items[i].itemoff;
++	}
++}
++
+ /*
+  * Lazy page conversion from 32-bit to 64-bit XID at first read.
+  */
+@@ -101,18 +149,13 @@ convert_page(RelationExtraData *rel_extra, RelFileLocator *relfilelocator, ForkN
+ 			 Page page, Buffer buf, BlockNumber blkno)
+ {
+ 	/*
+-	 * EVoro: Logging is not performed here anymore, because of the fact that this
+-	 * conversion is performed on the worker side (in case of io_method=workers),
+-	 * and logging on the worker side, as well as palloc or reporting in
+-	 * critical sections, must be a bad idea. So that, here the converted page
+-	 * goes only into a shared buffer and the buffer marked with the
+-	 * BM_CONVERTED flag, which means 'converted only in memory'. The page will
+-	 * be logged with full-page-write record on first actual change later.
+-	 *
+-	 * TODO: Also it is suggested that VACUUM, having found the BM_CONVERTED
+-	 * flag on the page, considering it dirty, logging the converted page with
+-	 * FPW, which eventually results in updating the page on the disk.
++	 * The reading backend converts a private copy before exposing the page.
++	 * Keep it clean until a modifying backend logs a conversion image.
+ 	 */
++	if (rel_extra->relkind == RELKIND_RELATION ||
++		rel_extra->relkind == RELKIND_MATVIEW ||
++		rel_extra->relkind == RELKIND_TOASTVALUE)
++		validate_legacy_heap_page(page);
+ 
+ 	convert_page_internal(rel_extra, relfilelocator, forknum, page, buf, blkno);
+ 	MarkBufferConverted(buf, true);
+@@ -411,7 +454,7 @@ repack_heap_tuples(RelationExtraData *rel_extra, RelFileLocator *relfilelocator,
+ 			tuple.t_xmax = full_source_multixact(tuple.t_xmax,
+ 												 source_multi_base);
+ 		tuple.t_len = ItemIdGetLength(lp);
+-		ItemPointerSet(&(tuple.t_self), blkno, ItemIdGetOffset(lp));
++		ItemPointerSet(&(tuple.t_self), blkno, idx + 1);
+ 
+ 		/*
+ 		 * This is only needed to determine whether tuple is HEAPTUPLE_DEAD or
+@@ -420,7 +463,7 @@ repack_heap_tuples(RelationExtraData *rel_extra, RelFileLocator *relfilelocator,
+ 		 * HeapTupleSatisfiesVacuum() for details
+ 		 *
+ 		 * InvalidBuffer preserves the predecoded source XIDs and suppresses
+-		 * hint writes: an AIO worker owns the I/O but not a private pin.
++		 * hint writes: conversion is working on a private page copy.
+ 		 */
+ 		if (try_double_xmax &&
+ 			HeapTupleSatisfiesVacuum(&tuple,
+@@ -437,10 +480,6 @@ repack_heap_tuples(RelationExtraData *rel_extra, RelFileLocator *relfilelocator,
+ 			if (unlikely(itemPtr->itemoff < hdr->pd_upper ||
+ 						 itemPtr->itemoff >= hdr->pd_special))
+ 			{
+-			/*
+-			 * EVoro: To-do: avoid exceptions (ereporting) on the AIO worker's
+-			 * side, implement reporting using coding/encoding error approach in AIO
+-			 */
+ 				ereport(ERROR,
+ 						(errcode(ERRCODE_DATA_CORRUPTED),
+ 						 errmsg("corrupted item pointer: %u of relation \"%s\"",
+@@ -545,10 +584,6 @@ repack_heap_tuples(RelationExtraData *rel_extra, RelFileLocator *relfilelocator,
+ 
+ 	new_hdr->pd_upper = upper;
+ 	if (new_hdr->pd_lower > new_hdr->pd_upper)
+-			/*
+-			 * EVoro: To-do: avoid exceptions (ereporting) on the AIO worker's
+-			 * side, implement reporting using coding/encoding errors in AIO
+-			 */
+ 		elog(ERROR, "cannot convert block %u of relation \"%s\"",
+ 			 blkno, relpathperm(*relfilelocator, forknumber).str);
+ 
+diff --git a/src/bin/pg_upgrade/t/007_multixact_conversion.pl b/src/bin/pg_upgrade/t/007_multixact_conversion.pl
+index 867a0623153..5536763fcec 100644
+--- a/src/bin/pg_upgrade/t/007_multixact_conversion.pl
++++ b/src/bin/pg_upgrade/t/007_multixact_conversion.pl
+@@ -141,10 +141,15 @@ sub mxact_workload
+ # Return contents of the 'mxofftest' table, created by mxact_workload
+ sub get_test_table_contents
+ {
+-	my ($node, $filename) = @_;
++	my ($node, $filename, $source_xid32) = @_;
+ 
++	# Wrapped source MXIDs are expanded by 2^32-1 on an xid64 target.
++	# Normalize only that upgrade case for comparison with source SQL.
++	my $xmax = $source_xid32
++	  ? 'CASE WHEN xmax::text::numeric >= 4294967296 THEN xmax::text::numeric - 4294967295 ELSE xmax::text::numeric END'
++	  : 'xmax';
+ 	my $contents = $node->safe_psql('postgres',
+-		"SELECT ctid, xmin, xmax, * FROM mxofftest");
++		"SELECT ctid, xmin, $xmax, * FROM mxofftest");
+ 
+ 	my $path = $tempdir . '/' . $filename;
+ 	open(my $fh, '>', $path)
+@@ -187,11 +192,14 @@ sub get_updating_multixact_members
+ 			WHERE mode not in ('keysh', 'sh');
+ 		]);
+ 		print $fh $res;
++		my $xid_size = $node->safe_psql('postgres',
++			q{SELECT typlen FROM pg_type WHERE oid = 'xid'::regtype});
++		my $member_id = $xid_size == 8 ? '(multi + 4294967295)' : 'multi';
+ 		$res = $node->safe_psql(
+ 			'postgres', qq[
+ 			SELECT multi, mode, xid
+ 			FROM generate_series(1, $to - 1) as multi,
+-				 pg_get_multixact_members(multi::text::xid)
++				 pg_get_multixact_members(${member_id}::text::xid)
+ 			WHERE mode not in ('keysh', 'sh');
+ 		]);
+ 		print $fh $res;
+@@ -335,6 +343,8 @@ sub upgrade_and_compare
+ 	my ($multixids_start, $multixids_end, undef) =
+ 	  read_multixid_fields($oldnode);
+ 	$oldnode->start;
++	my $source_xid32 = $oldnode->safe_psql('postgres',
++		q{SELECT typlen FROM pg_type WHERE oid = 'xid'::regtype}) == 4;
+ 	my $old_table_contents =
+ 	  get_test_table_contents($oldnode, "oldnode_${tag}_table_contents");
+ 	my $old_multixacts =
+@@ -345,7 +355,8 @@ sub upgrade_and_compare
+ 	# Compare them with the upgraded cluster
+ 	$newnode->start;
+ 	my $new_table_contents =
+-	  get_test_table_contents($newnode, "newnode_${tag}_table_contents");
++	  get_test_table_contents($newnode, "newnode_${tag}_table_contents",
++		$source_xid32);
+ 	my $new_multixacts =
+ 	  get_updating_multixact_members($newnode, $multixids_start,
+ 		$multixids_end, "newnode_${tag}_multixacts");
+diff --git a/src/bin/pg_upgrade/t/009_xid32_to_xid64_recovery.pl b/src/bin/pg_upgrade/t/009_xid32_to_xid64_recovery.pl
+index 295b783cb00..69c03b4eef1 100644
+--- a/src/bin/pg_upgrade/t/009_xid32_to_xid64_recovery.pl
++++ b/src/bin/pg_upgrade/t/009_xid32_to_xid64_recovery.pl
+@@ -43,6 +43,8 @@ $old->safe_psql('postgres', q{
+ 	CREATE TABLE recovery_dense_unfrozen(n int, payload text);
+ 	ALTER TABLE recovery_dense_unfrozen ALTER COLUMN payload SET STORAGE PLAIN;
+ 	INSERT INTO recovery_dense_unfrozen SELECT n, repeat('y',4048) FROM generate_series(1,2) n;
++	CREATE TABLE recovery_bad(n int);
++	INSERT INTO recovery_bad VALUES (1);
+ 	CREATE TABLE recovery_hint(n int);
+ 	INSERT INTO recovery_hint VALUES (1);
+ 	CREATE TABLE recovery_safe_row(value recovery_update);
+@@ -51,6 +53,9 @@ $old->safe_psql('postgres', q{
+ 	CREATE TABLE bad_xid_storage(direct xid, elements xid[], nested bad_xid_record);
+ });
+ $old->stop;
++# The epoch belongs to control data, not to source 32-bit CLOG addresses.
++$old->command_ok([$old->installed_command('pg_resetwal'), '-e', '1',
++	'--pgdata' => $old->data_dir], 'set a nonzero source XID epoch');
+ 
+ my $primary = PostgreSQL::Test::Cluster->new('recovery_primary');
+ $primary->init(allows_streaming => 1, extra => ['--no-data-checksums']);
+@@ -109,7 +114,7 @@ $primary->safe_psql('postgres',
+ 	q{SELECT pg_truncate_visibility_map('recovery_visible')});
+ my %paths;
+ for my $table ('recovery_update', 'recovery_extend', 'recovery_visible',
+-	'recovery_dense', 'recovery_dense_unfrozen', 'recovery_hint')
++	'recovery_dense', 'recovery_dense_unfrozen', 'recovery_hint', 'recovery_bad')
+ {
+ 	$paths{$table} = $primary->safe_psql('postgres',
+ 		"SELECT pg_relation_filepath('$table')");
+@@ -131,6 +136,37 @@ for my $table (sort keys %paths)
+ 		"$table still has an old-format page before replay");
+ }
+ 
++# AIO completion must not PANIC on a conversion error.  Corrupt only t_hoff;
++# the physical page header remains valid, so this reaches legacy conversion.
++my $bad_path = $primary->data_dir . '/' . $paths{recovery_bad};
++my $bad_bytes = slurp_file($bad_path);
++my $tuple_offset = unpack('S', substr($bad_bytes, 14, 2));
++my $header_offset = $tuple_offset + 22; # offsetof(HeapTupleHeaderData, t_hoff)
++open(my $bad_fh, '+<:raw', $bad_path) or die "open $bad_path: $!";
++seek($bad_fh, $header_offset, 0) or die "seek $bad_path: $!";
++print $bad_fh "\0";
++close($bad_fh);
++$primary->start;
++for my $attempt (1 .. 2)
++{
++	my ($ret, $out, $err) = $primary->psql('postgres',
++		'SELECT n FROM recovery_bad');
++	is($ret, 3, "conversion error is a normal SQL failure (attempt $attempt)");
++	like($err, qr/invalid legacy tuple header/,
++		"conversion retries the unchanged legacy page (attempt $attempt)");
++}
++is($primary->safe_psql('postgres', 'SELECT 1'), '1',
++	'server remains available after legacy conversion errors');
++$primary->stop;
++open($bad_fh, '+<:raw', $bad_path) or die "open $bad_path: $!";
++seek($bad_fh, $header_offset, 0) or die "seek $bad_path: $!";
++print $bad_fh substr($bad_bytes, $header_offset, 1);
++close($bad_fh);
++$primary->start;
++is($primary->safe_psql('postgres', 'SELECT n FROM recovery_bad'), '1',
++	'repaired legacy page converts successfully after restart');
++$primary->stop;
++
+ $primary->backup_fs_cold('upgraded');
+ my $standby = PostgreSQL::Test::Cluster->new('recovery_standby');
+ $standby->init_from_backup($primary, 'upgraded', has_streaming => 1);
+diff --git a/src/include/storage/buf_internals.h b/src/include/storage/buf_internals.h
+index 87856c2701d..7a8a9077797 100644
+--- a/src/include/storage/buf_internals.h
++++ b/src/include/storage/buf_internals.h
+@@ -114,7 +114,7 @@ StaticAssertDecl(BUF_REFCOUNT_BITS + BUF_USAGECOUNT_BITS + BUF_FLAG_BITS + BUF_L
+ #define BM_IO_IN_PROGRESS			BUF_DEFINE_FLAG( 4)
+ /* previous I/O failed */
+ #define BM_IO_ERROR					BUF_DEFINE_FLAG( 5)
+-/* converted to xid64 in memory; force a full image on first WAL change */
++/* pending backend conversion or converted in memory; force first WAL image */
+ #define BM_CONVERTED				BUF_DEFINE_FLAG( 6)
+ /* have waiter for sole pin */
+ #define BM_PIN_COUNT_WAITER			BUF_DEFINE_FLAG( 7)
+-- 
+2.55.0
+
