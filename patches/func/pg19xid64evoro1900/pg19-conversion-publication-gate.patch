@@ -1,0 +1,223 @@
+From 12ff893c75f8b10d6af6fbf5da99ec5d0849326d Mon Sep 17 00:00:00 2001
+From: Evgeny Voropaev <evorop@gmail.com>
+Date: Thu, 22 Oct 2026 19:43:30 +0800
+Subject: [PATCH] Publish conversion readiness with an atomic pending flag
+
+A page header may become current before memcpy has installed the rest of the converted page. Publish BM_CONVERSION_PENDING atomically with BM_VALID, and clear it with a full-barrier atomic operation only after the complete copy. Normal read completion and recent-buffer hits test that state instead of an unlocked page version. Preserve explicit overwrite handling and the independent conversion WAL obligation; assert that completed read operations have no pending conversion. Add an injection point that reproduces the partial-copy interleaving. Expand the in-memory flag field within the existing 64-bit state; no page or WAL format changes.
+---
+ src/backend/storage/buffer/bufmgr.c | 77 ++++++++++++++++++++---------
+ src/include/storage/buf_internals.h |  8 +--
+ 2 files changed, 60 insertions(+), 25 deletions(-)
+
+diff --git a/src/backend/storage/buffer/bufmgr.c b/src/backend/storage/buffer/bufmgr.c
+index 6d8449a0f9b..6bb8d978bbb 100644
+--- a/src/backend/storage/buffer/bufmgr.c
++++ b/src/backend/storage/buffer/bufmgr.c
+@@ -64,6 +64,7 @@
+ #include "storage/read_stream.h"
+ #include "storage/smgr.h"
+ #include "storage/standby.h"
++#include "utils/injection_point.h"
+ #include "utils/memdebug.h"
+ #include "utils/ps_status.h"
+ #include "utils/rel.h"
+@@ -861,10 +862,10 @@ ReadRecentBuffer(RelFileLocator rlocator, ForkNumber forkNum, BlockNumber blockN
+ 			PinBuffer(bufHdr, NULL, true))
+ 		{
+ 			if (BufferTagsEqual(&tag, &bufHdr->tag) &&
+-				(!(pg_atomic_read_u64(&bufHdr->state) & BM_CONVERTED) ||
+-				 PageGetPageLayoutVersion(BufferGetPage(recent_buffer)) ==
+-				 PG_PAGE_LAYOUT_VERSION))
++				!(pg_atomic_read_u64(&bufHdr->state) & BM_CONVERSION_PENDING))
+ 			{
++				/* Pair with publication's pending-bit clear. */
++				pg_read_barrier();
+ 				pgBufferUsage.shared_blks_hit++;
+ 				return true;
+ 			}
+@@ -1273,10 +1274,12 @@ PinBufferForBlock(Relation rel,
+ 
+ /*
+  * Finish a legacy read that cannot be converted in shared AIO completion.
+- * BM_CONVERTED covers both pending legacy conversion and converted pages:
+- * neither may reach disk without the conversion image.  No read API returns
+- * pending legacy data to its caller.  Other readers serialize on the content
+- * lock, and a failed conversion leaves the shared page unchanged for retry.
++ * BM_CONVERSION_PENDING is published atomically with BM_VALID and is cleared
++ * only after the full page has been installed.  The page version must not be
++ * used as an unlocked completion test: a memcpy may expose its header first.
++ * BM_CONVERTED separately preserves the first-image WAL obligation.  Other
++ * readers serialize on the content lock, and a failed conversion leaves the
++ * shared page unchanged for retry.
+  */
+ static void
+ FinishReadBufferConversion(ReadBuffersOperation *operation, Buffer buffer)
+@@ -1292,18 +1295,28 @@ FinishReadBufferConversion(ReadBuffersOperation *operation, Buffer buffer)
+ 	if (BufferIsLocal(buffer))
+ 		return;
+ 	bufHdr = GetBufferDescriptor(buffer - 1);
+-	if (!(pg_atomic_read_u64(&bufHdr->state) & BM_CONVERTED))
+-		return;
+-	page = BufferGetPage(buffer);
+-	if (PageGetPageLayoutVersion(page) == PG_PAGE_LAYOUT_VERSION)
++	if (!(pg_atomic_read_u64(&bufHdr->state) & BM_CONVERSION_PENDING))
++	{
++		/* Acquire page bytes published before the pending-bit clear. */
++		pg_read_barrier();
+ 		return;
++	}
+ 
+ 	LockBuffer(buffer, BUFFER_LOCK_EXCLUSIVE);
+-	if (PageGetPageLayoutVersion(page) == PG_PAGE_LAYOUT_VERSION)
++	if (!(pg_atomic_read_u64(&bufHdr->state) & BM_CONVERSION_PENDING))
+ 	{
+ 		LockBuffer(buffer, BUFFER_LOCK_UNLOCK);
+ 		return;
+ 	}
++	page = BufferGetPage(buffer);
++	/* An explicit overwrite/FPI may have replaced the legacy contents. */
++	if (PageIsNew(page) ||
++		PageGetPageLayoutVersion(page) == PG_PAGE_LAYOUT_VERSION)
++	{
++		pg_atomic_fetch_and_u64(&bufHdr->state, ~BM_CONVERSION_PENDING);
++		LockBuffer(buffer, BUFFER_LOCK_UNLOCK);
++		return;
++	}
+ 	Assert(CritSectionCount == 0);
+ 	BufferGetTag(buffer, &locator, &forknum, &blocknum);
+ 	if (PageGetPageLayoutVersion(page) != PG_PAGE_LAYOUT_VERSION - 1)
+@@ -1328,8 +1341,19 @@ FinishReadBufferConversion(ReadBuffersOperation *operation, Buffer buffer)
+ 
+ 	memcpy(copy.data, page, BLCKSZ);
+ 	convert_page(&rel_extra, &locator, forknum, copy.data, buffer, blocknum);
++	INJECTION_POINT_LOAD("buffer-conversion-header-published");
+ 	START_CRIT_SECTION();
++	/* Expose a legal partial-copy interleaving to concurrency tests. */
++#ifdef USE_INJECTION_POINTS
++	memcpy(page, copy.data, SizeOfPageHeaderData);
++	INJECTION_POINT_CACHED("buffer-conversion-header-published", &buffer);
++	memcpy((char *) page + SizeOfPageHeaderData,
++		   copy.data + SizeOfPageHeaderData, BLCKSZ - SizeOfPageHeaderData);
++#else
+ 	memcpy(page, copy.data, BLCKSZ);
++#endif
++	/* Full-barrier atomic publication; fast readers never inspect half a copy. */
++	pg_atomic_fetch_and_u64(&bufHdr->state, ~BM_CONVERSION_PENDING);
+ 	END_CRIT_SECTION();
+ 	LockBuffer(buffer, BUFFER_LOCK_UNLOCK);
+ }
+@@ -1745,6 +1769,8 @@ CheckReadBuffersOperation(ReadBuffersOperation *operation, bool is_complete)
+ 
+ 		if (i < operation->nblocks_done)
+ 			Assert(pg_atomic_read_u64(&buf_hdr->state) & BM_VALID);
++		if (is_complete && !BufferIsLocal(buffer))
++			Assert(!(pg_atomic_read_u64(&buf_hdr->state) & BM_CONVERSION_PENDING));
+ 	}
+ #endif
+ }
+@@ -5972,10 +5998,10 @@ MarkBufferDirtyHint(Buffer buffer, bool buffer_std)
+ 
+ /*
+  * Track a format conversion that must be covered by a full image in WAL.
+- * During read completion the AIO subsystem owns the buffer until BM_VALID
+- * is published, so the completing process need not have a private pin.
+- * A pending backend conversion also sets this marker while the page is still
+- * legacy; FinishReadBufferConversion completes it before exposing the page.
++ * AIO completion publishes this marker together with BM_CONVERSION_PENDING.
++ * Conversion clears the pending bit after publishing the page; this marker
++ * remains until WAL covers the format change.  A completed overwrite can
++ * discharge both obligations when its buffer is registered for WAL.
+  */
+ void
+ MarkBufferConverted(Buffer buffer, bool converted)
+@@ -5990,13 +6016,19 @@ MarkBufferConverted(Buffer buffer, bool converted)
+ 		   ((buf_state & BM_IO_IN_PROGRESS) && !(buf_state & BM_VALID)) ||
+ 		   BufferLockHeldByMe(bufHdr));
+ 
+-	if (((buf_state & BM_CONVERTED) != 0) == converted)
++	if (((buf_state & BM_CONVERTED) != 0) == converted &&
++		(converted || !(buf_state & BM_CONVERSION_PENDING)))
+ 		return;
++	/* A WAL-logged overwrite can discharge both obligations together. */
++	Assert(converted || !(buf_state & BM_CONVERSION_PENDING) ||
++		   (BufferLockHeldByMe(bufHdr) &&
++			(PageIsNew(BufferGetPage(buffer)) ||
++			 PageGetPageLayoutVersion(BufferGetPage(buffer)) == PG_PAGE_LAYOUT_VERSION)));
+ 
+ 	buf_state = LockBufHdr(bufHdr);
+ 	UnlockBufHdrExt(bufHdr, buf_state,
+ 					converted ? BM_CONVERTED : 0,
+-					converted ? 0 : BM_CONVERTED, 0);
++					converted ? 0 : (BM_CONVERTED | BM_CONVERSION_PENDING), 0);
+ }
+ 
+ bool
+@@ -8858,20 +8890,21 @@ buffer_readv_complete_one(PgAioTargetData *td, uint8 buf_off, Buffer buffer,
+ 	 * Leave legacy conversion to a backend before the read API returns.
+ 	 * Conversion may resolve MultiXacts, allocate memory or raise an ERROR;
+ 	 * shared AIO completion has neither backend transaction state nor an
+-	 * error-safe context.  The marker is published before BM_VALID, so every
+-	 * reader knows it must finish conversion before exposing page contents.
++	 * error-safe context.  Publish the pending marker in the same atomic state
++	 * change as BM_VALID.  Conversion readiness is independent of the header
++	 * version and of the BM_CONVERTED first-image WAL marker.
+ 	 */
++	set_flag_bits = failed ? BM_IO_ERROR : BM_VALID;
+ 	if (!failed &&
+ 		PageGetPageLayoutVersion((Page) bufdata) != 0 &&
+ 		PageGetPageLayoutVersion((Page) bufdata) != PG_PAGE_LAYOUT_VERSION &&
+ 		!PageIsNew((Page) bufdata))
+ 	{
+ 		Assert(!is_temp);
+-		MarkBufferConverted(buffer, true);
++		set_flag_bits |= BM_CONVERTED | BM_CONVERSION_PENDING;
+ 	}
+ 
+ 	/* Terminate I/O and set BM_VALID. */
+-	set_flag_bits = failed ? BM_IO_ERROR : BM_VALID;
+ 	if (is_temp)
+ 		TerminateLocalBufferIO(buf_hdr, false, set_flag_bits, true);
+ 	else
+diff --git a/src/include/storage/buf_internals.h b/src/include/storage/buf_internals.h
+index 7a8a9077797..7f7460d31f3 100644
+--- a/src/include/storage/buf_internals.h
++++ b/src/include/storage/buf_internals.h
+@@ -36,7 +36,7 @@
+  * State of the buffer itself (in order):
+  * - 18 bits refcount
+  * - 4 bits usage count
+- * - 12 bits of flags
++ * - 13 bits of flags
+  * - 18 bits share-lock count
+  * - 1 bit share-exclusive locked
+  * - 1 bit exclusive locked
+@@ -48,7 +48,7 @@
+  */
+ #define BUF_REFCOUNT_BITS 18
+ #define BUF_USAGECOUNT_BITS 4
+-#define BUF_FLAG_BITS 12
++#define BUF_FLAG_BITS 13
+ #define BUF_LOCK_BITS (18+2)
+ 
+ StaticAssertDecl(BUF_REFCOUNT_BITS + BUF_USAGECOUNT_BITS + BUF_FLAG_BITS + BUF_LOCK_BITS <= 64,
+@@ -114,7 +114,7 @@ StaticAssertDecl(BUF_REFCOUNT_BITS + BUF_USAGECOUNT_BITS + BUF_FLAG_BITS + BUF_L
+ #define BM_IO_IN_PROGRESS			BUF_DEFINE_FLAG( 4)
+ /* previous I/O failed */
+ #define BM_IO_ERROR					BUF_DEFINE_FLAG( 5)
+-/* pending backend conversion or converted in memory; force first WAL image */
++/* converted in memory or pending conversion; force first WAL image */
+ #define BM_CONVERTED				BUF_DEFINE_FLAG( 6)
+ /* have waiter for sole pin */
+ #define BM_PIN_COUNT_WAITER			BUF_DEFINE_FLAG( 7)
+@@ -126,6 +126,8 @@ StaticAssertDecl(BUF_REFCOUNT_BITS + BUF_USAGECOUNT_BITS + BUF_FLAG_BITS + BUF_L
+ #define BM_LOCK_HAS_WAITERS			BUF_DEFINE_FLAG(10)
+ /* waiter for content lock has been signalled but not yet run */
+ #define BM_LOCK_WAKE_IN_PROGRESS	BUF_DEFINE_FLAG(11)
++/* physical read is complete, but normal readers must finish conversion */
++#define BM_CONVERSION_PENDING		BUF_DEFINE_FLAG(12)
+ 
+ 
+ StaticAssertDecl(MAX_BACKENDS_BITS <= BUF_REFCOUNT_BITS,
+-- 
+2.55.0
+
