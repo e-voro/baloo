@@ -1178,3 +1178,58 @@ that the original PG18 caller used the wrong PG18 API.**
 - Supplied0014 CREATE DATABASE metadata and supplied0013 double-xmax test are
   being adapted next. Source changes remain isolated on the overnight branch.
   Full check-world must be repeated after all pending source fixes.
+
+## IMPORTANT: backend conversion checkpoint (2026-10-22)
+
+- **e994dd04c51:** supplied0014 CREATE DATABASE metadata is ported. Preserve
+  PG19 batching/callbacks and native io_min_workers/io_max_workers; remove
+  obsolete io_workers from the supplied test. Source pg_class relkind,
+  relfrozenxid and relminmxid travel by value in ReadBuffersOperation.
+  The test uses 010 because PG19 already has 008_extension_control_path.
+- **56da45eb194:** supplied0013 double-xmax VACUUM regression uses test 011.
+  It verifies real layout-5/no-special pages directly after CHECKPOINT,
+  avoiding a heap SELECT that could hide the defect by setting hints.
+  Together these two tests pass 22 assertions with actual PG15.19.
+- **a09ce2c567d — supersedes worker-side conversion above:** native PG19
+  MultiXact upgrade workload reproduced an I/O-worker assertion in
+  MyOldestVisibleMXactIdSlot via compute_xid_min_max/GetUpdateXid. Workers
+  lack backend visibility slots; GetMembers also allocates a transactional
+  cache, and shared completion cannot safely raise conversion ERRORs.
+  Enlarging the slot array alone would not solve those ownership problems.
+- Physical reads remain asynchronous. Shared completion only sets BM_CONVERTED
+  on legacy pages before BM_VALID. The reading backend finishes conversion
+  before normal read APIs expose them: cached/forwarded hits, asynchronous
+  races and waited I/O are covered. ReadRecentBuffer rejects pending legacy
+  pages so the ordinary read path can finish them. Metadata still comes from
+  the backend's Relation or the operation's by-value copy, never a worker's
+  access to the issuer's relcache. FPI overwrite paths retain native behavior.
+- Conversion takes the exclusive content lock, validates legacy tuple bounds,
+  alignment, headers and nonoverlap, converts a private copy outside critical
+  sections, then publishes the copy. ERROR leaves the shared legacy page
+  unchanged and retryable. BM_CONVERTED continues to force the first durable
+  image; no conversion-time WAL is inserted in a worker. Source tuple TID
+  initialization now uses its line-pointer number, not its byte offset.
+- Cross-version run passes **4 files/62 assertions** against PG15.19: basic
+  and wrapped MXID/offset upgrades, source epoch=1, conversion errors twice
+  as ordinary SQL errors, continued server availability and successful repair
+  after restart, hint/checkpoint/restart standby durability, relcache-less
+  redo, CREATE DATABASE, and double-xmax UPDATE/VACUUM. Native test 007 now
+  normalizes wrapped target MXIDs by 2^32-1 only for xid32-source comparisons.
+  Source CLOG conversion already uses low 32 bits (38bdfc1d082), so supplied
+  nonzero-epoch fix is covered without duplicating it.
+- **Rejected experiment, not committed:** avoiding worker member resolution
+  by forcing updating-MultiXact pages into double-xmax layout encountered
+  an orphaned dead HOT tuple. The experiment was removed before a09ce2c567d.
+  Audit dense legacy HOT chains separately: conversion currently discards
+  dead tuple line pointers before freezing and must preserve index roots,
+  redirects and chain identity. Do not claim this case fixed or reproduce
+  the rejected range-forcing approach in a backport.
+- Full gate 3 on a09ce2c567d stopped in test_aio with an invalid persistence
+  value. Its .o/.so dated 20:31 predated the 20:54 ReadBuffersOperation ABI
+  change; rebuild that module before diagnosing it as a source failure.
+  No full-suite pass has yet been established for this final source tree.
+- Save patches with the `series` manifest. Original branch/history and v67
+  artifacts remain preserved. Backport backend conversion ownership/error
+  handling and the already-documented hint-durability fix to Tantor 18 after
+  comparing the supplied fixes. No MSVC or generic mixed-format wire protocol
+  compatibility is claimed.
