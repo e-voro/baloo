@@ -8,13 +8,14 @@ fixes are saved separately in `patches/func/pg19xid64evoro1900/series`;
 the original v67 patches and original branches remain preserved. Active source
 and Baloo branch: `pg19beta3xid64_CODEX_OVERNIGHT_20261021`.
 
-- Source 9a36538da22 passes a fresh full build and check-world with assertions,
+- Source 19da20487ca passes a fresh full build and check-world with assertions,
   TAP, injection points and WAL consistency checking (recovery 755 assertions).
 - Actual PG15.19 and PG18.4 each pass five cross-version upgrade suites,
   98 assertions per source. This does not cover every source layout or --swap.
-- Subsequent 19da20487ca protects a confirmed normal-page freeze range PANIC
-  with a precritical SQL error; its live probe passes 10 assertions and a new
-  full gate is running. Automatic handling of incompatible ranges remains open.
+- 19da20487ca protects a confirmed normal-page freeze range PANIC with a
+  precritical SQL error. Its live probe passes 10 assertions; the subsequent
+  full gate and both actual-source upgrade runs pass (exit 0). Automatic
+  handling of incompatible ranges remains open.
 - Latest applied-fix explanations, ownership audit, proposals, test limits and
   backport tasks are highlighted in `AGENTS.md` and root `codex_todo.txt`.
 

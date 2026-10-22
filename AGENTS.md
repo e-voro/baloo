@@ -10,8 +10,9 @@ historical; verify it against the actual checkout.
 > Main series through 0012 is
 > applied or explicitly superseded. Follow-up fixes are separate patches
 > listed in `patches/func/pg19xid64evoro1900/series`. Full check-world passed
-> on 9a36538da22; the subsequent VACUUM range guard 19da20487ca passed its
-> live probe and is undergoing another full gate. Automatic handling of
+> on 19da20487ca, including the VACUUM range guard and recovery's 755
+> assertions. Actual PG15.19 and PG18.4 upgrades each pass 98 assertions.
+> Automatic handling of
 > unrepresentable freeze replacements remains unresolved. See the latest
 > checkpoint below; older partial-application statements are historical.**
 
@@ -1348,9 +1349,18 @@ and private legacy conversion must retain their distinct ownership contracts.
   Cross-version tests are separately run with actual old installations;
   the default full gate skips those requiring oldinstall. Log: build directory
   `check-world.stdout`. This supersedes the stale-object gate-3 concern.
-- The guard's rebuild/live probe pass; full check-world is being repeated
-  on **19da20487ca**, log `check-world-freeze-range.stdout`. Do not attribute
-  the preceding full pass to the later guard until that run completes.
+- **Final gate on 19da20487ca passed (exit 0)**, including the range guard:
+  recovery **54/755** with WAL consistency checking, AIO **4/597**, xid64
+  **9/67**, subscription **39/595**, and core **246 tests**. Log:
+  `check-world-freeze-range.stdout` in the fresh build directory. Source
+  code stayed unchanged throughout; subsequent commits only save artifacts
+  and documentation. The separate live range probe passes 10 assertions.
+- Repeated all five actual-source upgrade suites against the same final
+  code: **PG15.19 98 assertions, PG18.4 98 assertions, both exit 0**. Log:
+  `check-legacy-freeze-range.stdout`. These provide the cross-version checks
+  skipped by default check-world when oldinstall is unset. Validation is
+  complete for these configured gates; the explicit remaining range design,
+  other source-layout coverage and backports remain open.
 - The manifest now contains **26 patches**. Replay against 3421b154340 matches
   19da20487ca byte-for-byte across **268 source paths**. Baloo artifact commit
   952a733 is recorded by separate parent 014b541c211; source fixes and artifacts
