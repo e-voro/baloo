@@ -5,6 +5,16 @@ Read the tail of baloo/codex.log, inspect git status in both the main repository
 and baloo, and inspect branch history before changing anything. The report is
 historical; verify it against the actual checkout.
 
+**Current scope instruction (2026-10-26): do not inspect or modify any Tantor 18
+directory. Decide backport requirements using only original/supplied patch files
+inside this workspace. Actual backport application is out of scope.**
+
+The authoritative TODO status register is root `codex_todo.txt`; old checkpoint
+notes are archived in `codex_todo-history-20261026.txt`. Read
+`xid64-post-adaptation-audit.md` for new tests, supplied-patch dispositions and
+remaining limits. New runtime source is 331942f4995; source documentation is
+5d5fbdf0901. Older current/checkpoint statements below are historical.
+
 For the complete adaptation record from 0001 onward, read
 [xid64-logical-issues.md](xid64-logical-issues.md). It covers 25 numbered topics,
 decisions and implementations, the complete-series map, and the PG18 xid64 /
@@ -1514,3 +1524,50 @@ where normal conversion waited for a later modifying operation.
 - Rebuild core and extensions: helper symbols were renamed. There is no new
   page layout or WAL record format, and the flag bit positions are unchanged
   from 12ff893c75f. Save this correction as a separate follow-up patch in series.
+
+## IMPORTANT: post-adaptation TODO execution (2026-10-26)
+
+- The register now assigns explicit statuses to 43 distinct tasks and 16
+  backport decisions. Historical duplicates and obsolete partial-build
+  statements remain archived, not active work. User learning/discussion tasks
+  are not marked completed on the user's behalf.
+- Deferred live checks pass 30 assertions: real high-half apply-lock waiting,
+  subtype/subscription separation and pg_locks, prepared MultiXact crash
+  recovery through both outcomes, concurrent TOAST access and actual extracted
+  conversion-helper checks.
+- 38cfcc166f9 fixes a real native-PG19 source upgrade failure: eight-byte
+  offsets retain short filenames. The fixture had encoded the same mistake.
+  Native source/high-offset upgrade passes 10 assertions, PG15 wraparound
+  retest 10, transfer modes 50, and corrected actual-reader/SLRU fixture 31.
+  Already-xid64 source testing also completed before the directory restriction.
+- d99f3a1486c implements the user-approved HSF tag H, explicit legacy-h
+  rejection and exact payload length. 331942f4995 restores native future-horizon
+  rejection with full XIDs. Fourteen live assertions test both directions,
+  high XIDs, future xmin/catalog_xmin, malformed payloads and server availability.
+  Old xid64 peers using h are intentionally incompatible; update peers together.
+- e4dd3ab7bcb fixes mini0198(regress.c) helper decoding: skip non-normal
+  line pointers, distinguish legacy by page version, decode full double-xmax
+  and compare frozen xmin by flag. These are helper fixes, not freeze-policy
+  changes. Supplied0010 carries the same defects in its relocated helper.
+- 5d5fbdf0901 updates protocol.sgml and README.XID64 to the actual H payload
+  and immediate backend-conversion/WAL contract. The protocol fragment's
+  structure and fields were checked; runtime source is unchanged by that commit.
+- The available supplied patch files are reviewed individually in the audit.
+  Prepared-slot fix is already provided by native PG19 APIs. Debug APIs/test
+  relocation and vendor WAL-history changes were not silently imported.
+  The supplied baseline already fixes binary xidrecv and int64 rollback;
+  both original v67 and supplied baseline still need mini0075(decode.c)'s fix.
+- OPEN/PARTIAL: complete normal-page range handling beyond the SQL guard;
+  old persisted two-phase record compatibility; natural later-segment auxiliary
+  live coverage; mixed-format logical negotiation; MSVC and untested vendor
+  catalog/WAL cases. Later user fixes remain WAITING_INPUT. The conflict-horizon
+  learning explanation is in xid64-conflict-horizon.md.
+- Final full check-world including 331942f4995's future-horizon guard passes,
+  exit 0: core 246, recovery 54/755, AIO 597, xid64 67, subscription 595,
+  native pg_upgrade 146. Documentation-only 5d5fbdf0901 leaves runtime unchanged.
+  Final HSF probe passes 14 assertions. All 33 saved patches replay exactly
+  from 3421b154340 across 270 paths. Full evidence/limits are in the audit.
+- New probes: dev/tests/xid64_post_adaptation/check.py PREFIX BUILD;
+  dev/tests/xid64_hsf_protocol/check.py PREFIX BUILD [VANILLA_INSTALL];
+  dev/tests/xid64_upgrade_sources/check.py PREFIX BUILD VANILLA_INSTALL [TEST].
+  Do not use the last two to access Tantor 18 directories under current scope.

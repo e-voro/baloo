@@ -1,0 +1,52 @@
+From d99f3a1486c0ef7803b2f2cd37d93da1ff28669f Mon Sep 17 00:00:00 2001
+From: Evgeny Voropaev <evorop@gmail.com>
+Date: Mon, 26 Oct 2026 18:20:59 +0800
+Subject: [PATCH] Distinguish full-XID hot standby feedback before decoding
+
+---
+ src/backend/replication/walsender.c | 7 +++++++
+ src/include/libpq/protocol.h        | 3 ++-
+ 2 files changed, 9 insertions(+), 1 deletion(-)
+
+diff --git a/src/backend/replication/walsender.c b/src/backend/replication/walsender.c
+index 970c92f5299..aa68ac66256 100644
+--- a/src/backend/replication/walsender.c
++++ b/src/backend/replication/walsender.c
+@@ -2476,6 +2476,12 @@ ProcessStandbyMessage(void)
+ 			ProcessStandbyHSFeedbackMessage();
+ 			break;
+ 
++		case 'h':
++			ereport(COMMERROR,
++					(errcode(ERRCODE_PROTOCOL_VIOLATION),
++					 errmsg("legacy hot standby feedback is incompatible with 64-bit transaction IDs")));
++			proc_exit(0);
++
+ 		case PqReplMsg_PrimaryStatusRequest:
+ 			ProcessStandbyPSRequestMessage();
+ 			break;
+@@ -2689,6 +2695,7 @@ ProcessStandbyHSFeedbackMessage(void)
+ 	replyTime = pq_getmsgint64(&reply_message);
+ 	feedbackXmin = pq_getmsgint64(&reply_message);
+ 	feedbackCatalogXmin = pq_getmsgint64(&reply_message);
++	pq_getmsgend(&reply_message);
+ 
+ 	if (message_level_is_interesting(DEBUG2))
+ 	{
+diff --git a/src/include/libpq/protocol.h b/src/include/libpq/protocol.h
+index eae8f0e7238..55e1c32504f 100644
+--- a/src/include/libpq/protocol.h
++++ b/src/include/libpq/protocol.h
+@@ -79,7 +79,8 @@
+ 
+ /* Replication codes sent by the standby (wrapped in CopyData messages). */
+ 
+-#define PqReplMsg_HotStandbyFeedback 'h'
++/* xid64 feedback must not be confused with legacy xmin/epoch pairs. */
++#define PqReplMsg_HotStandbyFeedback 'H'
+ #define PqReplMsg_PrimaryStatusRequest 'p'
+ #define PqReplMsg_StandbyStatusUpdate 'r'
+ 
+-- 
+2.55.0
+

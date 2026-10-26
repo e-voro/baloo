@@ -1,0 +1,129 @@
+From 38cfcc166f9f080a74a25a222aabf0c362a732aa Mon Sep 17 00:00:00 2001
+From: Evgeny Voropaev <evorop@gmail.com>
+Date: Mon, 26 Oct 2026 18:20:59 +0800
+Subject: [PATCH] Read native PG19 MultiXact offsets from short-named segments
+
+---
+ src/bin/pg_upgrade/multixact_read_v18.c       |  3 +-
+ .../pg_upgrade/t/007_multixact_conversion.pl  | 40 +++++++++++++++++--
+ 2 files changed, 38 insertions(+), 5 deletions(-)
+
+diff --git a/src/bin/pg_upgrade/multixact_read_v18.c b/src/bin/pg_upgrade/multixact_read_v18.c
+index b878bdbbe2b..f5a88413e47 100644
+--- a/src/bin/pg_upgrade/multixact_read_v18.c
++++ b/src/bin/pg_upgrade/multixact_read_v18.c
+@@ -133,7 +133,8 @@ AllocOldMultiXactRead(char *pgdata, uint32 nextMulti,
+ 	state->offsets64 = offsets64;
+ 
+ 	pg_sprintf(dir, "%s/pg_multixact/offsets", pgdata);
+-	state->offset = AllocSlruRead(dir, offsets64);
++	/* Vanilla sources retain short offset filenames even with 64-bit offsets. */
++	state->offset = AllocSlruRead(dir, false);
+ 
+ 	pg_sprintf(dir, "%s/pg_multixact/members", pgdata);
+ 	state->members = AllocSlruRead(dir, offsets64);
+diff --git a/src/bin/pg_upgrade/t/007_multixact_conversion.pl b/src/bin/pg_upgrade/t/007_multixact_conversion.pl
+index 5536763fcec..356c182b05a 100644
+--- a/src/bin/pg_upgrade/t/007_multixact_conversion.pl
++++ b/src/bin/pg_upgrade/t/007_multixact_conversion.pl
+@@ -239,11 +239,12 @@ sub read_multixid_fields
+ # Note: This is used on the old installation, so the command arguments
+ # and the output parsing used here must work with all pre-v19
+ # PostgreSQL versions supported by the test.
+-sub reset_mxid_mxoffset_pre_v19
++sub reset_mxid_mxoffset_xid32
+ {
+ 	my $node = shift;
+ 	my $mxid = shift;
+ 	my $mxoffset = shift;
++	my $offsets64 = shift || 0;
+ 
+ 	my $pg_resetwal_path = $node->installed_command('pg_resetwal');
+ 	# Get block size
+@@ -286,7 +287,7 @@ sub reset_mxid_mxoffset_pre_v19
+ 	# with zeros
+ 	#
+ 	# sizeof(MultiXactOffset) == 4 in PostgreSQL versions before 19
+-	my $multixact_offsets_per_page = $blcksz / 4;
++	my $multixact_offsets_per_page = $blcksz / ($offsets64 ? 8 : 4);
+ 	my $segno =
+ 	  int($mxid / $multixact_offsets_per_page / $slru_pages_per_segment);
+ 	my $path =
+@@ -303,7 +304,8 @@ sub reset_mxid_mxoffset_pre_v19
+ 	my $multixact_members_per_page = int($blcksz / 20) * 4;
+ 	$segno =
+ 	  int($mxoffset / $multixact_members_per_page / $slru_pages_per_segment);
+-	$path = sprintf "%s/pg_multixact/members/%04X", $node->data_dir, $segno;
++	$path = sprintf($offsets64 ? "%s/pg_multixact/members/%015X" :
++		"%s/pg_multixact/members/%04X", $node->data_dir, $segno);
+ 	open $fh, ">", $path
+ 	  or die "could not open \"$path\": $!";
+ 	binmode $fh;
+@@ -374,6 +376,7 @@ sub upgrade_and_compare
+ chdir ${PostgreSQL::Test::Utils::tmp_check};
+ 
+ my $old_version;
++my $old_xid_size;
+ 
+ # Basic scenario: Create a cluster using old installation, run
+ # multixid-creating workload on it, then upgrade.
+@@ -389,6 +392,10 @@ my $old_version;
+ 	my $new = PostgreSQL::Test::Cluster->new("${tag}_newnode");
+ 
+ 	$old->init(extra => ['-k']);
++	$old->start;
++	$old_xid_size = $old->safe_psql('postgres',
++		q{SELECT typlen FROM pg_type WHERE oid = 'xid'::regtype});
++	$old->stop;
+ 
+ 	$old_version = $old->pg_version;
+ 	note "old installation is version $old_version\n";
+@@ -416,6 +423,10 @@ my $old_version;
+ # anyway.
+ SKIP:
+ {
++	# The reset helper below assumes four-byte offsets, four-byte members
++	# and short segment names.  An xid64 PG18 source does not have that layout.
++	skip '32-bit wraparound fixture is inapplicable to an xid64 source'
++	  if $old_xid_size == 8;
+ 	skip
+ 	  "skipping mxoffset conversion tests because upgrading from the old version does not require conversion"
+ 	  if ($old_version >= '19devel');
+@@ -430,7 +441,7 @@ SKIP:
+ 
+ 	# Reset the old cluster to just before multixid and 32-bit offset
+ 	# wraparound.
+-	reset_mxid_mxoffset_pre_v19($old, 0xFFFFFA00, 0xFFFFEC00);
++	reset_mxid_mxoffset_xid32($old, 0xFFFFFA00, 0xFFFFEC00);
+ 
+ 	# Run the workload.  This crosses multixid and offset wraparound.
+ 	my (undef, $start_mxid, $start_mxoff) = read_multixid_fields($old);
+@@ -451,4 +462,25 @@ SKIP:
+ 	upgrade_and_compare($tag, $old, $new);
+ }
+ 
++# Native PG19 retains 32-bit member XIDs, but has eight-byte offsets, short
++# offset filenames and long member filenames. Exercise a genuinely high offset.
++SKIP:
++{
++	skip 'high-offset scenario requires a native xid32 PG19 source'
++	  if $old_version < '19devel' || $old_xid_size != 4;
++	my $tag = 'wideoffset';
++	my $old = PostgreSQL::Test::Cluster->new("${tag}_oldnode",
++		install_path => $ENV{oldinstall});
++	my $new = PostgreSQL::Test::Cluster->new("${tag}_newnode");
++	$old->init(extra => ['-k']);
++	reset_mxid_mxoffset_xid32($old, 1, 4294968931, 1);
++	my (undef, undef, $start_offset) = read_multixid_fields($old);
++	mxact_workload($old, $new);
++	my (undef, undef, $finish_offset) = read_multixid_fields($old);
++	cmp_ok($start_offset, '>', 4294967295, 'native source offset starts above 32 bits');
++	cmp_ok($finish_offset, '>', $start_offset, 'native source allocates high member offsets');
++	$new->init;
++	upgrade_and_compare($tag, $old, $new);
++}
++
+ done_testing();
+-- 
+2.55.0
+

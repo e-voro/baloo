@@ -1,0 +1,12 @@
+--- a/src/include/libpq/protocol.h
++++ b/src/include/libpq/protocol.h
+@@ -79,7 +79,8 @@
+ 
+ /* Replication codes sent by the standby (wrapped in CopyData messages). */
+ 
+-#define PqReplMsg_HotStandbyFeedback 'h'
++/* Distinct tag: never decode legacy xmin/epoch pairs as full XIDs. */
++#define PqReplMsg_HotStandbyFeedback 'H'
+ #define PqReplMsg_PrimaryStatusRequest 'p'
+ #define PqReplMsg_StandbyStatusUpdate 'r'
+ 

@@ -1,0 +1,115 @@
+Current status and remaining tasks (2026-10-26, overnight branch):
+
+- Complete adaptation decisions and fix record from 0001 onward: baloo/xid64-logical-issues.md (25 topics, series map, implemented decisions, supplied-fix overlap, tests and PG18 xid64/Tantor 18 backport checklist). Compare the actual targets before applying required-if-absent fixes. No PG18/Tantor backports are performed by this documentation update.
+
+- Immediate conversion WAL (b0d9496f94f): normal permanent pages now log XLOG_FPI and install the LSN before publishing readiness. BM_CONVERTED is renamed BM_CONVERSION_NEEDS_WAL; AIO sets it with BM_CONVERSION_PENDING and BM_VALID. Recovery/WAL-skipping paths retain deferred guards. Updated logical-issue and PG18/Tantor 18 backport list: baloo/xid64-logical-issues.md. Actual PG15.19 and PG18.4 each pass 102 upgrade assertions and the concurrency probe passes 17. Full check-world with WAL consistency checking passes on this source, exit 0 (recovery 755, AIO 597, xid64 67, subscription 595, core 246). All 28 patches replay exactly across 268 paths. The older 98-assertion/full-gate entries below refer to 12ff893c75f.
+- needed for rebase to Tantor 18: backport immediate backend conversion WAL together with readiness publication, metadata and no-hints contracts; compare supplied fixes first. The normal-path hint-durability workaround is superseded by immediate FPI, but exceptional-path image and hint guards remain necessary. Rebuild extensions after helper API renames.
+
+- User-requested pending-page access re-audit: 12ff893c75f replaces unlocked layout-version readiness tests with BM_CONVERSION_PENDING, atomically published with BM_VALID and cleared only after the full copy. Both ordinary cache hits and ReadRecentBuffer previously accepted a partially published page; deterministic old-code probe failed 2/6, strengthened corrected probe passes 17 assertions and observes the reader waiting on BufferExclusive. Core/contrib access-path matrix, overwrite exceptions and raw-byte scope are in baloo/AGENTS.md. The new full gate and both actual-source upgrade runs pass on this correction.
+- needed for rebase to Tantor 18: compare/backport the pending-conversion readiness fix, read barriers, recent/normal read gates and overwrite handling. Rebuild core and modules together because the in-memory flag field grows within the existing 64-bit state. No page/WAL format change.
+- 0005 is fully adapted/applied; all 215 mini steps are processed. Main series through 0012 is applied or explicitly superseded. Use baloo/patches/func/pg19xid64evoro1900/series for the ordered main and supplemental patches. Original branches and v67 files are preserved.
+- Review the overnight applied fixes and proposals with Evgeny; latest details are highlighted in baloo/AGENTS.md. Final full check-world passes on 12ff893c75f, including atomic conversion readiness and the range guard (recovery 755, AIO 597, xid64 67, subscription 595, core 246). Both actual-source upgrade runs on the same final code pass 98 assertions each, PG15.19 and PG18.4. Subsequent commits only save artifacts/documentation.
+- OPEN: design complete handling of unrepresentable replacement xmax/MultiXact ranges on already-normal pages. 19da20487ca prevents PANIC using a precritical SQL error; it does not guarantee VACUUM success. Account for final freeze plans, surviving full XIDs, hidden updaters, freeze eligibility and matching WAL/redo. Do not skip required replacements or force active/recent xmin to freeze merely to fit a page. See AGENTS.md for rebasing/promotion alternatives and limits.
+- needed for rebase to Tantor 18: compare/backport the range crash protection (19da20487ca). Live synthetic-counter probe passes 10 assertions: SQL error, unchanged xmax, available server and successful retry after lockers finish. Keep the broader range handling task open.
+- needed for rebase to Tantor 18: compare/backport the dense legacy HOT-root fix (fbeca95f940). Preserve indexed roots as redirects to live heap-only successors before freezing source xmin. Otherwise Index Scan can lose a row found by sequential scan. New cross-version HOT test passes 36 assertions.
+- Actual PG15.19 and PG18.4 each pass five cross-version suites / 98 assertions, including wrapped MXIDs, epoch=1, CREATE DATABASE and HOT streaming/crash recovery. Live binary xid COPY passes 6 assertions (6eca8f6c039). Conditional source-checksum setup is fixed in 9a36538da22.
+- Remaining upgrade coverage: already-xid64 sources, vanilla PG19 with eight-byte offsets, live --swap and later-segment auxiliary forks. Do not treat the 31-case offset fixtures or actual PG15/PG18 results as proof of those paths.
+- Keep HSF format-negotiation protection, variable-GID logical protocol review, live high-half apply-lock contention, and Tantor 18 backports below open. No MSVC validation has been run.
+
+Visibility call-chain review after the entire 0005 patch (completed repository audit; preserve contracts):
+
+- Reviewed repository HeapTupleSatisfies* callers, batch scan initialization, HOT chain checks, SurelyDead and buffer-lock assumptions; ownership matrix is in baloo/AGENTS.md. Dispatcher/Update/valid-buffer Vacuum-Horizon own decoding; callers also copy before earlier checks or after relocking as needed. Nested copies retain independent entry contracts.
+- Revisited b29c7c726fb: ordinary VacuumHorizon must decode; private legacy conversion passes predecoded full source XIDs/expanded MultiXacts through InvalidBuffer with no recopy or hint writes. Backend conversion now validates a private copy and publishes under the lock (a09ce2c567d). Do not revert to worker-side conversion or treat every no-special page as current double-xmax.
+- Remaining range issue is explicitly open above. External extensions and every possible concurrency interleaving are outside the completed repository call-chain review.
+
+Historical task/checkpoint notes below are superseded by the current status above where applicable:
+
+Upgrade follow-up after mini0130(002_pg_upgrade.pl):
+
+- Implemented the supported xid32 source layouts in cff91ec658f, with native reader/rewriter adaptation 0e524c4023b and supplied0012 page fixes c04865b0327. Offset width is independent of source member XID width; native target SLRUs and destination counters agree. The real-file/actual-function fixture passes 31 cases under UBSan; live upgrades remain pending.
+- mini0127(pg_upgrade.h), mini0129(segresize.c) and mini0131(version.c) were applied early; skip later replay. mini0129(segresize.c), 38bdfc1d082, now only converts CLOG via native SLRU I/O and strips source epochs. Native MultiXact support is saved as pg19-native-multixact-upgrade.patch.
+- Additional wrapped-range fix: preserve and normalize each restored datminmxid/relminmxid to the same full ID as the converted SLRU. For source oldest=4294967294, raw horizon/tuple MXID=1 becomes 4294967296. Review/backport this correction beyond supplied0012 to pg18xid64/Tantor 18; verify with live wrapped-range upgrades.
+- Implemented the user-approved swap FSM/VM rewrite in mini0128(relfilenumber.c), 9a0b1024ba0: after directory/catalog relocation, rewrite destination auxiliary files through exclusive temporary output, fsync before replacement when enabled, then retain native directory synchronization. Already-xid64 sources skip conversion; zero/empty pages, tablespaces and segments are preserved. The shared updater now uses fork-relative block numbers for later-segment checksums. The actual native-function/actual-checksum filesystem probe passes 28 UBSan cases; no live server upgrade was run.
+- Backport the --swap auxiliary-header fix and later-segment checksum correction to pg18xid64/Tantor 18, comparing supplied fixes first. Supplied0007 addresses zero pages/the ordinary guard, not the swap path.
+- mini0130(002_pg_upgrade.pl), d961467957b, adds horizon-preservation assertions using a unique public test relation; Perl syntax passes. mini0132(003_corruption.pl) is now applied with MultiXact offset=1; its initdb switches depend on series patch 0009, whose offset defaults must preserve PG19's nonzero invariant. mini0140(htup_details.h) is also applied with the user-approved TOAST accessor fix; all 0005 minis are now processed; the first full build pauses at the single-page freeze fallback adaptation below.
+- "needed for fix rebase into Tantor 18": The post-upgrade index fix is already in supplied0012 and our mini0122(check.c), 20fbaf54942. Verify the target branch includes it; do not duplicate it. The original bug came from the PG18 xid64 patch, not vanilla PostgreSQL.
+- Full pg_upgrade tests must cover vanilla PG18/PG19 and already-xid64 sources, nonzero epochs, wrapped MXIDs, offsets above UINT32_MAX, SLRU boundaries/names, restored horizons and REINDEX instructions; include --swap, copy/link and checksums. Current SQL/resetwal/dispatch checks use fixtures, not running servers.
+
+Frontend validation after the complete series builds:
+
+- Run the updated pg_resetwal 001_basic.pl TAP test and pg_dump/pg_upgrade tests with high freeze horizons. The extracted pg_resetwal parser/control probe passes 61 UBSan cases and Perl syntax passes; no real utility/control-file reset or backend run has been tested at this partial checkpoint.
+
+Binary xid input fix follow-up (mini0103(xid.c)):
+
+- User-approved correction implemented in f5d03ae7046: xidrecv() reads sizeof(lo) and sizeof(hi), both four bytes, preserving xidsend()'s low-half-first format. The original patch requested unsupported eight-byte pq_getmsgint() reads.
+- Focused production-code/fixture checks pass for boundary/high-bit round trips, golden wire bytes, truncated-input rejection and reproduction of the original failure. Live binary xid COPY now passes 6 assertions in xid-64/t/009_binary_xid.pl (6eca8f6c039). Check later user-provided PG18 fixes for the same defect.
+
+Corruption-test helper follow-up (mini0115(004_verify_heapam.pl)):
+
+- Implemented user-authorized fixes in ed941fe56fb: preserve reserved IDs 0/1/2, correct page selection/bounds, preserve pruning hints across base shifts, reject unrepresentable normal tuple rebases and retain caller full XIDs across repeated writes. The actual helper probe passes 212 assertions; Perl syntax and patch replay checks pass.
+- Run the complete pg_amcheck 004_verify_heapam.pl TAP test after the full series builds to verify all intended corruption diagnostics. The synthetic helper checks do not establish backend diagnostic/recovery behavior.
+
+Page-conversion fix follow-up (mini0096(bufpage.c), source d85584a3eec):
+
+- Implemented full-XID pruning-hint re-encoding and execution of selected freeze plans before conversion on primary and redo; see baloo/AGENTS.md for eligibility details and validation limits. mini0168(bufpage.h) was applied early with mini0096(bufpage.c); skip replaying it.
+- Required backport to Tantor 18: backport the pd_prune_xid conversion fix, including base-shift handling and conservative hints when an exact XID cannot fit. Compare with later user-provided PG18 fixes to avoid duplication; focused tests pass, backend validation remains pending.
+- Confirmed an unrepresentable normal-page replacement MultiXact PANIC; precritical guard 19da20487ca now returns a SQL error (10 live probe assertions). Automatic range handling remains open in the current task section above; the conversion-order fix alone does not solve it.
+- Test high-XID MultiXact collapse/replacement, hint handling, and WAL replay with consistency checking when the complete 0005 series is buildable. Focused fixture tests pass; backend/recovery tests remain pending.
+
+When porting the additional xid64v67 fixes that the user will provide later:
+
+- Check whether those fixes already correct the mini0075(decode.c) old-tuple allocation-size error: on XLOG_HEAP_INIT_PAGE updates, the two TransactionId page bases must be excluded from datalen before tuplelen is calculated. Compare the fixes with our adaptation and avoid applying the correction twice.
+
+Hot Standby Feedback follow-up (original format authorized and applied in mini0082(walreceiver.c) and mini0083(walsender.c)):
+
+- Design and verify protection against misinterpreting XIDs in hot standby feedback when sender and receiver use different XID formats. Check protocol/version negotiation and retain appropriate validation of received XIDs.
+
+Personal learning task for Evgeny:
+
+- Learn how a replica uses a conflict horizon received in WAL: trace how replay reads the horizon, identifies conflicting standby snapshots, and waits for or cancels conflicting queries before proceeding.
+
+AIO conversion follow-up after incorporating the supplied PG18 fix:
+
+- Ownership fix incorporated: relation fields are copied into per-handle PgAioTargetData; the global pointer helpers are omitted. PG19 read completion converts before BM_VALID under exclusive I/O ownership, without relying on a private pin.
+- Supplied0015 converted-image/marker handling is ported in b052fd6b675; actual PG15.19 upgrade and streaming test passes 23 assertions after hint-durability fix 42a0b1c973e. Supplied0014 CREATE DATABASE metadata is now being ported; continue auditing other relcache-less readers.
+- Implemented a09ce2c567d: physical I/O stays asynchronous; conversion runs in the reading backend outside shared callbacks, on a validated private copy. Bad legacy headers yield repeatable SQL errors without a server crash; actual PG15.19 cross-version tests pass 62 assertions. Backport this ownership/error-handling correction to pg18xid64/Tantor 18.
+
+Apply-lock fix follow-up (implemented in source 2e6c3ab42ff):
+
+- Backport the full-XID apply-lock fix to pg18xid64 and Tantor 18. Include field5 initialization in every constructor, full-XID diagnostics/pg_locks, wait probes and focused tests. PG18 definitions are in lock.h; PG19 uses locktag.h. Account for changed lock-key and two-phase lock-record sizes and compare with any additional user-provided fixes before applying.
+- After the full 0005 patch is adapted, test actual lock contention for remote XIDs differing only in their high half, stream/transaction subtype separation, pg_locks output, and prepared-transaction restart/COMMIT PREPARED/ROLLBACK PREPARED. Focused encoding/decoding tests pass; live backend/recovery tests remain pending.
+- mini0100(lockfuncs.c) and mini0170(locktag.h) were adapted and applied early with mini0092(lmgr.c)/mini0093(lock.c); skip replaying them.
+- Separately review zzz0002-Logical-replication-support.patch: BEGIN PREPARE's GID is variable-length on the wire, so comparing the remaining length against sizeof(ShortTransactionId) + GIDSIZE cannot reliably distinguish XID formats. The supplied patch remains unapplied.
+
+TOAST xmax reader fix (mini0140(htup_details.h), 5b47a85077c):
+
+- needed for rebase to Tantor 18: fix HeapTupleHeaderGetRawXmax()'s non-MultiXact branch to use PageGetSpecialXidBase(), avoiding an ordinary-heap-layout assertion on valid TOAST pages. Compare supplied fixes before backporting. The original PG18 xid64 patch contains the same bug.
+- Applied with PG19 uint8 bitmaps and removal of redundant xmin setters preserved. Actual-helper checks pass 68 heap/TOAST/MultiXact/double-xmax cases per page size under UBSan at six sizes. Live concurrent TOAST validation remains pending; no release-mode corruption was demonstrated.
+- mini0132(003_corruption.pl) through mini0140(htup_details.h) are applied. Preserve native XLOG2 when adapting mini0145(rmgrlist.h). Full build/TAP/recovery validation remains pending.
+
+Completed mini0184(AdjustUpgrade.pm) and remaining 0005 minis:
+
+- User-approved IF EXISTS table/column guards applied in 7b3940c7dfd. Actual adjustment generation passes for PG11/12/18/19; Perl syntax passes. The original PG18 xid64 patch contains the same unguarded SQL. This is older-source test compatibility, not a runtime PG19 bug.
+- All mini steps through mini0214(typedefs.list) are processed, including documented skips. The complete 0005 aggregate replays exactly on 8ca324058af and matches all 219 source files. Last source change: dcbd6235799; saved artifacts Baloo 3efe9a3, parent fd8e0764bd4. Replaying the patch is verified; compilation/runtime correctness is not yet established.
+- The new Perl files pass syntax checks. mini0210(004_test_relminmxid.pl) explicitly initializes MultiXact ID=1 to match its assertions despite high global defaults. initdb switches and t/001_test_large_xids.pl still depend on later series patch 0009. Run the TAP suite only after those dependencies are adapted.
+- Review mini0198(regress.c) conversion helpers during live validation: line-pointer validity, legacy versus double-xmax decoding and frozen-xmin comparisons. Existing standalone page fixtures do not validate these imported SQL regression helpers.
+
+Completed freeze fallback and main-series checkpoint (overnight branch):
+
+- User approved the fallback in mini0028(heapam.c); implemented in 088d616a983. Uses PruneFreezeParams, a valid VM pin, existing PG19 VM locking, and explicit no-fragmentation behavior through execution/WAL. Primary retains its exclusive content lock; redo retains cleanup locking. Speculative-abort preparation now occurs before its critical section. Build: /tmp/pg19-xid64-build-iAc7eE, assertions/TAP/injection points and -Werror=format.
+- Main series through 0012 is applied or explicitly superseded. Linux world-bin passes; initdb TAP passes 93 assertions, initial large-XID/relminmxid TAP passes 24 assertions, and core regression passes all 246 tests. Full check-world and cross-version/streaming validation remain pending.
+- Live fallback probe passes FPW on/off with a concurrent pin, preserved dead payload and surviving tuple address, HOT redirection, eligible freezing, VM pinning and crash redo with WAL consistency checking. Patch 0007 is adapted to mask orphaned storage only in private consistency images, avoiding shared-page dead-tuple zeroing. Patch 0008's physical-emptiness INIT_PAGE guard also passes live crash redo.
+- needed for rebase to Tantor 18: review/backport private-image masking instead of original patch 0007's dead-storage zeroing when pruning without cleanup locking. Compare the pin-only pointer contract and preserve meaningful live-data/base/line-pointer comparisons.
+- Visibility audit follow-up: preserve converter-prepared full XIDs on legacy pages; decode native pages, including true double-xmax pages, by layout version. Replace special-space assertions that reject valid double-xmax pages. Dense legacy AIO and wrapped source MultiXact validation are being added.
+- needed for rebase to Tantor 18: exclude system attributes (attnum <= 0) from both recursive composite propagation and final stored-column reporting in the xid-format upgrade check. A live PG15 source with only int/text columns otherwise fails on every table's xmin/xmax. Retain rejection of real xid columns, arrays and composites.
+- Supplied0015 port: make converted-page images override NO_IMAGE, retain markers on NO_CHANGE, preserve WILL_INIT, and advance the PG19 prune-WAL heap LSN when an image is logged. The adapted cross-version test also covers relcache-less reads and dense conversion; validation is in progress.
+- Implemented overnight: 1547efbb710 preserves conversion-prepared XIDs using InvalidBuffer/no-hints visibility checks and accepts current double-xmax layouts; bdb4e4b907a fixes the system-column false positives; b052fd6b675 ports supplied0015 with an adapted 19-assertion PG15.19 streaming/AIO test. The cross-version test passes; rerun it on the final tree after independent subsequent fixes.
+- needed for rebase to Tantor 18: compare/backport the no-hints conversion visibility mode and double-xmax layout assertions. Dense unfrozen legacy pages otherwise crash an AIO worker in a private-pin assertion; unconditional page decoding also destroys prepared source MultiXact IDs. Ordinary Vacuum/Horizon callers must still decode their cache under the buffer lock.
+- needed for rebase to Tantor 18: compare/backport 0828bf07ff3's age-cutoff saturation and bounded 105% failsafe margin. Unbounded uint64 subtraction changes young-cluster freeze policy; INT64_MAX age settings also caused float-to-int64 overflow. Actual-function UBSan probe passes 123 cases and live age TAP passes 7 assertions; preserve PG19's 95% policy and snapshot horizons.
+- Gate 1 exposed a test_slru diagnostic format mismatch, fixed in 87aca2ff8ca. Gate 2 on that source passed recovery 755 assertions with WAL consistency checking, subscription 595 and xid64 61, but failed three harness fixtures. Fixes 380de11735c now pass focused surgery/VM/MultiXact tests. Repeat full check-world after the remaining source fixes.
+- User authorizes autonomous logical fixes overnight on pg19beta3xid64_CODEX_OVERNIGHT_20261021 (both repositories). Record applied fixes/proposals and test limits in baloo/AGENTS.md for discussion afterward; the previous pause-per-new-logic instruction is waived for this overnight work.
+
+- needed for rebase to Tantor 18: backport 42a0b1c973e, which WAL-logs converted permanent pages dirtied only by hints even with checksums/wal_log_hints/full_page_writes off. Otherwise checkpoint/restart loses the conversion marker and later incremental WAL crashes an unconverted standby page. Cross-version recovery TAP passes 23 assertions.
+
+- Completed dense legacy HOT-chain correction fbeca95f940; actual PG15 source reproduced index-versus-sequential-scan disagreement before the fix. Root/redirect/chain identity and eligible removals are now covered by test 012 (36 assertions). Required Tantor 18 backport is listed above.
+- Gate 4 on a09ce2c567d passed after rebuilding stale test_aio; a subsequent fresh dependency-tracked full gate on 9a36538da22 also passed. Cross-version tests 007/009/010/011/012 now pass 98 assertions each for actual PG15.19 and PG18.4. See current status for the later guard gate.

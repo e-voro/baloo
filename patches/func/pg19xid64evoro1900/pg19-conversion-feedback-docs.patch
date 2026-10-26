@@ -1,0 +1,114 @@
+From 5d5fbdf090161da5b81d18ee90f9b0810e433b76 Mon Sep 17 00:00:00 2001
+From: Evgeny Voropaev <evorop@gmail.com>
+Date: Mon, 26 Oct 2026 18:32:47 +0800
+Subject: [PATCH] Document full-XID feedback and backend conversion durability
+
+---
+ doc/src/sgml/protocol.sgml           | 31 +++++++++++-----------------
+ src/backend/access/heap/README.XID64 | 27 +++++++++++++++++-------
+ 2 files changed, 32 insertions(+), 26 deletions(-)
+
+diff --git a/doc/src/sgml/protocol.sgml b/doc/src/sgml/protocol.sgml
+index 49f81676712..984aab1bc7c 100644
+--- a/doc/src/sgml/protocol.sgml
++++ b/doc/src/sgml/protocol.sgml
+@@ -2919,7 +2919,7 @@ psql "dbname=postgres replication=database" -c "IDENTIFY_SYSTEM;"
+         <listitem>
+          <variablelist>
+           <varlistentry>
+-           <term>Byte1('h')</term>
++           <term>Byte1('H')</term>
+            <listitem>
+             <para>
+              Identifies the message as a hot standby feedback message.
+@@ -2938,7 +2938,7 @@ psql "dbname=postgres replication=database" -c "IDENTIFY_SYSTEM;"
+           </varlistentry>
+ 
+           <varlistentry>
+-           <term>Int32</term>
++           <term>Int64</term>
+            <listitem>
+             <para>
+              The standby's current global <literal>xmin</literal>, excluding the
+@@ -2951,17 +2951,9 @@ psql "dbname=postgres replication=database" -c "IDENTIFY_SYSTEM;"
+            </listitem>
+           </varlistentry>
+ 
+-          <varlistentry>
+-           <term>Int32</term>
+-           <listitem>
+-            <para>
+-             The epoch of the global <literal>xmin</literal> xid on the standby.
+-            </para>
+-           </listitem>
+-          </varlistentry>
+ 
+           <varlistentry>
+-           <term>Int32</term>
++           <term>Int64</term>
+            <listitem>
+             <para>
+              The lowest <literal>catalog_xmin</literal> of any replication
+@@ -2972,15 +2964,16 @@ psql "dbname=postgres replication=database" -c "IDENTIFY_SYSTEM;"
+            </listitem>
+           </varlistentry>
+ 
+-          <varlistentry>
+-           <term>Int32</term>
+-           <listitem>
+-            <para>
+-             The epoch of the <literal>catalog_xmin</literal> xid on the standby.
+-            </para>
+-           </listitem>
+-          </varlistentry>
+          </variablelist>
++         <para>
++          The transaction identifiers contain all 64 bits; separate epoch
++          fields are not sent. The distinct <literal>H</literal> tag prevents
++          legacy <literal>h</literal> messages from being interpreted using
++          this layout. Legacy peers, including earlier xid64 builds using
++          <literal>h</literal>, must be updated to exchange feedback with this
++          version. Horizons greater than the primary's next transaction ID
++          are ignored.
++         </para>
+         </listitem>
+        </varlistentry>
+ 
+diff --git a/src/backend/access/heap/README.XID64 b/src/backend/access/heap/README.XID64
+index 9b4e6e03a22..41f8859d331 100644
+--- a/src/backend/access/heap/README.XID64
++++ b/src/backend/access/heap/README.XID64
+@@ -125,10 +125,23 @@ This lazy conversion is called only on pages being read. This can slow down
+ performance after upgrade, but just for a short period of time while "hot"
+ pages are read (and therefore converted to 64-bit format).
+ 
+-There is a special case when the first read of a tuple is done in read-only
+-state (in read-only transaction or on replica). This tuples are to be converted
+-"in memory", but not sync "to disk", unless cluster or transaction changed to
+-read-write state (e.g. replica is promoted). In order to support this, we mark
+-"in memory" pages with converted tuples with bit REGBUF_CONVERTED in buffer
+-descriptor. When in read-write state this will trigger full page write xlog
+-record.
++Physical input may be asynchronous, but the reading backend validates and
++converts a private page copy under the buffer's exclusive content lock. Normal
++read APIs do not expose the page until conversion has finished. An ordinary
++conversion error before installation leaves the shared legacy page unchanged;
++a later attempt is possible, but malformed data still requires repair.
++
++AIO completion sets BM_VALID together with BM_CONVERSION_PENDING and
++BM_CONVERSION_NEEDS_WAL for a legacy page. BM_VALID denotes physical input;
++the pending flag denotes unfinished conversion, not ownership of the converter.
++The content lock serializes competing converters.
++
++For a permanent relation when WAL insertion is allowed, the backend installs
++the converted copy, marks the buffer dirty, emits a forced XLOG_FPI and sets
++the page LSN before atomically clearing both conversion flags. This applies
++to read-only queries too. Recovery and operations deliberately skipping WAL
++retain a clean converted page with an outstanding WAL obligation. A later
++WAL-logged change must cover that conversion; this includes promotion after
++a standby converted the page in memory. Unlogged pages are dirtied without
++ordinary WAL. These flags are buffer-descriptor state and are never read from
++or written into the on-disk page header.
+-- 
+2.55.0
+

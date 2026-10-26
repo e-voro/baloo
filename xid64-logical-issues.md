@@ -1,6 +1,7 @@
 # Xid64 adaptation to PostgreSQL 19 Decisions and implemented fixes
 
-Updated 2026-10-26; immediate-WAL source commit `b0d9496f94f`.
+Updated 2026-10-26; latest runtime source `331942f4995`.
+Immediate conversion WAL was introduced in `b0d9496f94f`.
 This report covers the recorded adaptation from the first formatting patch
 through the complete storage patch, later series patches, supplied PG18 fixes
 and the final backend-conversion/WAL corrections. It records problems, design
@@ -11,8 +12,9 @@ history; the new conversion policy changes how some of them are needed.
 
 Entries distinguish inherited xid64 bugs, supplied corrections and PG19 API
 adaptations; they do not imply that vanilla PostgreSQL 18 has these bugs.
-Compare the actual target revision and the supplied
-`patches/func/tt186xid64/` fixes before backporting. PG19 test results establish
+Backport decisions use the original v67 and supplied
+`patches/func/tt186xid64/` files in this checkout. Per Evgeny, do not inspect or
+modify Tantor 18 directories; actual backport application is outside scope. PG19 test results establish
 the port's behavior; they do not validate an untested Tantor 18 backport.
 
 ## Complete series overview
@@ -250,7 +252,14 @@ each object's horizon using the same full-ID mapping as SLRU/page conversion.
 `cff91ec658f`, `0e524c4023b`, `c04865b0327`. Source CLOG addressing uses the
 low 32 bits, not the full epoch-bearing XID (`38bdfc1d082`).
 
-**Backport:** wrapped horizon normalization is required if absent. Source
+The deferred live native-PG19 test found an additional bug: eight-byte offset
+entries still have short filenames, independently of long member filenames.
+`38cfcc166f9` corrects that source reader and the fixture's matching assumption;
+a live high-offset (>UINT32_MAX) upgrade now passes. The test also skips xid32
+wraparound fixtures for already-xid64 sources.
+
+**Backport:** the native-PG19 filename correction is PG19-specific; wrapped
+horizon normalization is required in affected original PG18 patch code. Source
 xid64 detection, SLRU filename normalization, epoch handling and MultiXact
 conversion overlap supplied 0005/0006/0011/0012. Compare them first. Do not
 assume that PG19's eight-byte source-offset support applies unchanged to PG18.
@@ -324,18 +333,25 @@ Move heap_abort_speculative page preparation before its critical section.
 PG18's existing no-repair fallback; retain the storage and error-safety fixes
 in issues 10, 11 and 19. No blanket freezing or cleanup-lock removal is implied.
 
-### 22. Hot Standby Feedback uses the supplied full-XID wire format
+### 22. Hot Standby Feedback needs an unambiguous format identifier
 
-**Problem:** XID widening affects sender/receiver interpretation, including
-former epoch fields. **Decision:** use the original xid64 patch's message
-format, as authorized, rather than a separate epoch/short-XID reconstruction.
-**Implemented:** matching full-width sender and receiver changes in
-mini0082(walreceiver.c) and mini0083(walsender.c).
+**Problem:** the supplied full-XID format and legacy xmin/epoch pairs both
+have 25 bytes including the h tag. Length checks cannot distinguish them.
+**Decision:** retain the full-XID payload and reject incompatible formats
+before decoding; Evgeny explicitly approved a distinct tag during TODO review.
+**Implemented:** use H for full-XID feedback; reject legacy h with an explicit
+incompatibility message, and reject trailing payload bytes (`d99f3a1486c`).
+Old peers reject H through their existing unknown-message dispatcher.
+`331942f4995` also restores rejection of future xmin/catalog_xmin using full
+XIDs, which the original patch had removed. Fourteen live assertions verify
+valid high-XID feedback, future values, both rejection directions and server
+availability. The public protocol documentation now describes the format.
 
-**Backport:** this is an adopted patch design, not a newly solved PG18 bug.
-Mixed-format negotiation/protection is still open. The supplied zzz0002
-BEGIN PREPARE length heuristic is not applied: variable-length GIDs make it
-an unsafe format discriminator. No general mixed-xid protocol fix is claimed.
+**Backport:** coordinate the tag change across peers, including earlier xid64
+builds that used h. Future-horizon validation is independently needed where
+removed. No ambiguous old-tag fallback or automatic format guessing is used.
+This protects HSF, not mixed-format logical replication. The supplied zzz0002
+BEGIN PREPARE length heuristic remains rejected because GID is variable-length.
 
 ### 23. Make the 64-bit GUC stage correct and independently buildable
 
@@ -410,13 +426,20 @@ negative/wrapped unsigned inputs and zero MultiXact offset while preserving
 native initialization. Tests use capability checks for external source tools.
 
 **Backport:** helper bugs and compatible fixture corrections if absent.
-Several are already supplied, especially checksum/backup/double-xmax cases;
+The deferred mini0198(regress.c) audit also fixed redirected/unused-pointer
+reads, legacy versus current double-xmax decoding, and frozen-xmin comparisons
+(`e4dd3ab7bcb`). Actual extracted-helper tests cover those layouts; the combined
+post-adaptation probe passes 30 assertions. Supplied 0010 retains the same
+helper defects even though it relocates the code.
+
+Several other cases are already supplied, especially checksum/backup/double-xmax cases;
 PG19-only scenarios should not replace PG18's own test coverage. These are
 harness/utility corrections, not additional heap corruption fixes.
 
 ## PG18 xid64 and Tantor 18 backport checklist
 
-This checklist applies to **both targets**. "Required if absent" means the
+This checklist applies to **both targets**, based only on original/supplied
+patch evidence in this checkout. No target-directory inspection is authorized. "Required if absent" means the
 defect must be corrected wherever the affected code exists. It does not claim
 that the latest target revision still lacks a fix. No actual target branch has
 been backported or validated by this documentation work.
@@ -435,7 +458,7 @@ been backported or validated by this documentation work.
 | 18 | Required applicable auxiliary/checksum corrections; compare supplied 0007. Apply the swap-specific part only where that mode exists. |
 | 19 | Required if the target zeros shared dead storage without cleanup locking. Verify main 0008's physical-emptiness guard is already present. |
 | 20, 21, 24 | Adaptation review, not wholesale PG18 backports: preserve equivalent PG18 XID correctness using PG18's APIs. Review critical-section boundaries and byte-pointer/format defects where shared. |
-| 22 | Existing wire-format design, not a new completed compatibility fix. Mixed-format protection and variable-GID parsing remain open. |
+| 22 | Required when adopting the protected HSF format: H-tag peers must be updated together. Restore future-horizon bounds where absent. Mixed-format logical replication and variable-GID negotiation remain open. |
 | 23 | Compare and backport shared GUC parser, optional-hint, rollback and INT64_MIN serialization defects if present. PG19 structure/API changes need no direct PG18 transplant. |
 | 25 | Transfer applicable helper regressions and tests with each fix. Retain existing PG18 coverage; do not import PG19-only expected output blindly. |
 
@@ -447,20 +470,24 @@ before testing indexed reads of dense legacy pages.
 
 ## Backport order and open work
 
-1. Compare supplied PG18 fixes and identify what the actual Tantor 18 revision
-   already contains. Preserve the user's original patch files.
+1. Compare original v67 and supplied PG18 fixes in this workspace. Preserve
+   those files; do not access Tantor 18 directories. Record required changes
+   without claiming they are missing from an uninspected target revision.
 2. Backport backend ownership, private visibility and metadata contracts,
    then atomic readiness and immediate conversion WAL as a coordinated change.
    Retain exceptional-path WAL guards; rebuild core and modules together.
 3. Backport independent storage, locking and upgrade fixes with their tests.
    Assess persisted formats before deploying lock-record changes.
 4. Resolve normal-page freeze range handling beyond the current SQL-error
-   guard. HSF mixed-format negotiation and zzz0002's variable-GID message-length
-   heuristic remain open; no protocol-compatibility fix is claimed.
+   guard. Mixed-format logical negotiation and zzz0002's variable-GID handling
+   remain open. HSF now uses explicit fail-closed format tags.
 
-Already-xid64 upgrade sources, native PG19 eight-byte-offset sources, live
---swap/later auxiliary segments, live high-half apply-lock contention and MSVC
-remain validation tasks. Do not infer their coverage from PG15/PG18 xid32 tests.
+The post-adaptation audit completed live high-half contention, concurrent
+TOAST, current prepared-state recovery, an already-xid64 source, native PG19
+high offsets and live copy/link/swap. Later-segment natural auxiliary coverage,
+pre-fix persisted lock-record compatibility, MSVC and broader vendor catalog
+histories remain open. See `xid64-post-adaptation-audit.md` and the status
+register in `../codex_todo.txt`; older limited-coverage statements are historical.
 
 ## Validation of earlier adaptation stages
 
@@ -500,3 +527,20 @@ remain validation tasks. Do not infer their coverage from PG15/PG18 xid32 tests.
 
 Build and logs: `/tmp/pg19-xid64-immediate-wal/` and
 `/tmp/pg19-xid64-immediate-wal-*.log`. Logs are also appended to codex.log.
+
+## Post adaptation TODO completion
+
+The complete TODO status register is `../codex_todo.txt`; the old checkpoints
+are archived in `codex_todo-history-20261026.txt`. Results and the disposition
+of all available supplied patch files are in `xid64-post-adaptation-audit.md`.
+New follow-up runtime commits are `38cfcc166f9`, `d99f3a1486c`, `e4dd3ab7bcb`
+and `331942f4995`. Public protocol/README corrections are saved separately.
+
+Completed targeted evidence: 30 post-adaptation assertions, 14 HSF assertions,
+10 native-PG19/high-offset upgrade assertions, 10 PG15/wraparound assertions,
+50 live transfer-mode assertions and 31 actual-reader/SLRU UBSan cases.
+Final full check-world with WAL consistency checking passes on runtime
+331942f4995, exit 0: core 246; recovery 755; AIO 597; xid64 67; subscription
+595; native pg_upgrade 146. Documentation follows in 5d5fbdf0901. All 33
+patches replay exactly across 270 paths. Detailed task statuses and limits
+are in the audit and root register.

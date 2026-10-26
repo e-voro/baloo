@@ -1,0 +1,56 @@
+From 331942f4995e91553abfa7767cea32a3f0045c1d Mon Sep 17 00:00:00 2001
+From: Evgeny Voropaev <evorop@gmail.com>
+Date: Mon, 26 Oct 2026 18:28:46 +0800
+Subject: [PATCH] Reject future full-XID standby feedback horizons
+
+---
+ src/backend/replication/walsender.c | 19 ++++++++++---------
+ 1 file changed, 10 insertions(+), 9 deletions(-)
+
+diff --git a/src/backend/replication/walsender.c b/src/backend/replication/walsender.c
+index aa68ac66256..08f750e993d 100644
+--- a/src/backend/replication/walsender.c
++++ b/src/backend/replication/walsender.c
+@@ -2685,6 +2685,7 @@ ProcessStandbyHSFeedbackMessage(void)
+ {
+ 	TransactionId feedbackXmin;
+ 	TransactionId feedbackCatalogXmin;
++	TransactionId nextXid;
+ 	TimestampTz replyTime;
+ 
+ 	/*
+@@ -2735,6 +2736,13 @@ ProcessStandbyHSFeedbackMessage(void)
+ 		return;
+ 	}
+ 
++	/* Preserve the native rejection of future horizons using full XIDs. */
++	nextXid = XidFromFullTransactionId(ReadNextFullTransactionId());
++	if ((TransactionIdIsNormal(feedbackXmin) && feedbackXmin > nextXid) ||
++		(TransactionIdIsNormal(feedbackCatalogXmin) &&
++		 feedbackCatalogXmin > nextXid))
++		return;
++
+ 	/*
+ 	 * Set the WalSender's xmin equal to the standby's requested xmin, so that
+ 	 * the xmin will be taken into account by GetSnapshotData() /
+@@ -2742,15 +2750,8 @@ ProcessStandbyHSFeedbackMessage(void)
+ 	 * thereby prevent the generation of cleanup conflicts on the standby
+ 	 * server.
+ 	 *
+-	 * There is a small window for a race condition here: although we just
+-	 * checked that feedbackXmin precedes nextXid, the nextXid could have
+-	 * gotten advanced between our fetching it and applying the xmin below,
+-	 * perhaps far enough to make feedbackXmin wrap around.  In that case the
+-	 * xmin we set here would be "in the future" and have no effect.  No point
+-	 * in worrying about this since it's too late to save the desired data
+-	 * anyway.  Assuming that the standby sends us an increasing sequence of
+-	 * xmins, this could only happen during the first reply cycle, else our
+-	 * own xmin would prevent nextXid from advancing so far.
++	 * Full XIDs advance monotonically; advancing nextXid after our check
++	 * cannot make an accepted horizon become a future XID.
+ 	 *
+ 	 * We don't bother taking the ProcArrayLock here.  Setting the xmin field
+ 	 * is assumed atomic, and there's no real need to prevent concurrent
+-- 
+2.55.0
+

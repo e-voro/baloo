@@ -84,7 +84,7 @@ with tempfile.TemporaryDirectory(prefix='xid64-multixact-') as tmp:
     def source_offset(old,multi,value,wide):
         per=8192//(8 if wide else 4)
         put(old/'pg_multixact/offsets',multi//per,(multi%per)*(8 if wide else 4),
-            struct.pack('=Q' if wide else '=I',value),wide)
+            struct.pack('=Q' if wide else '=I',value),False)
     def source_member(old,offset,xid,status,wide):
         # Fixed source group: 4 flag bytes and four uint32 XIDs.
         page,slot=divmod(offset,1636); group,member=divmod(slot,4)

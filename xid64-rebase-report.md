@@ -1,5 +1,20 @@
 # xid64 PostgreSQL 19 rebase: handoff and validation
 
+## Post adaptation TODO audit (2026-10-26)
+
+Root codex_todo.txt now contains explicit task/backport statuses. Details and
+new evidence are in [xid64-post-adaptation-audit.md](xid64-post-adaptation-audit.md).
+Runtime source 331942f4995 adds the native-PG19 offset-filename correction,
+approved HSF tag H and future-horizon validation, and SQL conversion-helper
+repairs. Source documentation follows in 5d5fbdf0901. Thirty deferred live
+assertions, fourteen HSF assertions, native high-offset and older wraparound
+upgrades pass. The final full gate with WAL consistency checking passes on
+331942f4995 (exit 0): recovery 755, AIO 597, xid64 67, subscription 595, core
+246 and native upgrade 146. All 33 patches replay exactly across 270 paths.
+
+Backport decisions use only original/supplied patch files here. Per Evgeny,
+do not inspect or modify Tantor 18 directories. Actual backports are out of scope.
+
 The complete record from the first formatting patch through the latest
 conversion/WAL changes is [xid64-logical-issues.md](xid64-logical-issues.md).
 It records decisions, implementations, supplied-fix overlap, remaining limits

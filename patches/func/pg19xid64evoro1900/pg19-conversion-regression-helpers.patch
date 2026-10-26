@@ -1,0 +1,68 @@
+From e4dd3ab7bcb2aac0b6aa7f438e401213c1c44660 Mon Sep 17 00:00:00 2001
+From: Evgeny Voropaev <evorop@gmail.com>
+Date: Mon, 26 Oct 2026 18:20:59 +0800
+Subject: [PATCH] Correct conversion regression tuple decoding and frozen
+ comparisons
+
+---
+ src/test/regress/regress.c | 11 +++++++++--
+ 1 file changed, 9 insertions(+), 2 deletions(-)
+
+diff --git a/src/test/regress/regress.c b/src/test/regress/regress.c
+index 3ac209c7a91..9bf6b25b30f 100644
+--- a/src/test/regress/regress.c
++++ b/src/test/regress/regress.c
+@@ -1610,6 +1610,7 @@ typedef struct TupleCheckValues
+ {
+ 	TransactionId		xmin;
+ 	TransactionId		xmax;
++	bool				xmin_frozen;
+ } TupleCheckValues;
+ 
+ typedef struct RelCheckValues
+@@ -1645,12 +1646,14 @@ FillRelCheckValues(Relation rel, Buffer buffer, Page page)
+ 			 offnum = OffsetNumberNext(offnum))
+ 		{
+ 			itemid = PageGetItemId(page, offnum);
++			if (!ItemIdIsNormal(itemid))
++				continue;
+ 			tuphdr = (HeapTupleHeader) PageGetItem(page, itemid);
+ 			tuple.t_data = tuphdr;
+ 			tuple.t_len = ItemIdGetLength(itemid);
+ 			tuple.t_tableOid = RelationGetRelid(rel);
+ 
+-			if (HeapPageGetSpecial(page) == heapDoubleXmaxSpecial)
++			if (PageGetPageLayoutVersion(page) == PG_PAGE_LAYOUT_VERSION - 1)
+ 			{
+ 				xmin = tuphdr->t_choice.t_heap.t_xmin;
+ 				xmax = tuphdr->t_choice.t_heap.t_xmax;
+@@ -1671,6 +1674,7 @@ FillRelCheckValues(Relation rel, Buffer buffer, Page page)
+ 
+ 			set.tcv[set.ntuples].xmin = xmin;
+ 			set.tcv[set.ntuples].xmax = xmax;
++			set.tcv[set.ntuples].xmin_frozen = HeapTupleHeaderXminFrozen(tuphdr);
+ 			set.ntuples++;
+ 		}
+ 	}
+@@ -1735,7 +1739,8 @@ xid64_test_2(PG_FUNCTION_ARGS)
+ 
+ 		for (i = 0; i != before.ntuples; ++i)
+ 		{
+-			if (before.tcv[i].xmin != after.tcv[i].xmin && after.tcv[i].xmin)
++			if (before.tcv[i].xmin != after.tcv[i].xmin &&
++				!after.tcv[i].xmin_frozen)
+ 				elog(ERROR, "old and new xmin does not match (%" PRIu64 " != %" PRIu64 ")",
+ 					 before.tcv[i].xmin, after.tcv[i].xmin);
+ 
+@@ -1796,6 +1801,8 @@ xid64_test_double_xmax(PG_FUNCTION_ARGS)
+ 			 offnum = OffsetNumberNext(offnum))
+ 		{
+ 			itemid = PageGetItemId(page, offnum);
++			if (!ItemIdIsNormal(itemid))
++				continue;
+ 			tuphdr = (HeapTupleHeader) PageGetItem(page, itemid);
+ 			tuphdr->t_infomask |= HEAP_XMIN_COMMITTED;
+ 		}
+-- 
+2.55.0
+
