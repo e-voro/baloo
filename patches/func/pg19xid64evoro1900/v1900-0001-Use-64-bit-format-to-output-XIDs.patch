@@ -1,7 +1,7 @@
-From 4245e55b870ca424ae8a8dac63c85af6f322d852 Mon Sep 17 00:00:00 2001
+From 6cf34113ff408640db4f0edcbafcd269fb454204 Mon Sep 17 00:00:00 2001
 From: Maxim Orlov <m.orlov@postgrespro.ru>
 Date: Fri, 25 Mar 2022 15:24:25 +0300
-Subject: [PATCH v67 01/12] Use 64-bit format to output XIDs
+Subject: [PATCH v1900 1/7] Use 64-bit format to output XIDs
 
 Replace the %u formatting string for XIDs with %llu and cast to
 unsigned long long. This is the part of a making XIDs 64-bit.
@@ -18,70 +18,73 @@ Author: Aleksander Alekseev <aleksander@timescale.com>
 Reviewed-by: Aleksander Alekseev <aleksander@timescale.com>
 Discussion: https://postgr.es/m/CACG%3DezZe1NQSCnfHOr78AtAZxJZeCvxrts0ygrxYwe%3DpyyjVWA%40mail.gmail.com
 Discussion: https://postgr.es/m/CAJ7c6TPDOYBYrnCAeyndkBktO0WG2xSdYduTF0nxq%2BvfkmTF5Q%40mail.gmail.com
+
+Author: Evgeny Voropaev <evorop@gmail.com>
 ---
- contrib/amcheck/verify_heapam.c                    | 140 +++++++++----------
- contrib/pageinspect/btreefuncs.c                   |   8 +-
- contrib/pgrowlocks/pgrowlocks.c                    |   9 +-
- contrib/test_decoding/test_decoding.c              |  38 ++++--
- doc/src/sgml/logicaldecoding.sgml                  |   2 +-
- src/backend/access/heap/heapam.c                   |  71 +++++-----
- src/backend/access/heap/heapam_handler.c           |   4 +-
- src/backend/access/heap/vacuumlazy.c               |  15 ++-
- src/backend/access/rmgrdesc/clogdesc.c             |   4 +-
- src/backend/access/rmgrdesc/committsdesc.c         |   4 +-
- src/backend/access/rmgrdesc/gistdesc.c             |  14 +-
- src/backend/access/rmgrdesc/hashdesc.c             |   4 +-
- src/backend/access/rmgrdesc/heapdesc.c             |  41 +++---
- src/backend/access/rmgrdesc/mxactdesc.c            |   9 +-
- src/backend/access/rmgrdesc/nbtdesc.c              |  12 +-
- src/backend/access/rmgrdesc/spgdesc.c              |   4 +-
- src/backend/access/rmgrdesc/standbydesc.c          |  18 +--
- src/backend/access/rmgrdesc/xactdesc.c             |  10 +-
- src/backend/access/rmgrdesc/xlogdesc.c             |  22 +--
- src/backend/access/transam/clog.c                  |   3 +-
- src/backend/access/transam/commit_ts.c             |   6 +-
- src/backend/access/transam/multixact.c             | 149 +++++++++++----------
- src/backend/access/transam/subtrans.c              |   8 +-
- src/backend/access/transam/transam.c               |   8 +-
- src/backend/access/transam/twophase.c              |  47 +++----
- src/backend/access/transam/varsup.c                |  20 +--
- src/backend/access/transam/xact.c                  |  16 ++-
- src/backend/access/transam/xlogrecovery.c          |  48 +++----
- src/backend/commands/vacuum.c                      |  10 +-
- src/backend/nodes/outfuncs.c                       |   2 +-
- .../replication/logical/applyparallelworker.c      |   6 +-
- src/backend/replication/logical/conflict.c         |  92 ++++++-------
- src/backend/replication/logical/logical.c          |   4 +-
- src/backend/replication/logical/reorderbuffer.c    |  23 ++--
- src/backend/replication/logical/snapbuild.c        |  66 +++++----
- src/backend/replication/logical/worker.c           |  30 +++--
- src/backend/replication/pgoutput/pgoutput.c        |   3 +-
- src/backend/replication/slot.c                     |   4 +-
- src/backend/replication/walreceiver.c              |   5 +-
- src/backend/replication/walsender.c                |   6 +-
- src/backend/storage/ipc/procarray.c                |  39 +++---
- src/backend/storage/ipc/standby.c                  |  26 ++--
- src/backend/storage/lmgr/predicate.c               |   9 +-
- src/backend/utils/adt/lockfuncs.c                  |   3 +-
- src/backend/utils/adt/multixactfuncs.c             |   6 +-
- src/backend/utils/error/csvlog.c                   |   5 +-
- src/backend/utils/error/elog.c                     |  15 ++-
- src/backend/utils/error/jsonlog.c                  |   9 +-
- src/backend/utils/misc/pg_controldata.c            |   4 +-
- src/backend/utils/time/snapmgr.c                   |  23 ++--
- src/bin/pg_controldata/pg_controldata.c            |  28 ++--
- src/bin/pg_dump/pg_dump.c                          |  17 ++-
- src/bin/pg_resetwal/pg_resetwal.c                  |  68 +++++-----
- src/bin/pg_upgrade/pg_upgrade.c                    |  44 +++---
- src/bin/pg_waldump/pg_waldump.c                    |  26 ++--
- src/test/modules/xid_wraparound/xid_wraparound.c   |  10 +-
- 56 files changed, 721 insertions(+), 596 deletions(-)
+ contrib/amcheck/verify_heapam.c               | 140 ++++++++--------
+ contrib/pageinspect/btreefuncs.c              |   8 +-
+ contrib/pgrowlocks/pgrowlocks.c               |   9 +-
+ contrib/test_decoding/test_decoding.c         |  38 +++--
+ doc/src/sgml/logicaldecoding.sgml             |   2 +-
+ src/backend/access/heap/heapam.c              |  71 +++++----
+ src/backend/access/heap/heapam_handler.c      |   4 +-
+ src/backend/access/heap/vacuumlazy.c          |  15 +-
+ src/backend/access/rmgrdesc/clogdesc.c        |   4 +-
+ src/backend/access/rmgrdesc/committsdesc.c    |   4 +-
+ src/backend/access/rmgrdesc/gistdesc.c        |  14 +-
+ src/backend/access/rmgrdesc/hashdesc.c        |   4 +-
+ src/backend/access/rmgrdesc/heapdesc.c        |  41 ++---
+ src/backend/access/rmgrdesc/mxactdesc.c       |   9 +-
+ src/backend/access/rmgrdesc/nbtdesc.c         |  12 +-
+ src/backend/access/rmgrdesc/spgdesc.c         |   4 +-
+ src/backend/access/rmgrdesc/standbydesc.c     |  18 ++-
+ src/backend/access/rmgrdesc/xactdesc.c        |  10 +-
+ src/backend/access/rmgrdesc/xlogdesc.c        |  22 +--
+ src/backend/access/transam/clog.c             |   3 +-
+ src/backend/access/transam/commit_ts.c        |   6 +-
+ src/backend/access/transam/multixact.c        | 149 ++++++++++--------
+ src/backend/access/transam/subtrans.c         |   8 +-
+ src/backend/access/transam/transam.c          |   8 +-
+ src/backend/access/transam/twophase.c         |  47 +++---
+ src/backend/access/transam/varsup.c           |  20 +--
+ src/backend/access/transam/xact.c             |  16 +-
+ src/backend/access/transam/xlogrecovery.c     |  48 +++---
+ src/backend/commands/vacuum.c                 |  10 +-
+ src/backend/nodes/outfuncs.c                  |   2 +-
+ .../replication/logical/applyparallelworker.c |   6 +-
+ src/backend/replication/logical/conflict.c    |  92 +++++------
+ src/backend/replication/logical/logical.c     |   4 +-
+ .../replication/logical/reorderbuffer.c       |  23 +--
+ src/backend/replication/logical/snapbuild.c   |  66 ++++----
+ src/backend/replication/logical/worker.c      |  30 ++--
+ src/backend/replication/pgoutput/pgoutput.c   |   3 +-
+ src/backend/replication/slot.c                |   4 +-
+ src/backend/replication/walreceiver.c         |   5 +-
+ src/backend/replication/walsender.c           |   6 +-
+ src/backend/storage/ipc/procarray.c           |  39 +++--
+ src/backend/storage/ipc/standby.c             |  26 +--
+ src/backend/storage/lmgr/predicate.c          |   9 +-
+ src/backend/utils/adt/lockfuncs.c             |   3 +-
+ src/backend/utils/adt/multixactfuncs.c        |   6 +-
+ src/backend/utils/error/csvlog.c              |   5 +-
+ src/backend/utils/error/elog.c                |  15 +-
+ src/backend/utils/error/jsonlog.c             |   9 +-
+ src/backend/utils/misc/pg_controldata.c       |   4 +-
+ src/backend/utils/time/snapmgr.c              |  23 +--
+ src/bin/pg_controldata/pg_controldata.c       |  28 ++--
+ src/bin/pg_dump/pg_dump.c                     |  17 +-
+ src/bin/pg_resetwal/pg_resetwal.c             |  68 ++++----
+ src/bin/pg_upgrade/multixact_read_v18.c       |   6 +-
+ src/bin/pg_upgrade/pg_upgrade.c               |  44 +++---
+ src/bin/pg_waldump/pg_waldump.c               |  26 ++-
+ .../modules/xid_wraparound/xid_wraparound.c   |  10 +-
+ 57 files changed, 724 insertions(+), 599 deletions(-)
 
 diff --git a/contrib/amcheck/verify_heapam.c b/contrib/amcheck/verify_heapam.c
-index 4963e9245c..fa8b8dcd9e 100644
+index 20ff58aa782..25b4914cfa1 100644
 --- a/contrib/amcheck/verify_heapam.c
 +++ b/contrib/amcheck/verify_heapam.c
-@@ -772,10 +772,10 @@ verify_heapam(PG_FUNCTION_ARGS)
+@@ -774,10 +774,10 @@ verify_heapam(PG_FUNCTION_ARGS)
  				TransactionIdIsInProgress(curr_xmin))
  			{
  				report_corruption(&ctx,
@@ -95,7 +98,7 @@ index 4963e9245c..fa8b8dcd9e 100644
  			}
  
  			/*
-@@ -788,16 +788,16 @@ verify_heapam(PG_FUNCTION_ARGS)
+@@ -790,16 +790,16 @@ verify_heapam(PG_FUNCTION_ARGS)
  			{
  				if (xmin_commit_status[nextoffnum] == XID_IN_PROGRESS)
  					report_corruption(&ctx,
@@ -118,7 +121,7 @@ index 4963e9245c..fa8b8dcd9e 100644
  			}
  		}
  
-@@ -1136,24 +1136,24 @@ check_tuple_visibility(HeapCheckContext *ctx, bool *xmin_commit_status_ok,
+@@ -1138,24 +1138,24 @@ check_tuple_visibility(HeapCheckContext *ctx, bool *xmin_commit_status_ok,
  			break;
  		case XID_IN_FUTURE:
  			report_corruption(ctx,
@@ -152,7 +155,7 @@ index 4963e9245c..fa8b8dcd9e 100644
  			return false;
  	}
  
-@@ -1177,24 +1177,24 @@ check_tuple_visibility(HeapCheckContext *ctx, bool *xmin_commit_status_ok,
+@@ -1179,24 +1179,24 @@ check_tuple_visibility(HeapCheckContext *ctx, bool *xmin_commit_status_ok,
  					return false;
  				case XID_IN_FUTURE:
  					report_corruption(ctx,
@@ -186,7 +189,7 @@ index 4963e9245c..fa8b8dcd9e 100644
  					return false;
  				case XID_BOUNDS_OK:
  					break;
-@@ -1204,13 +1204,13 @@ check_tuple_visibility(HeapCheckContext *ctx, bool *xmin_commit_status_ok,
+@@ -1206,13 +1206,13 @@ check_tuple_visibility(HeapCheckContext *ctx, bool *xmin_commit_status_ok,
  			{
  				case XID_IS_CURRENT_XID:
  					report_corruption(ctx,
@@ -204,7 +207,7 @@ index 4963e9245c..fa8b8dcd9e 100644
  					return false;
  
  				case XID_COMMITTED:
-@@ -1246,24 +1246,24 @@ check_tuple_visibility(HeapCheckContext *ctx, bool *xmin_commit_status_ok,
+@@ -1248,24 +1248,24 @@ check_tuple_visibility(HeapCheckContext *ctx, bool *xmin_commit_status_ok,
  					return false;
  				case XID_IN_FUTURE:
  					report_corruption(ctx,
@@ -238,7 +241,7 @@ index 4963e9245c..fa8b8dcd9e 100644
  					return false;
  				case XID_BOUNDS_OK:
  					break;
-@@ -1273,13 +1273,13 @@ check_tuple_visibility(HeapCheckContext *ctx, bool *xmin_commit_status_ok,
+@@ -1275,13 +1275,13 @@ check_tuple_visibility(HeapCheckContext *ctx, bool *xmin_commit_status_ok,
  			{
  				case XID_IS_CURRENT_XID:
  					report_corruption(ctx,
@@ -256,7 +259,7 @@ index 4963e9245c..fa8b8dcd9e 100644
  					return false;
  
  				case XID_COMMITTED:
-@@ -1349,19 +1349,21 @@ check_tuple_visibility(HeapCheckContext *ctx, bool *xmin_commit_status_ok,
+@@ -1351,19 +1351,21 @@ check_tuple_visibility(HeapCheckContext *ctx, bool *xmin_commit_status_ok,
  				return true;
  			case XID_PRECEDES_RELMIN:
  				report_corruption(ctx,
@@ -285,7 +288,7 @@ index 4963e9245c..fa8b8dcd9e 100644
  				return true;
  			case XID_BOUNDS_OK:
  				break;
-@@ -1407,24 +1409,24 @@ check_tuple_visibility(HeapCheckContext *ctx, bool *xmin_commit_status_ok,
+@@ -1409,24 +1411,24 @@ check_tuple_visibility(HeapCheckContext *ctx, bool *xmin_commit_status_ok,
  				return true;
  			case XID_IN_FUTURE:
  				report_corruption(ctx,
@@ -319,7 +322,7 @@ index 4963e9245c..fa8b8dcd9e 100644
  				return true;
  			case XID_BOUNDS_OK:
  				break;
-@@ -1472,24 +1474,24 @@ check_tuple_visibility(HeapCheckContext *ctx, bool *xmin_commit_status_ok,
+@@ -1474,24 +1476,24 @@ check_tuple_visibility(HeapCheckContext *ctx, bool *xmin_commit_status_ok,
  			return true;
  		case XID_IN_FUTURE:
  			report_corruption(ctx,
@@ -354,7 +357,7 @@ index 4963e9245c..fa8b8dcd9e 100644
  		case XID_BOUNDS_OK:
  			break;
 diff --git a/contrib/pageinspect/btreefuncs.c b/contrib/pageinspect/btreefuncs.c
-index 2e67c9adf5..73079f4089 100644
+index 62c905c6e7c..061928c9c2f 100644
 --- a/contrib/pageinspect/btreefuncs.c
 +++ b/contrib/pageinspect/btreefuncs.c
 @@ -143,13 +143,13 @@ GetBTPageStatistics(BlockNumber blkno, Buffer buffer, BTPageStat *stat)
@@ -376,10 +379,10 @@ index 2e67c9adf5..73079f4089 100644
  		/* Don't interpret BTDeletedPageData as index tuples */
  		maxoff = InvalidOffsetNumber;
 diff --git a/contrib/pgrowlocks/pgrowlocks.c b/contrib/pgrowlocks/pgrowlocks.c
-index f88269332b..718a68189c 100644
+index d164c4c03ad..e1106b44487 100644
 --- a/contrib/pgrowlocks/pgrowlocks.c
 +++ b/contrib/pgrowlocks/pgrowlocks.c
-@@ -145,7 +145,8 @@ pgrowlocks(PG_FUNCTION_ARGS)
+@@ -146,7 +146,8 @@ pgrowlocks(PG_FUNCTION_ARGS)
  																	PointerGetDatum(&tuple->t_self)));
  
  			values[Atnum_xmax] = palloc(NCHARS * sizeof(char));
@@ -389,7 +392,7 @@ index f88269332b..718a68189c 100644
  			if (infomask & HEAP_XMAX_IS_MULTI)
  			{
  				MultiXactMember *members;
-@@ -186,7 +187,8 @@ pgrowlocks(PG_FUNCTION_ARGS)
+@@ -187,7 +188,8 @@ pgrowlocks(PG_FUNCTION_ARGS)
  							strcat(values[Atnum_modes], ",");
  							strcat(values[Atnum_pids], ",");
  						}
@@ -399,7 +402,7 @@ index f88269332b..718a68189c 100644
  						strcat(values[Atnum_xids], buf);
  						switch (members[j].status)
  						{
-@@ -227,7 +229,8 @@ pgrowlocks(PG_FUNCTION_ARGS)
+@@ -228,7 +230,8 @@ pgrowlocks(PG_FUNCTION_ARGS)
  				values[Atnum_ismulti] = pstrdup("false");
  
  				values[Atnum_xids] = palloc(NCHARS * sizeof(char));
@@ -410,7 +413,7 @@ index f88269332b..718a68189c 100644
  				values[Atnum_modes] = palloc(NCHARS);
  				if (infomask & HEAP_XMAX_LOCK_ONLY)
 diff --git a/contrib/test_decoding/test_decoding.c b/contrib/test_decoding/test_decoding.c
-index 36e77c69e1..9a548d1aa3 100644
+index d5cf0fa02b0..610ea684eb7 100644
 --- a/contrib/test_decoding/test_decoding.c
 +++ b/contrib/test_decoding/test_decoding.c
 @@ -311,7 +311,7 @@ pg_output_begin(LogicalDecodingContext *ctx, TestDecodingData *data, ReorderBuff
@@ -536,10 +539,10 @@ index 36e77c69e1..9a548d1aa3 100644
  		appendStringInfoString(ctx->out, "streaming truncate for transaction");
  	OutputPluginWrite(ctx, true);
 diff --git a/doc/src/sgml/logicaldecoding.sgml b/doc/src/sgml/logicaldecoding.sgml
-index d5a5e22fe2..6307ae9285 100644
+index 6dc49108997..e37c920557b 100644
 --- a/doc/src/sgml/logicaldecoding.sgml
 +++ b/doc/src/sgml/logicaldecoding.sgml
-@@ -1376,7 +1376,7 @@ typedef void (*LogicalDecodeStreamTruncateCB) (struct LogicalDecodingContext *ct
+@@ -1415,7 +1415,7 @@ typedef void (*LogicalDecodeStreamTruncateCB) (struct LogicalDecodingContext *ct
       output plugin:
  <programlisting>
  OutputPluginPrepareWrite(ctx, true);
@@ -549,10 +552,10 @@ index d5a5e22fe2..6307ae9285 100644
  </programlisting>
      </para>
 diff --git a/src/backend/access/heap/heapam.c b/src/backend/access/heap/heapam.c
-index 4b0c49f4bb..747c6d330a 100644
+index 182740c8183..20e30a749b0 100644
 --- a/src/backend/access/heap/heapam.c
 +++ b/src/backend/access/heap/heapam.c
-@@ -5507,7 +5507,8 @@ l5:
+@@ -5672,7 +5672,8 @@ l5:
  				 * TransactionIdIsInProgress() should have returned false.  We
  				 * assume it's no longer locked in this case.
  				 */
@@ -562,7 +565,7 @@ index 4b0c49f4bb..747c6d330a 100644
  				old_infomask |= HEAP_XMAX_INVALID;
  				old_infomask &= ~HEAP_XMAX_LOCK_ONLY;
  				goto l5;
-@@ -6742,8 +6743,9 @@ FreezeMultiXactId(MultiXactId multi, uint16 t_infomask,
+@@ -6937,8 +6938,9 @@ FreezeMultiXactId(MultiXactId multi, uint16 t_infomask,
  	else if (MultiXactIdPrecedes(multi, cutoffs->relminmxid))
  		ereport(ERROR,
  				(errcode(ERRCODE_DATA_CORRUPTED),
@@ -574,7 +577,7 @@ index 4b0c49f4bb..747c6d330a 100644
  	else if (MultiXactIdPrecedes(multi, cutoffs->OldestMxact))
  	{
  		TransactionId update_xact;
-@@ -6758,8 +6760,9 @@ FreezeMultiXactId(MultiXactId multi, uint16 t_infomask,
+@@ -6953,8 +6955,9 @@ FreezeMultiXactId(MultiXactId multi, uint16 t_infomask,
  								 HEAP_XMAX_IS_LOCKED_ONLY(t_infomask)))
  			ereport(ERROR,
  					(errcode(ERRCODE_DATA_CORRUPTED),
@@ -586,7 +589,7 @@ index 4b0c49f4bb..747c6d330a 100644
  
  		if (HEAP_XMAX_IS_LOCKED_ONLY(t_infomask))
  		{
-@@ -6773,9 +6776,10 @@ FreezeMultiXactId(MultiXactId multi, uint16 t_infomask,
+@@ -6968,9 +6971,10 @@ FreezeMultiXactId(MultiXactId multi, uint16 t_infomask,
  		if (TransactionIdPrecedes(update_xact, cutoffs->relfrozenxid))
  			ereport(ERROR,
  					(errcode(ERRCODE_DATA_CORRUPTED),
@@ -600,7 +603,7 @@ index 4b0c49f4bb..747c6d330a 100644
  		else if (TransactionIdPrecedes(update_xact, cutoffs->OldestXmin))
  		{
  			/*
-@@ -6786,9 +6790,10 @@ FreezeMultiXactId(MultiXactId multi, uint16 t_infomask,
+@@ -6981,9 +6985,10 @@ FreezeMultiXactId(MultiXactId multi, uint16 t_infomask,
  			if (TransactionIdDidCommit(update_xact))
  				ereport(ERROR,
  						(errcode(ERRCODE_DATA_CORRUPTED),
@@ -614,7 +617,7 @@ index 4b0c49f4bb..747c6d330a 100644
  			*flags |= FRM_INVALIDATE_XMAX;
  			pagefrz->freeze_required = true;
  			return InvalidTransactionId;
-@@ -6907,9 +6912,10 @@ FreezeMultiXactId(MultiXactId multi, uint16 t_infomask,
+@@ -7102,9 +7107,10 @@ FreezeMultiXactId(MultiXactId multi, uint16 t_infomask,
  				if (TransactionIdPrecedes(xid, cutoffs->OldestXmin))
  					ereport(ERROR,
  							(errcode(ERRCODE_DATA_CORRUPTED),
@@ -628,7 +631,7 @@ index 4b0c49f4bb..747c6d330a 100644
  				newmembers[nnewmembers++] = members[i];
  				has_lockers = true;
  			}
-@@ -6931,10 +6937,11 @@ FreezeMultiXactId(MultiXactId multi, uint16 t_infomask,
+@@ -7126,10 +7132,11 @@ FreezeMultiXactId(MultiXactId multi, uint16 t_infomask,
  		if (TransactionIdIsValid(update_xid))
  			ereport(ERROR,
  					(errcode(ERRCODE_DATA_CORRUPTED),
@@ -644,7 +647,7 @@ index 4b0c49f4bb..747c6d330a 100644
  
  		/*
  		 * As with all tuple visibility routines, it's critical to test
-@@ -6970,8 +6977,10 @@ FreezeMultiXactId(MultiXactId multi, uint16 t_infomask,
+@@ -7165,8 +7172,10 @@ FreezeMultiXactId(MultiXactId multi, uint16 t_infomask,
  		if (TransactionIdPrecedes(xid, cutoffs->OldestXmin))
  			ereport(ERROR,
  					(errcode(ERRCODE_DATA_CORRUPTED),
@@ -657,7 +660,7 @@ index 4b0c49f4bb..747c6d330a 100644
  		newmembers[nnewmembers++] = members[i];
  	}
  
-@@ -7094,8 +7103,9 @@ heap_prepare_freeze_tuple(HeapTupleHeader tuple,
+@@ -7295,8 +7304,9 @@ heap_prepare_freeze_tuple(HeapTupleHeader tuple,
  		if (TransactionIdPrecedes(xid, cutoffs->relfrozenxid))
  			ereport(ERROR,
  					(errcode(ERRCODE_DATA_CORRUPTED),
@@ -669,7 +672,7 @@ index 4b0c49f4bb..747c6d330a 100644
  
  		/* Will set freeze_xmin flags in freeze plan below */
  		freeze_xmin = TransactionIdPrecedes(xid, cutoffs->OldestXmin);
-@@ -7233,8 +7243,9 @@ heap_prepare_freeze_tuple(HeapTupleHeader tuple,
+@@ -7441,8 +7451,9 @@ heap_prepare_freeze_tuple(HeapTupleHeader tuple,
  		if (TransactionIdPrecedes(xid, cutoffs->relfrozenxid))
  			ereport(ERROR,
  					(errcode(ERRCODE_DATA_CORRUPTED),
@@ -681,7 +684,7 @@ index 4b0c49f4bb..747c6d330a 100644
  
  		/* Will set freeze_xmax flags in freeze plan below */
  		freeze_xmax = TransactionIdPrecedes(xid, cutoffs->OldestXmin);
-@@ -7256,8 +7267,8 @@ heap_prepare_freeze_tuple(HeapTupleHeader tuple,
+@@ -7464,8 +7475,8 @@ heap_prepare_freeze_tuple(HeapTupleHeader tuple,
  	else
  		ereport(ERROR,
  				(errcode(ERRCODE_DATA_CORRUPTED),
@@ -692,7 +695,7 @@ index 4b0c49f4bb..747c6d330a 100644
  
  	if (freeze_xmin)
  	{
-@@ -7357,8 +7368,8 @@ heap_pre_freeze_checks(Buffer buffer,
+@@ -7565,8 +7576,8 @@ heap_pre_freeze_checks(Buffer buffer,
  			if (unlikely(!TransactionIdDidCommit(xmin)))
  				ereport(ERROR,
  						(errcode(ERRCODE_DATA_CORRUPTED),
@@ -703,7 +706,7 @@ index 4b0c49f4bb..747c6d330a 100644
  		}
  
  		/*
-@@ -7374,8 +7385,8 @@ heap_pre_freeze_checks(Buffer buffer,
+@@ -7582,8 +7593,8 @@ heap_pre_freeze_checks(Buffer buffer,
  			if (unlikely(TransactionIdDidCommit(xmax)))
  				ereport(ERROR,
  						(errcode(ERRCODE_DATA_CORRUPTED),
@@ -715,10 +718,10 @@ index 4b0c49f4bb..747c6d330a 100644
  	}
  }
 diff --git a/src/backend/access/heap/heapam_handler.c b/src/backend/access/heap/heapam_handler.c
-index bcbac844bb..fdf5e5e723 100644
+index 2268cc277bc..d40493eb7ff 100644
 --- a/src/backend/access/heap/heapam_handler.c
 +++ b/src/backend/access/heap/heapam_handler.c
-@@ -438,8 +438,8 @@ tuple_lock_retry:
+@@ -347,8 +347,8 @@ tuple_lock_retry:
  					if (TransactionIdIsValid(SnapshotDirty.xmin))
  						ereport(ERROR,
  								(errcode(ERRCODE_DATA_CORRUPTED),
@@ -730,10 +733,10 @@ index bcbac844bb..fdf5e5e723 100644
  												 ItemPointerGetOffsetNumber(&tuple->t_self),
  												 RelationGetRelationName(relation))));
 diff --git a/src/backend/access/heap/vacuumlazy.c b/src/backend/access/heap/vacuumlazy.c
-index deb9a3dc0d..33ec78ff8e 100644
+index 9bce43e563c..9aad95a4b2f 100644
 --- a/src/backend/access/heap/vacuumlazy.c
 +++ b/src/backend/access/heap/vacuumlazy.c
-@@ -1045,23 +1045,26 @@ heap_vacuum_rel(Relation rel, const VacuumParams params,
+@@ -1082,23 +1082,26 @@ heap_vacuum_rel(Relation rel, const VacuumParams *params,
  			diff = (int32) (ReadNextTransactionId() -
  							vacrel->cutoffs.OldestXmin);
  			appendStringInfo(&buf,
@@ -767,7 +770,7 @@ index deb9a3dc0d..33ec78ff8e 100644
  			appendStringInfo(&buf, _("frozen: %u pages from table (%.2f%% of total) had %" PRId64 " tuples frozen\n"),
  							 vacrel->new_frozen_tuple_pages,
 diff --git a/src/backend/access/rmgrdesc/clogdesc.c b/src/backend/access/rmgrdesc/clogdesc.c
-index 41bf28dcfd..6fc7b1a9a8 100644
+index 022376045d7..e12f5cf1c84 100644
 --- a/src/backend/access/rmgrdesc/clogdesc.c
 +++ b/src/backend/access/rmgrdesc/clogdesc.c
 @@ -35,8 +35,8 @@ clog_desc(StringInfo buf, XLogReaderState *record)
@@ -782,7 +785,7 @@ index 41bf28dcfd..6fc7b1a9a8 100644
  }
  
 diff --git a/src/backend/access/rmgrdesc/committsdesc.c b/src/backend/access/rmgrdesc/committsdesc.c
-index a6ab9dd78d..514aaefa44 100644
+index 958db3946e0..4d1210ec4e8 100644
 --- a/src/backend/access/rmgrdesc/committsdesc.c
 +++ b/src/backend/access/rmgrdesc/committsdesc.c
 @@ -34,8 +34,8 @@ commit_ts_desc(StringInfo buf, XLogReaderState *record)
@@ -797,7 +800,7 @@ index a6ab9dd78d..514aaefa44 100644
  }
  
 diff --git a/src/backend/access/rmgrdesc/gistdesc.c b/src/backend/access/rmgrdesc/gistdesc.c
-index a2b84e898f..db64873256 100644
+index 67789e0253b..3ee428ed3c6 100644
 --- a/src/backend/access/rmgrdesc/gistdesc.c
 +++ b/src/backend/access/rmgrdesc/gistdesc.c
 @@ -25,20 +25,20 @@ out_gistxlogPageUpdate(StringInfo buf, gistxlogPageUpdate *xlrec)
@@ -839,7 +842,7 @@ index a2b84e898f..db64873256 100644
  }
  
 diff --git a/src/backend/access/rmgrdesc/hashdesc.c b/src/backend/access/rmgrdesc/hashdesc.c
-index 2ee5332452..ccde73dc83 100644
+index 593013afe9c..412667c0a11 100644
 --- a/src/backend/access/rmgrdesc/hashdesc.c
 +++ b/src/backend/access/rmgrdesc/hashdesc.c
 @@ -118,9 +118,9 @@ hash_desc(StringInfo buf, XLogReaderState *record)
@@ -855,7 +858,7 @@ index 2ee5332452..ccde73dc83 100644
  				break;
  			}
 diff --git a/src/backend/access/rmgrdesc/heapdesc.c b/src/backend/access/rmgrdesc/heapdesc.c
-index ca26d1f0ed..4601e845f1 100644
+index 75ae6f9d375..df97d0921df 100644
 --- a/src/backend/access/rmgrdesc/heapdesc.c
 +++ b/src/backend/access/rmgrdesc/heapdesc.c
 @@ -79,8 +79,8 @@ plan_elem_desc(StringInfo buf, void *plan, void *data)
@@ -937,7 +940,7 @@ index ca26d1f0ed..4601e845f1 100644
  		}
  
  		appendStringInfo(buf, ", isCatalogRel: %c",
-@@ -380,8 +386,8 @@ heap2_desc(StringInfo buf, XLogReaderState *record)
+@@ -373,8 +378,8 @@ heap2_desc(StringInfo buf, XLogReaderState *record)
  	{
  		xl_heap_lock_updated *xlrec = (xl_heap_lock_updated *) rec;
  
@@ -949,6 +952,7 @@ index ca26d1f0ed..4601e845f1 100644
  		appendStringInfo(buf, ", flags: 0x%02X", xlrec->flags);
  	}
 diff --git a/src/backend/access/rmgrdesc/mxactdesc.c b/src/backend/access/rmgrdesc/mxactdesc.c
+index 6919c7ddd2e..5a6d94c9905 100644
 --- a/src/backend/access/rmgrdesc/mxactdesc.c
 +++ b/src/backend/access/rmgrdesc/mxactdesc.c
 @@ -19,7 +19,7 @@
@@ -960,7 +964,7 @@ diff --git a/src/backend/access/rmgrdesc/mxactdesc.c b/src/backend/access/rmgrde
  	switch (member->status)
  	{
  		case MultiXactStatusForKeyShare:
-@@ -65,7 +65,8 @@
+@@ -65,7 +65,8 @@ multixact_desc(StringInfo buf, XLogReaderState *record)
  		xl_multixact_create *xlrec = (xl_multixact_create *) rec;
  		int			i;
  
@@ -970,7 +974,7 @@ diff --git a/src/backend/access/rmgrdesc/mxactdesc.c b/src/backend/access/rmgrde
  						 xlrec->moff, xlrec->nmembers);
  		for (i = 0; i < xlrec->nmembers; i++)
  			out_member(buf, &xlrec->members[i]);
-@@ -74,8 +75,8 @@
+@@ -74,8 +75,8 @@ multixact_desc(StringInfo buf, XLogReaderState *record)
  	{
  		xl_multixact_truncate *xlrec = (xl_multixact_truncate *) rec;
  
@@ -982,7 +986,7 @@ diff --git a/src/backend/access/rmgrdesc/mxactdesc.c b/src/backend/access/rmgrde
  }
  
 diff --git a/src/backend/access/rmgrdesc/nbtdesc.c b/src/backend/access/rmgrdesc/nbtdesc.c
-index c05d19ab00..8747dd64c6 100644
+index 1d08f9957bd..698a37eff61 100644
 --- a/src/backend/access/rmgrdesc/nbtdesc.c
 +++ b/src/backend/access/rmgrdesc/nbtdesc.c
 @@ -71,8 +71,8 @@ btree_desc(StringInfo buf, XLogReaderState *record)
@@ -1024,7 +1028,7 @@ index c05d19ab00..8747dd64c6 100644
  				break;
  			}
 diff --git a/src/backend/access/rmgrdesc/spgdesc.c b/src/backend/access/rmgrdesc/spgdesc.c
-index 72efedc5b4..7b4886fddb 100644
+index 548de137404..b564eb74b8f 100644
 --- a/src/backend/access/rmgrdesc/spgdesc.c
 +++ b/src/backend/access/rmgrdesc/spgdesc.c
 @@ -118,10 +118,10 @@ spg_desc(StringInfo buf, XLogReaderState *record)
@@ -1041,7 +1045,7 @@ index 72efedc5b4..7b4886fddb 100644
  			}
  			break;
 diff --git a/src/backend/access/rmgrdesc/standbydesc.c b/src/backend/access/rmgrdesc/standbydesc.c
-index 81eff5f31c..571c0f9092 100644
+index 0a291354ae2..ef113777454 100644
 --- a/src/backend/access/rmgrdesc/standbydesc.c
 +++ b/src/backend/access/rmgrdesc/standbydesc.c
 @@ -21,15 +21,15 @@ standby_desc_running_xacts(StringInfo buf, xl_running_xacts *xlrec)
@@ -1088,7 +1092,7 @@ index 81eff5f31c..571c0f9092 100644
  	}
  	else if (info == XLOG_RUNNING_XACTS)
 diff --git a/src/backend/access/rmgrdesc/xactdesc.c b/src/backend/access/rmgrdesc/xactdesc.c
-index f0f696855b..267eab42a4 100644
+index 4f53d3035cc..0f4bd305514 100644
 --- a/src/backend/access/rmgrdesc/xactdesc.c
 +++ b/src/backend/access/rmgrdesc/xactdesc.c
 @@ -304,7 +304,7 @@ xact_desc_subxacts(StringInfo buf, int nsubxacts, TransactionId *subxacts)
@@ -1100,7 +1104,7 @@ index f0f696855b..267eab42a4 100644
  	}
  }
  
-@@ -339,7 +339,7 @@ xact_desc_commit(StringInfo buf, uint8 info, xl_xact_commit *xlrec, RepOriginId
+@@ -339,7 +339,7 @@ xact_desc_commit(StringInfo buf, uint8 info, xl_xact_commit *xlrec, ReplOriginId
  
  	/* If this is a prepared xact, show the xid of the original xact */
  	if (TransactionIdIsValid(parsed.twophase_xid))
@@ -1109,7 +1113,7 @@ index f0f696855b..267eab42a4 100644
  
  	appendStringInfoString(buf, timestamptz_to_str(xlrec->xact_time));
  
-@@ -375,7 +375,7 @@ xact_desc_abort(StringInfo buf, uint8 info, xl_xact_abort *xlrec, RepOriginId or
+@@ -375,7 +375,7 @@ xact_desc_abort(StringInfo buf, uint8 info, xl_xact_abort *xlrec, ReplOriginId o
  
  	/* If this is a prepared xact, show the xid of the original xact */
  	if (TransactionIdIsValid(parsed.twophase_xid))
@@ -1137,9 +1141,10 @@ index f0f696855b..267eab42a4 100644
  	}
  	else if (info == XLOG_XACT_INVALIDATIONS)
 diff --git a/src/backend/access/rmgrdesc/xlogdesc.c b/src/backend/access/rmgrdesc/xlogdesc.c
+index 2468a7d2578..832561d78e7 100644
 --- a/src/backend/access/rmgrdesc/xlogdesc.c
 +++ b/src/backend/access/rmgrdesc/xlogdesc.c
-@@ -101,10 +101,10 @@
+@@ -101,10 +101,10 @@ xlog_desc(StringInfo buf, XLogReaderState *record)
  		CheckPoint *checkpoint = (CheckPoint *) rec;
  
  		appendStringInfo(buf, "redo %X/%08X; "
@@ -1154,7 +1159,7 @@ diff --git a/src/backend/access/rmgrdesc/xlogdesc.c b/src/backend/access/rmgrdes
  						 "checksums %s; %s",
  						 LSN_FORMAT_ARGS(checkpoint->redo),
  						 checkpoint->ThisTimeLineID,
-@@ -113,17 +113,17 @@
+@@ -113,17 +113,17 @@ xlog_desc(StringInfo buf, XLogReaderState *record)
  						 get_wal_level_string(checkpoint->wal_level),
  						 checkpoint->logicalDecodingEnabled ? "true" : "false",
  						 EpochFromFullTransactionId(checkpoint->nextXid),
@@ -1179,11 +1184,25 @@ diff --git a/src/backend/access/rmgrdesc/xlogdesc.c b/src/backend/access/rmgrdes
  						 get_checksum_state_string(checkpoint->dataChecksumState),
  						 (info == XLOG_CHECKPOINT_SHUTDOWN) ? "shutdown" : "online");
  	}
+diff --git a/src/backend/access/transam/clog.c b/src/backend/access/transam/clog.c
+index 75012d4b8f0..5366f9a777f 100644
+--- a/src/backend/access/transam/clog.c
++++ b/src/backend/access/transam/clog.c
+@@ -1057,7 +1057,8 @@ clog_errdetail_for_io_error(const void *opaque_data)
+ {
+ 	TransactionId xid = *(const TransactionId *) opaque_data;
+ 
+-	return errdetail("Could not access commit status of transaction %u.", xid);
++	return errdetail("Could not access commit status of transaction %llu.",
++					 (unsigned long long) xid);
+ }
+ 
+ 
 diff --git a/src/backend/access/transam/commit_ts.c b/src/backend/access/transam/commit_ts.c
-index 370b38e048..a9b7eead74 100644
+index 9e6fd5d4657..9b9b524795c 100644
 --- a/src/backend/access/transam/commit_ts.c
 +++ b/src/backend/access/transam/commit_ts.c
-@@ -282,7 +282,8 @@ TransactionIdGetCommitTsData(TransactionId xid, TimestampTz *ts,
+@@ -293,7 +293,8 @@ TransactionIdGetCommitTsData(TransactionId xid, TimestampTz *ts,
  	if (!TransactionIdIsValid(xid))
  		ereport(ERROR,
  				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
@@ -1193,7 +1212,7 @@ index 370b38e048..a9b7eead74 100644
  	else if (!TransactionIdIsNormal(xid))
  	{
  		/* frozen and bootstrap xids are always committed far in the past */
-@@ -970,7 +970,8 @@
+@@ -969,7 +970,8 @@ commit_ts_errdetail_for_io_error(const void *opaque_data)
  {
  	TransactionId xid = *(const TransactionId *) opaque_data;
  
@@ -1204,9 +1223,10 @@ index 370b38e048..a9b7eead74 100644
  
  /*
 diff --git a/src/backend/access/transam/multixact.c b/src/backend/access/transam/multixact.c
+index 424516dc106..929455cab7e 100644
 --- a/src/backend/access/transam/multixact.c
 +++ b/src/backend/access/transam/multixact.c
-@@ -423,8 +423,9 @@
+@@ -423,8 +423,9 @@ MultiXactIdExpand(MultiXactId multi, TransactionId xid, MultiXactStatus status)
  	/* MultiXactIdSetOldestMember() must have been called already. */
  	Assert(MultiXactIdIsValid(*MyOldestMemberMXactIdSlot()));
  
@@ -1218,7 +1238,7 @@ diff --git a/src/backend/access/transam/multixact.c b/src/backend/access/transam
  
  	/*
  	 * Note: we don't allow for old multis here.  The reason is that the only
-@@ -448,8 +449,8 @@
+@@ -448,8 +449,8 @@ MultiXactIdExpand(MultiXactId multi, TransactionId xid, MultiXactStatus status)
  		member.status = status;
  		newMulti = MultiXactIdCreateFromMembers(1, &member);
  
@@ -1229,7 +1249,7 @@ diff --git a/src/backend/access/transam/multixact.c b/src/backend/access/transam
  		return newMulti;
  	}
  
-@@ -462,8 +463,8 @@
+@@ -462,8 +463,8 @@ MultiXactIdExpand(MultiXactId multi, TransactionId xid, MultiXactStatus status)
  		if (TransactionIdEquals(members[i].xid, xid) &&
  			(members[i].status == status))
  		{
@@ -1240,7 +1260,7 @@ diff --git a/src/backend/access/transam/multixact.c b/src/backend/access/transam
  			pfree(members);
  			return multi;
  		}
-@@ -502,7 +503,8 @@
+@@ -502,7 +503,8 @@ MultiXactIdExpand(MultiXactId multi, TransactionId xid, MultiXactStatus status)
  	pfree(members);
  	pfree(newMembers);
  
@@ -1250,7 +1270,7 @@ diff --git a/src/backend/access/transam/multixact.c b/src/backend/access/transam
  
  	return newMulti;
  }
-@@ -525,7 +527,7 @@
+@@ -525,7 +527,7 @@ MultiXactIdIsRunning(MultiXactId multi, bool isLockOnly)
  	int			nmembers;
  	int			i;
  
@@ -1259,7 +1279,7 @@ diff --git a/src/backend/access/transam/multixact.c b/src/backend/access/transam
  
  	/*
  	 * "false" here means we assume our callers have checked that the given
-@@ -565,8 +567,8 @@
+@@ -565,8 +567,8 @@ MultiXactIdIsRunning(MultiXactId multi, bool isLockOnly)
  	{
  		if (TransactionIdIsInProgress(members[i].xid))
  		{
@@ -1270,7 +1290,7 @@ diff --git a/src/backend/access/transam/multixact.c b/src/backend/access/transam
  			pfree(members);
  			return true;
  		}
-@@ -574,7 +576,8 @@
+@@ -574,7 +576,8 @@ MultiXactIdIsRunning(MultiXactId multi, bool isLockOnly)
  
  	pfree(members);
  
@@ -1280,7 +1300,7 @@ diff --git a/src/backend/access/transam/multixact.c b/src/backend/access/transam
  
  	return false;
  }
-@@ -621,8 +624,8 @@
+@@ -621,8 +624,8 @@ MultiXactIdSetOldestMember(void)
  
  		LWLockRelease(MultiXactGenLock);
  
@@ -1291,7 +1311,7 @@ diff --git a/src/backend/access/transam/multixact.c b/src/backend/access/transam
  	}
  }
  
-@@ -666,8 +669,8 @@
+@@ -666,8 +669,8 @@ MultiXactIdSetOldestVisible(void)
  
  		LWLockRelease(MultiXactGenLock);
  
@@ -1302,7 +1322,7 @@ diff --git a/src/backend/access/transam/multixact.c b/src/backend/access/transam
  	}
  }
  
-@@ -1065,22 +1068,22 @@
+@@ -1065,22 +1068,22 @@ GetNewMultiXactId(int nmembers, MultiXactOffset *offset)
  			/* complain even if that DB has disappeared */
  			if (oldest_datname)
  				ereport(WARNING,
@@ -1331,7 +1351,7 @@ diff --git a/src/backend/access/transam/multixact.c b/src/backend/access/transam
  						 errdetail("Approximately %.2f%% of MultiXactId space remains before wraparound.",
  								   (double) (multiWrapLimit - result) / (MaxMultiXactId / 2) * 100),
  						 errhint("Execute a database-wide VACUUM in that database.\n"
-@@ -1136,8 +1139,8 @@
+@@ -1136,8 +1139,8 @@ GetNewMultiXactId(int nmembers, MultiXactOffset *offset)
  
  	LWLockRelease(MultiXactGenLock);
  
@@ -1342,7 +1362,7 @@ diff --git a/src/backend/access/transam/multixact.c b/src/backend/access/transam
  	return result;
  }
  
-@@ -1185,7 +1188,8 @@
+@@ -1185,7 +1188,8 @@ GetMultiXactIdMembers(MultiXactId multi, MultiXactMember **members,
  	MultiXactMember *ptr;
  	LWLock	   *lock;
  
@@ -1352,7 +1372,7 @@ diff --git a/src/backend/access/transam/multixact.c b/src/backend/access/transam
  
  	if (!MultiXactIdIsValid(multi) || from_pgupgrade)
  	{
-@@ -1242,14 +1246,14 @@
+@@ -1242,14 +1246,14 @@ GetMultiXactIdMembers(MultiXactId multi, MultiXactMember **members,
  	if (MultiXactIdPrecedes(multi, oldestMXact))
  		ereport(ERROR,
  				(errcode(ERRCODE_INTERNAL_ERROR),
@@ -1371,7 +1391,7 @@ diff --git a/src/backend/access/transam/multixact.c b/src/backend/access/transam
  
  	/*
  	 * Find out the offset at which we need to start reading MultiXactMembers
-@@ -1273,7 +1277,8 @@
+@@ -1273,7 +1277,8 @@ GetMultiXactIdMembers(MultiXactId multi, MultiXactMember **members,
  	if (offset == 0)
  		ereport(ERROR,
  				(errcode(ERRCODE_DATA_CORRUPTED),
@@ -1381,7 +1401,7 @@ diff --git a/src/backend/access/transam/multixact.c b/src/backend/access/transam
  
  	/* read next multi's offset */
  	{
-@@ -1318,22 +1323,23 @@
+@@ -1318,22 +1323,23 @@ GetMultiXactIdMembers(MultiXactId multi, MultiXactMember **members,
  	if (nextMXOffset == 0)
  		ereport(ERROR,
  				(errcode(ERRCODE_DATA_CORRUPTED),
@@ -1412,7 +1432,7 @@ diff --git a/src/backend/access/transam/multixact.c b/src/backend/access/transam
  	length = nextMXOffset - offset;
  
  	/* read the members */
-@@ -1460,7 +1466,8 @@
+@@ -1460,7 +1466,8 @@ mXactCacheGetBySet(int nmembers, MultiXactMember *members)
  		 */
  		if (memcmp(members, entry->members, nmembers * sizeof(MultiXactMember)) == 0)
  		{
@@ -1422,7 +1442,7 @@ diff --git a/src/backend/access/transam/multixact.c b/src/backend/access/transam
  			dclist_move_head(&MXactCache, iter.cur);
  			return entry->multi;
  		}
-@@ -1483,7 +1490,8 @@
+@@ -1483,7 +1490,8 @@ mXactCacheGetById(MultiXactId multi, MultiXactMember **members)
  {
  	dlist_iter	iter;
  
@@ -1432,7 +1452,7 @@ diff --git a/src/backend/access/transam/multixact.c b/src/backend/access/transam
  
  	dclist_foreach(iter, &MXactCache)
  	{
-@@ -1563,8 +1571,8 @@
+@@ -1563,8 +1571,8 @@ mXactCachePut(MultiXactId multi, int nmembers, MultiXactMember *members)
  		dclist_delete_from(&MXactCache, node);
  
  		entry = dclist_container(mXactCacheEnt, node, node);
@@ -1443,7 +1463,7 @@ diff --git a/src/backend/access/transam/multixact.c b/src/backend/access/transam
  
  		pfree(entry);
  	}
-@@ -1605,11 +1613,13 @@
+@@ -1605,11 +1613,13 @@ mxid_to_string(MultiXactId multi, int nmembers, MultiXactMember *members)
  
  	initStringInfo(&buf);
  
@@ -1459,7 +1479,7 @@ diff --git a/src/backend/access/transam/multixact.c b/src/backend/access/transam
  						 mxstatus_to_string(members[i].status));
  
  	appendStringInfoChar(&buf, ']');
-@@ -2028,8 +2038,9 @@
+@@ -2028,8 +2038,9 @@ MultiXactGetCheckptMulti(bool is_shutdown,
  	LWLockRelease(MultiXactGenLock);
  
  	debug_elog6(DEBUG2,
@@ -1471,7 +1491,7 @@ diff --git a/src/backend/access/transam/multixact.c b/src/backend/access/transam
  }
  
  /*
-@@ -2064,8 +2075,8 @@
+@@ -2064,8 +2075,8 @@ MultiXactSetNextMXact(MultiXactId nextMulti,
  					  MultiXactOffset nextMultiOffset)
  {
  	Assert(MultiXactIdIsValid(nextMulti));
@@ -1482,7 +1502,7 @@ diff --git a/src/backend/access/transam/multixact.c b/src/backend/access/transam
  
  	LWLockAcquire(MultiXactGenLock, LW_EXCLUSIVE);
  	MultiXactState->nextMXact = nextMulti;
-@@ -2148,8 +2159,8 @@
+@@ -2148,8 +2159,8 @@ SetMultiXactIdLimit(MultiXactId oldest_datminmxid, Oid oldest_datoid)
  
  	/* Log the info */
  	ereport(DEBUG1,
@@ -1493,7 +1513,7 @@ diff --git a/src/backend/access/transam/multixact.c b/src/backend/access/transam
  
  	/*
  	 * Computing the actual limits is only possible once the data directory is
-@@ -2203,22 +2214,22 @@
+@@ -2203,22 +2214,22 @@ SetMultiXactIdLimit(MultiXactId oldest_datminmxid, Oid oldest_datoid)
  
  		if (oldest_datname)
  			ereport(WARNING,
@@ -1522,7 +1542,7 @@ diff --git a/src/backend/access/transam/multixact.c b/src/backend/access/transam
  					 errdetail("Approximately %.2f%% of MultiXactId space remains before wraparound.",
  							   (double) (multiWrapLimit - curMulti) / (MaxMultiXactId / 2) * 100),
  					 errhint("To avoid MultiXactId assignment failures, execute a database-wide VACUUM in that database.\n"
-@@ -2244,7 +2255,8 @@
+@@ -2244,7 +2255,8 @@ MultiXactAdvanceNextMXact(MultiXactId minMulti,
  	LWLockAcquire(MultiXactGenLock, LW_EXCLUSIVE);
  	if (MultiXactIdPrecedes(MultiXactState->nextMXact, minMulti))
  	{
@@ -1532,7 +1552,7 @@ diff --git a/src/backend/access/transam/multixact.c b/src/backend/access/transam
  		MultiXactState->nextMXact = minMulti;
  	}
  	if (MultiXactState->nextOffset < minMultiOffset)
-@@ -2475,8 +2487,8 @@
+@@ -2475,8 +2487,8 @@ SetOldestOffset(void)
  									 oldestOffset)));
  		else
  			ereport(LOG,
@@ -1543,7 +1563,7 @@ diff --git a/src/backend/access/transam/multixact.c b/src/backend/access/transam
  	}
  
  	LWLockRelease(MultiXactTruncationLock);
-@@ -2723,8 +2735,8 @@
+@@ -2723,8 +2735,8 @@ TruncateMultiXact(MultiXactId newOldestMulti, Oid newOldestMultiDB)
  	else if (!find_multixact_start(newOldestMulti, &newOldestOffset))
  	{
  		ereport(LOG,
@@ -1554,7 +1574,7 @@ diff --git a/src/backend/access/transam/multixact.c b/src/backend/access/transam
  		LWLockRelease(MultiXactTruncationLock);
  		return;
  	}
-@@ -2740,16 +2752,16 @@
+@@ -2740,16 +2752,16 @@ TruncateMultiXact(MultiXactId newOldestMulti, Oid newOldestMultiDB)
  	if (newOldestOffset == 0)
  	{
  		ereport(LOG,
@@ -1575,7 +1595,7 @@ diff --git a/src/backend/access/transam/multixact.c b/src/backend/access/transam
  		 MultiXactIdToOffsetSegment(newOldestMulti),
  		 newOldestOffset,
  		 MXOffsetToMemberSegment(newOldestOffset));
-@@ -2839,7 +2851,8 @@
+@@ -2839,7 +2851,8 @@ MultiXactOffsetIoErrorDetail(const void *opaque_data)
  {
  	MultiXactId multixid = *(const MultiXactId *) opaque_data;
  
@@ -1585,7 +1605,7 @@ diff --git a/src/backend/access/transam/multixact.c b/src/backend/access/transam
  }
  
  static int
-@@ -2848,8 +2861,8 @@
+@@ -2848,8 +2861,8 @@ MultiXactMemberIoErrorDetail(const void *opaque_data)
  	const MultiXactMemberSlruReadContext *context = opaque_data;
  
  	if (MultiXactIdIsValid(context->multi))
@@ -1596,7 +1616,7 @@ diff --git a/src/backend/access/transam/multixact.c b/src/backend/access/transam
  	else
  		return errdetail("Could not access multixact member at offset %" PRIu64 ".",
  						 context->offset);
-@@ -2970,9 +2983,9 @@
+@@ -2970,9 +2983,9 @@ multixact_redo(XLogReaderState *record)
  			   SizeOfMultiXactTruncate);
  
  		elog(DEBUG1, "replaying multixact truncation: "
@@ -1608,24 +1628,11 @@ diff --git a/src/backend/access/transam/multixact.c b/src/backend/access/transam
  			 MultiXactIdToOffsetSegment(xlrec.oldestMulti),
  			 xlrec.oldestOffset,
  			 MXOffsetToMemberSegment(xlrec.oldestOffset));
-diff --git a/src/backend/access/transam/clog.c b/src/backend/access/transam/clog.c
---- a/src/backend/access/transam/clog.c
-+++ b/src/backend/access/transam/clog.c
-@@ -1057,7 +1057,8 @@
- {
- 	TransactionId xid = *(const TransactionId *) opaque_data;
- 
--	return errdetail("Could not access commit status of transaction %u.", xid);
-+	return errdetail("Could not access commit status of transaction %llu.",
-+					 (unsigned long long) xid);
- }
- 
- 
 diff --git a/src/backend/access/transam/subtrans.c b/src/backend/access/transam/subtrans.c
-index 09aace9e09..3796b5ead5 100644
+index b79e648b899..8a11a8208ae 100644
 --- a/src/backend/access/transam/subtrans.c
 +++ b/src/backend/access/transam/subtrans.c
-@@ -180,8 +180,9 @@ SubTransGetTopmostTransaction(TransactionId xid)
+@@ -188,8 +188,9 @@ SubTransGetTopmostTransaction(TransactionId xid)
  		 * structure that could lead to an infinite loop, so exit.
  		 */
  		if (!TransactionIdPrecedes(parentXid, previousXid))
@@ -1637,17 +1644,16 @@ index 09aace9e09..3796b5ead5 100644
  	}
  
  	Assert(TransactionIdIsValid(previousXid));
-@@ -444,5 +444,6 @@
+@@ -444,5 +445,6 @@ subtrans_errdetail_for_io_error(const void *opaque_data)
  {
  	TransactionId xid = *(const TransactionId *) opaque_data;
  
 -	return errdetail("Could not access subtransaction status of transaction %u.", xid);
--}
 +	return errdetail("Could not access subtransaction status of transaction %llu.",
 +					 (unsigned long long) xid);
-+}
+ }
 diff --git a/src/backend/access/transam/transam.c b/src/backend/access/transam/transam.c
-index 553d6756cb..5426712aa7 100644
+index 682182fb4ab..b1a34228489 100644
 --- a/src/backend/access/transam/transam.c
 +++ b/src/backend/access/transam/transam.c
 @@ -158,8 +158,8 @@ TransactionIdDidCommit(TransactionId transactionId)
@@ -1673,10 +1679,10 @@ index 553d6756cb..5426712aa7 100644
  		}
  		return TransactionIdDidAbort(parentXid);
 diff --git a/src/backend/access/transam/twophase.c b/src/backend/access/transam/twophase.c
-index 89d0bfa776..23ea4b3eae 100644
+index 1035e8b3fc7..844c0ccdc41 100644
 --- a/src/backend/access/transam/twophase.c
 +++ b/src/backend/access/transam/twophase.c
-@@ -836,8 +836,8 @@ TwoPhaseGetGXact(FullTransactionId fxid, bool lock_held)
+@@ -841,8 +841,8 @@ TwoPhaseGetGXact(FullTransactionId fxid, bool lock_held)
  		LWLockRelease(TwoPhaseStateLock);
  
  	if (result == NULL)			/* should not happen */
@@ -1687,7 +1693,7 @@ index 89d0bfa776..23ea4b3eae 100644
  
  	cached_fxid = fxid;
  	cached_gxact = result;
-@@ -2111,9 +2111,9 @@ RecoverPreparedTransactions(void)
+@@ -2117,9 +2117,9 @@ RecoverPreparedTransactions(void)
  			continue;
  
  		ereport(LOG,
@@ -1700,7 +1706,7 @@ index 89d0bfa776..23ea4b3eae 100644
  
  		hdr = (TwoPhaseFileHeader *) buf;
  		Assert(TransactionIdEquals(hdr->xid,
-@@ -2263,15 +2263,15 @@ ProcessTwoPhaseBuffer(FullTransactionId fxid,
+@@ -2269,15 +2269,15 @@ ProcessTwoPhaseBuffer(FullTransactionId fxid,
  		if (fromdisk)
  			ereport(ERROR,
  					(errcode(ERRCODE_DATA_CORRUPTED),
@@ -1722,7 +1728,7 @@ index 89d0bfa776..23ea4b3eae 100644
  	}
  
  	/*
-@@ -2453,8 +2453,8 @@ RecordTransactionAbortPrepared(TransactionId xid,
+@@ -2459,8 +2459,8 @@ RecordTransactionAbortPrepared(TransactionId xid,
  	 * RecordTransactionCommitPrepared ...
  	 */
  	if (TransactionIdDidCommit(xid))
@@ -1733,7 +1739,7 @@ index 89d0bfa776..23ea4b3eae 100644
  
  	START_CRIT_SECTION();
  
-@@ -2557,8 +2557,8 @@ PrepareRedoAdd(FullTransactionId fxid, char *buf,
+@@ -2563,8 +2563,8 @@ PrepareRedoAdd(FullTransactionId fxid, char *buf,
  		if (access(path, F_OK) == 0)
  		{
  			ereport(reachedConsistency ? ERROR : WARNING,
@@ -1744,7 +1750,7 @@ index 89d0bfa776..23ea4b3eae 100644
  					 errdetail("Two-phase state file has been found in WAL record %X/%08X, but this transaction has already been restored from disk.",
  							   LSN_FORMAT_ARGS(start_lsn))));
  			return;
-@@ -2602,9 +2602,9 @@ PrepareRedoAdd(FullTransactionId fxid, char *buf,
+@@ -2608,9 +2608,9 @@ PrepareRedoAdd(FullTransactionId fxid, char *buf,
  						   false /* backward */ , false /* WAL */ );
  	}
  
@@ -1757,7 +1763,7 @@ index 89d0bfa776..23ea4b3eae 100644
  }
  
  /*
-@@ -2647,9 +2647,9 @@ PrepareRedoRemoveFull(FullTransactionId fxid, bool giveWarning)
+@@ -2653,9 +2653,9 @@ PrepareRedoRemoveFull(FullTransactionId fxid, bool giveWarning)
  	/*
  	 * And now we can clean up any files we may have left.
  	 */
@@ -1770,7 +1776,7 @@ index 89d0bfa776..23ea4b3eae 100644
  
  	if (gxact->ondisk)
  		RemoveTwoPhaseFile(fxid, giveWarning);
-@@ -2753,7 +2753,7 @@ TwoPhaseTransactionGid(Oid subid, TransactionId xid, char *gid_res, int szgid)
+@@ -2759,7 +2759,7 @@ TwoPhaseTransactionGid(Oid subid, TransactionId xid, char *gid_res, int szgid)
  				(errcode(ERRCODE_PROTOCOL_VIOLATION),
  				 errmsg_internal("invalid two-phase transaction ID")));
  
@@ -1779,7 +1785,7 @@ index 89d0bfa776..23ea4b3eae 100644
  }
  
  /*
-@@ -2770,7 +2770,8 @@ IsTwoPhaseTransactionGidForSubid(Oid subid, char *gid)
+@@ -2776,7 +2776,8 @@ IsTwoPhaseTransactionGidForSubid(Oid subid, char *gid)
  	char		gid_tmp[GIDSIZE];
  
  	/* Extract the subid and xid from the given GID */
@@ -1790,9 +1796,10 @@ index 89d0bfa776..23ea4b3eae 100644
  	/*
  	 * Check that the given GID has expected format, and at least the subid
 diff --git a/src/backend/access/transam/varsup.c b/src/backend/access/transam/varsup.c
+index cb68d8fa974..68e26dcbe14 100644
 --- a/src/backend/access/transam/varsup.c
 +++ b/src/backend/access/transam/varsup.c
-@@ -163,18 +163,18 @@
+@@ -163,18 +163,18 @@ GetNewTransactionId(bool isSubXact)
  			/* complain even if that DB has disappeared */
  			if (oldest_datname)
  				ereport(WARNING,
@@ -1815,7 +1822,7 @@ diff --git a/src/backend/access/transam/varsup.c b/src/backend/access/transam/va
  						 errdetail("Approximately %.2f%% of transaction ID space remains before wraparound.",
  								   (double) (xidWrapLimit - xid) / (MaxTransactionId / 2) * 100),
  						 errhint("To avoid transaction ID assignment failures, execute a database-wide VACUUM in that database.\n"
-@@ -447,8 +447,8 @@
+@@ -447,8 +447,8 @@ SetTransactionIdLimit(TransactionId oldest_datfrozenxid, Oid oldest_datoid)
  
  	/* Log the info */
  	ereport(DEBUG1,
@@ -1826,7 +1833,7 @@ diff --git a/src/backend/access/transam/varsup.c b/src/backend/access/transam/va
  
  	/*
  	 * If past the autovacuum force point, immediately signal an autovac
-@@ -482,18 +482,18 @@
+@@ -482,18 +482,18 @@ SetTransactionIdLimit(TransactionId oldest_datfrozenxid, Oid oldest_datoid)
  
  		if (oldest_datname)
  			ereport(WARNING,
@@ -1850,9 +1857,10 @@ diff --git a/src/backend/access/transam/varsup.c b/src/backend/access/transam/va
  							   (double) (xidWrapLimit - curXid) / (MaxTransactionId / 2) * 100),
  					 errhint("To avoid transaction ID assignment failures, execute a database-wide VACUUM in that database.\n"
 diff --git a/src/backend/access/transam/xact.c b/src/backend/access/transam/xact.c
+index 3a89149016f..689890907de 100644
 --- a/src/backend/access/transam/xact.c
 +++ b/src/backend/access/transam/xact.c
-@@ -1832,8 +1832,8 @@
+@@ -1832,8 +1832,8 @@ RecordTransactionAbort(bool isSubXact)
  	 * Check that we haven't aborted halfway through RecordTransactionCommit.
  	 */
  	if (TransactionIdDidCommit(xid))
@@ -1863,7 +1871,7 @@ diff --git a/src/backend/access/transam/xact.c b/src/backend/access/transam/xact
  
  	/*
  	 * Are we using the replication origins feature?  Or, in other words, are
-@@ -5740,18 +5740,20 @@
+@@ -5740,18 +5740,20 @@ ShowTransactionStateRec(const char *str, TransactionState s)
  	{
  		int			i;
  
@@ -1890,9 +1898,10 @@ diff --git a/src/backend/access/transam/xact.c b/src/backend/access/transam/xact
  							 currentCommandIdUsed ? " (used)" : "",
  							 buf.data)));
 diff --git a/src/backend/access/transam/xlogrecovery.c b/src/backend/access/transam/xlogrecovery.c
+index 51253906d5e..0641e10092b 100644
 --- a/src/backend/access/transam/xlogrecovery.c
 +++ b/src/backend/access/transam/xlogrecovery.c
-@@ -770,8 +770,8 @@
+@@ -770,8 +770,8 @@ InitWalRecovery(ControlFileData *ControlFile, bool *wasShutdown_ptr,
  					(errmsg("entering standby mode")));
  		else if (recoveryTarget == RECOVERY_TARGET_XID)
  			ereport(LOG,
@@ -1903,7 +1912,7 @@ diff --git a/src/backend/access/transam/xlogrecovery.c b/src/backend/access/tran
  		else if (recoveryTarget == RECOVERY_TARGET_TIME)
  			ereport(LOG,
  					(errmsg("starting point-in-time recovery to %s",
-@@ -838,22 +838,24 @@
+@@ -838,22 +838,24 @@ InitWalRecovery(ControlFileData *ControlFile, bool *wasShutdown_ptr,
  							LSN_FORMAT_ARGS(checkPoint.redo),
  							wasShutdown ? "true" : "false"));
  	ereport(DEBUG1,
@@ -1939,7 +1948,7 @@ diff --git a/src/backend/access/transam/xlogrecovery.c b/src/backend/access/tran
  	if (!TransactionIdIsNormal(XidFromFullTransactionId(checkPoint.nextXid)))
  		ereport(PANIC,
  				(errmsg("invalid next transaction ID")));
-@@ -2686,15 +2688,15 @@
+@@ -2686,15 +2688,15 @@ recoveryStopsBefore(XLogReaderState *record)
  		if (isCommit)
  		{
  			ereport(LOG,
@@ -1959,7 +1968,7 @@ diff --git a/src/backend/access/transam/xlogrecovery.c b/src/backend/access/tran
  							timestamptz_to_str(recoveryStopTime))));
  		}
  	}
-@@ -2831,16 +2833,16 @@
+@@ -2831,16 +2833,16 @@ recoveryStopsAfter(XLogReaderState *record)
  				xact_info == XLOG_XACT_COMMIT_PREPARED)
  			{
  				ereport(LOG,
@@ -1980,7 +1989,7 @@ diff --git a/src/backend/access/transam/xlogrecovery.c b/src/backend/access/tran
  								timestamptz_to_str(recoveryStopTime))));
  			}
  			return true;
-@@ -2875,9 +2877,9 @@
+@@ -2875,9 +2877,9 @@ getRecoveryStopReason(void)
  
  	if (recoveryTarget == RECOVERY_TARGET_XID)
  		snprintf(reason, sizeof(reason),
@@ -1993,10 +2002,10 @@ diff --git a/src/backend/access/transam/xlogrecovery.c b/src/backend/access/tran
  		snprintf(reason, sizeof(reason),
  				 "%s %s\n",
 diff --git a/src/backend/commands/vacuum.c b/src/backend/commands/vacuum.c
-index e785dd55ce..8309d99649 100644
+index 38539a6fd3d..f67e1804718 100644
 --- a/src/backend/commands/vacuum.c
 +++ b/src/backend/commands/vacuum.c
-@@ -1572,14 +1572,16 @@ vac_update_relstats(Relation relation,
+@@ -1580,14 +1580,16 @@ vac_update_relstats(Relation relation,
  	if (futurexid)
  		ereport(WARNING,
  				(errcode(ERRCODE_DATA_CORRUPTED),
@@ -2018,7 +2027,7 @@ index e785dd55ce..8309d99649 100644
  }
  
 diff --git a/src/backend/nodes/outfuncs.c b/src/backend/nodes/outfuncs.c
-index d9fe21a07e..a58ed69262 100644
+index 953c5797c5d..5d46426f6bd 100644
 --- a/src/backend/nodes/outfuncs.c
 +++ b/src/backend/nodes/outfuncs.c
 @@ -309,7 +309,7 @@ _outList(StringInfo str, const List *node)
@@ -2031,10 +2040,10 @@ index d9fe21a07e..a58ed69262 100644
  			elog(ERROR, "unrecognized list node type: %d",
  				 (int) node->type);
 diff --git a/src/backend/replication/logical/applyparallelworker.c b/src/backend/replication/logical/applyparallelworker.c
-index baa68c1ab6..78d4da7bc8 100644
+index 012d55e9d3d..ce4b1d3aa6a 100644
 --- a/src/backend/replication/logical/applyparallelworker.c
 +++ b/src/backend/replication/logical/applyparallelworker.c
-@@ -1220,8 +1220,8 @@ pa_switch_to_partial_serialize(ParallelApplyWorkerInfo *winfo,
+@@ -1231,8 +1231,8 @@ pa_switch_to_partial_serialize(ParallelApplyWorkerInfo *winfo,
  							   bool stream_locked)
  {
  	ereport(LOG,
@@ -2045,7 +2054,7 @@ index baa68c1ab6..78d4da7bc8 100644
  
  	/*
  	 * The parallel apply worker could be stuck for some reason (say waiting
-@@ -1355,7 +1355,7 @@ pa_set_stream_apply_worker(ParallelApplyWorkerInfo *winfo)
+@@ -1366,7 +1366,7 @@ pa_set_stream_apply_worker(ParallelApplyWorkerInfo *winfo)
  static void
  pa_savepoint_name(Oid suboid, TransactionId xid, char *spname, Size szsp)
  {
@@ -2055,9 +2064,10 @@ index baa68c1ab6..78d4da7bc8 100644
  
  /*
 diff --git a/src/backend/replication/logical/conflict.c b/src/backend/replication/logical/conflict.c
+index 1f8d67fdd90..4d2e555fefd 100644
 --- a/src/backend/replication/logical/conflict.c
 +++ b/src/backend/replication/logical/conflict.c
-@@ -285,26 +285,26 @@
+@@ -285,26 +285,26 @@ errdetail_apply_conflict(EState *estate, ResultRelInfo *relinfo,
  				if (localorigin == InvalidReplOriginId)
  				{
  					if (tuple_buf.len)
@@ -2092,7 +2102,7 @@ diff --git a/src/backend/replication/logical/conflict.c b/src/backend/replicatio
  				}
  
  				/*
-@@ -317,25 +317,25 @@
+@@ -317,25 +317,25 @@ errdetail_apply_conflict(EState *estate, ResultRelInfo *relinfo,
  				else
  				{
  					if (tuple_buf.len)
@@ -2115,33 +2125,29 @@ diff --git a/src/backend/replication/logical/conflict.c b/src/backend/replicatio
  				if (tuple_buf.len)
 -					appendStringInfo(&err_detail, _("Key already exists in unique index \"%s\", modified in transaction %u: %s."),
 -									 get_rel_name(indexoid), localxmin,
--									 tuple_buf.data);
--				else
--					appendStringInfo(&err_detail, _("Key already exists in unique index \"%s\", modified in transaction %u."),
--									 get_rel_name(indexoid), localxmin);
 +					appendStringInfo(&err_detail, _("Key already exists in unique index \"%s\", modified in transaction %llu: %s."),
 +									 get_rel_name(indexoid), (unsigned long long) localxmin,
-+									 tuple_buf.data);
-+				else
+ 									 tuple_buf.data);
+ 				else
+-					appendStringInfo(&err_detail, _("Key already exists in unique index \"%s\", modified in transaction %u."),
+-									 get_rel_name(indexoid), localxmin);
 +					appendStringInfo(&err_detail, _("Key already exists in unique index \"%s\", modified in transaction %llu."),
 +									 get_rel_name(indexoid), (unsigned long long) localxmin);
  			}
  
  			break;
-@@ -348,23 +348,23 @@
+@@ -348,23 +348,23 @@ errdetail_apply_conflict(EState *estate, ResultRelInfo *relinfo,
  			if (localorigin == InvalidReplOriginId)
  			{
  				if (tuple_buf.len)
 -					appendStringInfo(&err_detail, _("Updating the row that was modified locally in transaction %u at %s: %s."),
 -									 localxmin, timestamptz_to_str(localts),
--									 tuple_buf.data);
--				else
--					appendStringInfo(&err_detail, _("Updating the row that was modified locally in transaction %u at %s."),
--									 localxmin, timestamptz_to_str(localts));
 +					appendStringInfo(&err_detail, _("Updating the row that was modified locally in transaction %llu at %s: %s."),
 +									 (unsigned long long) localxmin, timestamptz_to_str(localts),
-+									 tuple_buf.data);
-+				else
+ 									 tuple_buf.data);
+ 				else
+-					appendStringInfo(&err_detail, _("Updating the row that was modified locally in transaction %u at %s."),
+-									 localxmin, timestamptz_to_str(localts));
 +					appendStringInfo(&err_detail, _("Updating the row that was modified locally in transaction %llu at %s."),
 +									 (unsigned long long) localxmin, timestamptz_to_str(localts));
  			}
@@ -2162,26 +2168,24 @@ diff --git a/src/backend/replication/logical/conflict.c b/src/backend/replicatio
  									 timestamptz_to_str(localts));
  			}
  
-@@ -372,12 +372,12 @@
+@@ -372,12 +372,12 @@ errdetail_apply_conflict(EState *estate, ResultRelInfo *relinfo,
  			else
  			{
  				if (tuple_buf.len)
 -					appendStringInfo(&err_detail, _("Updating the row that was modified by a non-existent origin in transaction %u at %s: %s."),
 -									 localxmin, timestamptz_to_str(localts),
--									 tuple_buf.data);
--				else
--					appendStringInfo(&err_detail, _("Updating the row that was modified by a non-existent origin in transaction %u at %s."),
--									 localxmin, timestamptz_to_str(localts));
 +					appendStringInfo(&err_detail, _("Updating the row that was modified by a non-existent origin in transaction %llu at %s: %s."),
 +									 (unsigned long long) localxmin, timestamptz_to_str(localts),
-+									 tuple_buf.data);
-+				else
+ 									 tuple_buf.data);
+ 				else
+-					appendStringInfo(&err_detail, _("Updating the row that was modified by a non-existent origin in transaction %u at %s."),
+-									 localxmin, timestamptz_to_str(localts));
 +					appendStringInfo(&err_detail, _("Updating the row that was modified by a non-existent origin in transaction %llu at %s."),
 +									 (unsigned long long) localxmin, timestamptz_to_str(localts));
  			}
  
  			break;
-@@ -395,16 +395,16 @@
+@@ -395,16 +395,16 @@ errdetail_apply_conflict(EState *estate, ResultRelInfo *relinfo,
  			if (localts)
  			{
  				if (localorigin == InvalidReplOriginId)
@@ -2204,20 +2208,18 @@ diff --git a/src/backend/replication/logical/conflict.c b/src/backend/replicatio
  			}
  			else
  				appendStringInfoString(&err_detail, _("The row to be updated was deleted"));
-@@ -431,23 +431,23 @@
+@@ -431,23 +431,23 @@ errdetail_apply_conflict(EState *estate, ResultRelInfo *relinfo,
  			if (localorigin == InvalidReplOriginId)
  			{
  				if (tuple_buf.len)
 -					appendStringInfo(&err_detail, _("Deleting the row that was modified locally in transaction %u at %s: %s."),
 -									 localxmin, timestamptz_to_str(localts),
--									 tuple_buf.data);
--				else
--					appendStringInfo(&err_detail, _("Deleting the row that was modified locally in transaction %u at %s."),
--									 localxmin, timestamptz_to_str(localts));
 +					appendStringInfo(&err_detail, _("Deleting the row that was modified locally in transaction %llu at %s: %s."),
 +									 (unsigned long long) localxmin, timestamptz_to_str(localts),
-+									 tuple_buf.data);
-+				else
+ 									 tuple_buf.data);
+ 				else
+-					appendStringInfo(&err_detail, _("Deleting the row that was modified locally in transaction %u at %s."),
+-									 localxmin, timestamptz_to_str(localts));
 +					appendStringInfo(&err_detail, _("Deleting the row that was modified locally in transaction %llu at %s."),
 +									 (unsigned long long) localxmin, timestamptz_to_str(localts));
  			}
@@ -2238,30 +2240,28 @@ diff --git a/src/backend/replication/logical/conflict.c b/src/backend/replicatio
  									 timestamptz_to_str(localts));
  			}
  
-@@ -455,12 +455,12 @@
+@@ -455,12 +455,12 @@ errdetail_apply_conflict(EState *estate, ResultRelInfo *relinfo,
  			else
  			{
  				if (tuple_buf.len)
 -					appendStringInfo(&err_detail, _("Deleting the row that was modified by a non-existent origin in transaction %u at %s: %s."),
 -									 localxmin, timestamptz_to_str(localts),
--									 tuple_buf.data);
--				else
--					appendStringInfo(&err_detail, _("Deleting the row that was modified by a non-existent origin in transaction %u at %s."),
--									 localxmin, timestamptz_to_str(localts));
 +					appendStringInfo(&err_detail, _("Deleting the row that was modified by a non-existent origin in transaction %llu at %s: %s."),
 +									 (unsigned long long) localxmin, timestamptz_to_str(localts),
-+									 tuple_buf.data);
-+				else
+ 									 tuple_buf.data);
+ 				else
+-					appendStringInfo(&err_detail, _("Deleting the row that was modified by a non-existent origin in transaction %u at %s."),
+-									 localxmin, timestamptz_to_str(localts));
 +					appendStringInfo(&err_detail, _("Deleting the row that was modified by a non-existent origin in transaction %llu at %s."),
 +									 (unsigned long long) localxmin, timestamptz_to_str(localts));
  			}
  
  			break;
 diff --git a/src/backend/replication/logical/logical.c b/src/backend/replication/logical/logical.c
-index 866f92cf79..7df8b10cee 100644
+index 98e5f1dd8f9..d1f146c3514 100644
 --- a/src/backend/replication/logical/logical.c
 +++ b/src/backend/replication/logical/logical.c
-@@ -1725,8 +1725,8 @@ LogicalIncreaseXminForSlot(XLogRecPtr current_lsn, TransactionId xmin)
+@@ -1807,8 +1807,8 @@ LogicalIncreaseXminForSlot(XLogRecPtr current_lsn, TransactionId xmin)
  	SpinLockRelease(&slot->mutex);
  
  	if (got_new_xmin)
@@ -2273,9 +2273,10 @@ index 866f92cf79..7df8b10cee 100644
  	/* candidate already valid with the current flush position, apply */
  	if (updated_xmin)
 diff --git a/src/backend/replication/logical/reorderbuffer.c b/src/backend/replication/logical/reorderbuffer.c
+index 08be0dacc4a..4de8e34b662 100644
 --- a/src/backend/replication/logical/reorderbuffer.c
 +++ b/src/backend/replication/logical/reorderbuffer.c
-@@ -2647,8 +2647,8 @@
+@@ -2647,8 +2647,8 @@ ReorderBufferProcessTXN(ReorderBuffer *rb, ReorderBufferTXN *txn,
  
  		/* this is just a sanity check against bad output plugin behaviour */
  		if (GetCurrentTransactionIdIfAny() != InvalidTransactionId)
@@ -2286,7 +2287,7 @@ diff --git a/src/backend/replication/logical/reorderbuffer.c b/src/backend/repli
  
  		/*
  		 * Remember the command ID and snapshot for the next set of changes in
-@@ -3171,7 +3171,8 @@
+@@ -3171,7 +3171,8 @@ ReorderBufferAbortOld(ReorderBuffer *rb, TransactionId oldestRunningXid)
  
  		if (TransactionIdPrecedes(txn->xid, oldestRunningXid))
  		{
@@ -2296,7 +2297,7 @@ diff --git a/src/backend/replication/logical/reorderbuffer.c b/src/backend/repli
  
  			/* Notify the remote node about the crash/immediate restart. */
  			if (rbtxn_is_streamed(txn))
-@@ -4025,8 +4026,8 @@
+@@ -4025,8 +4026,8 @@ ReorderBufferSerializeTXN(ReorderBuffer *rb, ReorderBufferTXN *txn)
  	Size		spilled = 0;
  	Size		size = txn->size;
  
@@ -2307,7 +2308,7 @@ diff --git a/src/backend/replication/logical/reorderbuffer.c b/src/backend/repli
  
  	/* do the same to all child TXs */
  	dlist_foreach(subtxn_i, &txn->subtxns)
-@@ -4305,8 +4306,8 @@
+@@ -4305,8 +4306,8 @@ ReorderBufferSerializeChange(ReorderBuffer *rb, ReorderBufferTXN *txn,
  		errno = save_errno ? save_errno : ENOSPC;
  		ereport(ERROR,
  				(errcode_for_file_access(),
@@ -2318,7 +2319,7 @@ diff --git a/src/backend/replication/logical/reorderbuffer.c b/src/backend/repli
  	}
  	pgstat_report_wait_end();
  
-@@ -4949,10 +4950,10 @@
+@@ -4949,10 +4950,10 @@ ReorderBufferSerializedPath(char *path, ReplicationSlot *slot, TransactionId xid
  
  	XLogSegNoOffsetToRecPtr(segno, 0, wal_segment_size, recptr);
  
@@ -2331,7 +2332,7 @@ diff --git a/src/backend/replication/logical/reorderbuffer.c b/src/backend/repli
  }
  
  /*
-@@ -5564,8 +5565,8 @@
+@@ -5564,8 +5565,8 @@ UpdateLogicalMappings(HTAB *tuplecid_data, Oid relid, Snapshot snapshot)
  	{
  		RewriteMappingFile *f = (RewriteMappingFile *) lfirst(file);
  
@@ -2343,10 +2344,10 @@ diff --git a/src/backend/replication/logical/reorderbuffer.c b/src/backend/repli
  		pfree(f);
  	}
 diff --git a/src/backend/replication/logical/snapbuild.c b/src/backend/replication/logical/snapbuild.c
-index 6e18baa33c..a7847da2ee 100644
+index b8992234924..3ae911c8b86 100644
 --- a/src/backend/replication/logical/snapbuild.c
 +++ b/src/backend/replication/logical/snapbuild.c
-@@ -480,8 +480,8 @@ SnapBuildInitialSnapshot(SnapBuild *builder)
+@@ -484,8 +484,8 @@ SnapBuildInitialSnapshot(SnapBuild *builder)
  	LWLockRelease(ProcArrayLock);
  
  	if (TransactionIdFollows(safeXid, snap->xmin))
@@ -2357,7 +2358,7 @@ index 6e18baa33c..a7847da2ee 100644
  
  	MyProc->xmin = snap->xmin;
  
-@@ -774,8 +774,8 @@ SnapBuildDistributeSnapshotAndInval(SnapBuild *builder, XLogRecPtr lsn, Transact
+@@ -777,8 +777,8 @@ SnapBuildDistributeSnapshotAndInval(SnapBuild *builder, XLogRecPtr lsn, Transact
  		if (rbtxn_is_prepared(txn))
  			continue;
  
@@ -2368,7 +2369,7 @@ index 6e18baa33c..a7847da2ee 100644
  
  		/*
  		 * increase the snapshot's refcount for the transaction we are handing
-@@ -889,9 +889,9 @@ SnapBuildPurgeOlderTxn(SnapBuild *builder)
+@@ -893,9 +893,9 @@ SnapBuildPurgeOlderTxn(SnapBuild *builder)
  	memcpy(builder->committed.xip, workspace,
  		   surviving_xids * sizeof(TransactionId));
  
@@ -2380,7 +2381,7 @@ index 6e18baa33c..a7847da2ee 100644
  	builder->committed.xcnt = surviving_xids;
  
  	pfree(workspace);
-@@ -926,9 +926,10 @@ SnapBuildPurgeOlderTxn(SnapBuild *builder)
+@@ -930,9 +930,10 @@ SnapBuildPurgeOlderTxn(SnapBuild *builder)
  			builder->catchange.xip = NULL;
  		}
  
@@ -2393,7 +2394,7 @@ index 6e18baa33c..a7847da2ee 100644
  		builder->catchange.xcnt = surviving_xids;
  	}
  }
-@@ -991,8 +992,8 @@ SnapBuildCommitTxn(SnapBuild *builder, XLogRecPtr lsn, TransactionId xid,
+@@ -995,8 +996,8 @@ SnapBuildCommitTxn(SnapBuild *builder, XLogRecPtr lsn, TransactionId xid,
  			sub_needs_timetravel = true;
  			needs_snapshot = true;
  
@@ -2404,7 +2405,7 @@ index 6e18baa33c..a7847da2ee 100644
  
  			SnapBuildAddCommittedTxn(builder, subxid);
  
-@@ -1017,8 +1018,8 @@ SnapBuildCommitTxn(SnapBuild *builder, XLogRecPtr lsn, TransactionId xid,
+@@ -1021,8 +1022,8 @@ SnapBuildCommitTxn(SnapBuild *builder, XLogRecPtr lsn, TransactionId xid,
  	/* if top-level modified catalog, it'll need a snapshot */
  	if (SnapBuildXidHasCatalogChanges(builder, xid, xinfo))
  	{
@@ -2415,7 +2416,7 @@ index 6e18baa33c..a7847da2ee 100644
  		needs_snapshot = true;
  		needs_timetravel = true;
  		SnapBuildAddCommittedTxn(builder, xid);
-@@ -1026,14 +1027,15 @@ SnapBuildCommitTxn(SnapBuild *builder, XLogRecPtr lsn, TransactionId xid,
+@@ -1030,14 +1031,15 @@ SnapBuildCommitTxn(SnapBuild *builder, XLogRecPtr lsn, TransactionId xid,
  	else if (sub_needs_timetravel)
  	{
  		/* track toplevel txn as well, subxact alone isn't meaningful */
@@ -2434,7 +2435,7 @@ index 6e18baa33c..a7847da2ee 100644
  
  		SnapBuildAddCommittedTxn(builder, xid);
  	}
-@@ -1181,8 +1183,11 @@ SnapBuildProcessRunningXacts(SnapBuild *builder, XLogRecPtr lsn, xl_running_xact
+@@ -1185,8 +1187,11 @@ SnapBuildProcessRunningXacts(SnapBuild *builder, XLogRecPtr lsn, xl_running_xact
  	xmin = ReorderBufferGetOldestXmin(builder->reorder);
  	if (xmin == InvalidTransactionId)
  		xmin = running->oldestRunningXid;
@@ -2448,7 +2449,7 @@ index 6e18baa33c..a7847da2ee 100644
  	LogicalIncreaseXminForSlot(lsn, xmin);
  
  	/*
-@@ -1271,10 +1276,11 @@ SnapBuildFindSnapshot(SnapBuild *builder, XLogRecPtr lsn, xl_running_xacts *runn
+@@ -1275,10 +1280,11 @@ SnapBuildFindSnapshot(SnapBuild *builder, XLogRecPtr lsn, xl_running_xacts *runn
  									builder->initial_xmin_horizon))
  	{
  		ereport(DEBUG1,
@@ -2464,7 +2465,7 @@ index 6e18baa33c..a7847da2ee 100644
  
  
  		SnapBuildWaitSnapshot(running, builder->initial_xmin_horizon);
-@@ -1359,10 +1365,11 @@ SnapBuildFindSnapshot(SnapBuild *builder, XLogRecPtr lsn, xl_running_xacts *runn
+@@ -1363,10 +1369,11 @@ SnapBuildFindSnapshot(SnapBuild *builder, XLogRecPtr lsn, xl_running_xacts *runn
  		Assert(TransactionIdIsNormal(builder->xmax));
  
  		ereport(LOG,
@@ -2480,7 +2481,7 @@ index 6e18baa33c..a7847da2ee 100644
  
  		SnapBuildWaitSnapshot(running, running->nextXid);
  	}
-@@ -1383,10 +1390,11 @@ SnapBuildFindSnapshot(SnapBuild *builder, XLogRecPtr lsn, xl_running_xacts *runn
+@@ -1387,10 +1394,11 @@ SnapBuildFindSnapshot(SnapBuild *builder, XLogRecPtr lsn, xl_running_xacts *runn
  		builder->next_phase_at = running->nextXid;
  
  		ereport(LOG,
@@ -2497,10 +2498,10 @@ index 6e18baa33c..a7847da2ee 100644
  		SnapBuildWaitSnapshot(running, running->nextXid);
  	}
 diff --git a/src/backend/replication/logical/worker.c b/src/backend/replication/logical/worker.c
-index 93970c6af2..5865daca2d 100644
+index b3cdbce8d10..ab1b0236d1d 100644
 --- a/src/backend/replication/logical/worker.c
 +++ b/src/backend/replication/logical/worker.c
-@@ -5359,14 +5359,16 @@ subxact_info_add(TransactionId xid)
+@@ -5433,14 +5433,16 @@ subxact_info_add(TransactionId xid)
  static inline void
  subxact_filename(char *path, Oid subid, TransactionId xid)
  {
@@ -2519,7 +2520,7 @@ index 93970c6af2..5865daca2d 100644
  }
  
  /*
-@@ -6172,15 +6174,15 @@ apply_error_callback(void *arg)
+@@ -6296,15 +6298,15 @@ apply_error_callback(void *arg)
  					   errarg->origin_name,
  					   logicalrep_message_type(errarg->command));
  		else if (!XLogRecPtrIsValid(errarg->finish_lsn))
@@ -2539,7 +2540,7 @@ index 93970c6af2..5865daca2d 100644
  					   LSN_FORMAT_ARGS(errarg->finish_lsn));
  	}
  	else
-@@ -6188,39 +6190,39 @@ apply_error_callback(void *arg)
+@@ -6312,39 +6314,39 @@ apply_error_callback(void *arg)
  		if (errarg->remote_attnum < 0)
  		{
  			if (!XLogRecPtrIsValid(errarg->finish_lsn))
@@ -2588,10 +2589,10 @@ index 93970c6af2..5865daca2d 100644
  		}
  	}
 diff --git a/src/backend/replication/pgoutput/pgoutput.c b/src/backend/replication/pgoutput/pgoutput.c
-index 942e1abdb5..400eeb0a94 100644
+index 4ecfcbff7ab..754a3b7cac0 100644
 --- a/src/backend/replication/pgoutput/pgoutput.c
 +++ b/src/backend/replication/pgoutput/pgoutput.c
-@@ -644,7 +644,8 @@ pgoutput_commit_txn(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
+@@ -648,7 +648,8 @@ pgoutput_commit_txn(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
  
  	if (!sent_begin_txn)
  	{
@@ -2602,10 +2603,10 @@ index 942e1abdb5..400eeb0a94 100644
  	}
  
 diff --git a/src/backend/replication/slot.c b/src/backend/replication/slot.c
-index 1ec1e997b2..5e6486d332 100644
+index d7a5be2fb8a..c96e464392b 100644
 --- a/src/backend/replication/slot.c
 +++ b/src/backend/replication/slot.c
-@@ -1678,8 +1678,8 @@ ReportSlotInvalidation(ReplicationSlotInvalidationCause cause,
+@@ -1818,8 +1818,8 @@ ReportSlotInvalidation(ReplicationSlotInvalidationCause cause,
  				break;
  			}
  		case RS_INVAL_HORIZON:
@@ -2617,10 +2618,10 @@ index 1ec1e997b2..5e6486d332 100644
  
  		case RS_INVAL_WAL_LEVEL:
 diff --git a/src/backend/replication/walreceiver.c b/src/backend/replication/walreceiver.c
-index 4217fc54e2..36fcc5cb3b 100644
+index 7167c02d73d..47837988a2b 100644
 --- a/src/backend/replication/walreceiver.c
 +++ b/src/backend/replication/walreceiver.c
-@@ -1229,8 +1229,9 @@ XLogWalRcvSendHSFeedback(bool immed)
+@@ -1348,8 +1348,9 @@ XLogWalRcvSendHSFeedback(bool immed)
  	if (nextXid < catalog_xmin)
  		catalog_xmin_epoch--;
  
@@ -2633,10 +2634,10 @@ index 4217fc54e2..36fcc5cb3b 100644
  	/* Construct the message and send it. */
  	resetStringInfo(&reply_message);
 diff --git a/src/backend/replication/walsender.c b/src/backend/replication/walsender.c
-index fc8f855907..93842eda3b 100644
+index bf856244788..dca98a2a832 100644
 --- a/src/backend/replication/walsender.c
 +++ b/src/backend/replication/walsender.c
-@@ -2636,10 +2636,10 @@ ProcessStandbyHSFeedbackMessage(void)
+@@ -2740,10 +2740,10 @@ ProcessStandbyHSFeedbackMessage(void)
  		/* Copy because timestamptz_to_str returns a static buffer */
  		replyTimeStr = pstrdup(timestamptz_to_str(replyTime));
  
@@ -2651,10 +2652,10 @@ index fc8f855907..93842eda3b 100644
  			 replyTimeStr);
  
 diff --git a/src/backend/storage/ipc/procarray.c b/src/backend/storage/ipc/procarray.c
-index 200f72c6e2..6d9329ded2 100644
+index 60336b31803..52b7b374d4d 100644
 --- a/src/backend/storage/ipc/procarray.c
 +++ b/src/backend/storage/ipc/procarray.c
-@@ -1127,9 +1127,9 @@ ProcArrayApplyRecoveryInfo(RunningTransactions running)
+@@ -1118,9 +1118,9 @@ ProcArrayApplyRecoveryInfo(RunningTransactions running)
  			else
  				elog(DEBUG1,
  					 "recovery snapshot waiting for non-overflowed snapshot or "
@@ -2667,7 +2668,7 @@ index 200f72c6e2..6d9329ded2 100644
  			return;
  		}
  	}
-@@ -1213,8 +1213,8 @@ ProcArrayApplyRecoveryInfo(RunningTransactions running)
+@@ -1204,8 +1204,8 @@ ProcArrayApplyRecoveryInfo(RunningTransactions running)
  			if (i > 0 && TransactionIdEquals(xids[i - 1], xids[i]))
  			{
  				elog(DEBUG1,
@@ -2678,7 +2679,7 @@ index 200f72c6e2..6d9329ded2 100644
  				continue;
  			}
  			KnownAssignedXidsAdd(xids[i], xids[i], true);
-@@ -1305,9 +1305,9 @@ ProcArrayApplyRecoveryInfo(RunningTransactions running)
+@@ -1296,9 +1296,9 @@ ProcArrayApplyRecoveryInfo(RunningTransactions running)
  	else
  		elog(DEBUG1,
  			 "recovery snapshot waiting for non-overflowed snapshot or "
@@ -2691,7 +2692,7 @@ index 200f72c6e2..6d9329ded2 100644
  }
  
  /*
-@@ -3916,8 +3916,8 @@ ProcArraySetReplicationSlotXmin(TransactionId xmin, TransactionId catalog_xmin,
+@@ -3961,8 +3961,8 @@ ProcArraySetReplicationSlotXmin(TransactionId xmin, TransactionId catalog_xmin,
  	if (!already_locked)
  		LWLockRelease(ProcArrayLock);
  
@@ -2702,7 +2703,7 @@ index 200f72c6e2..6d9329ded2 100644
  }
  
  /*
-@@ -4005,7 +4005,8 @@ XidCacheRemoveRunningXids(TransactionId xid,
+@@ -4050,7 +4050,8 @@ XidCacheRemoveRunningXids(TransactionId xid,
  		 * debug warning.
  		 */
  		if (j < 0 && !MyProc->subxidStatus.overflowed)
@@ -2712,7 +2713,7 @@ index 200f72c6e2..6d9329ded2 100644
  	}
  
  	for (j = MyProc->subxidStatus.count - 1; j >= 0; j--)
-@@ -4021,7 +4022,8 @@ XidCacheRemoveRunningXids(TransactionId xid,
+@@ -4066,7 +4067,8 @@ XidCacheRemoveRunningXids(TransactionId xid,
  	}
  	/* Ordinarily we should have found it, unless the cache has overflowed */
  	if (j < 0 && !MyProc->subxidStatus.overflowed)
@@ -2722,7 +2723,7 @@ index 200f72c6e2..6d9329ded2 100644
  
  	/* Also advance global latestCompletedXid while holding the lock */
  	MaintainLatestCompletedXid(latestXid);
-@@ -4368,8 +4370,8 @@ RecordKnownAssignedTransactionIds(TransactionId xid)
+@@ -4446,8 +4448,8 @@ RecordKnownAssignedTransactionIds(TransactionId xid)
  	Assert(TransactionIdIsValid(xid));
  	Assert(TransactionIdIsValid(latestObservedXid));
  
@@ -2733,7 +2734,7 @@ index 200f72c6e2..6d9329ded2 100644
  
  	/*
  	 * When a newly observed xid arrives, it is frequently the case that it is
-@@ -4950,7 +4952,8 @@ KnownAssignedXidsRemove(TransactionId xid)
+@@ -5028,7 +5030,8 @@ KnownAssignedXidsRemove(TransactionId xid)
  {
  	Assert(TransactionIdIsValid(xid));
  
@@ -2743,7 +2744,7 @@ index 200f72c6e2..6d9329ded2 100644
  
  	/*
  	 * Note: we cannot consider it an error to remove an XID that's not
-@@ -5010,7 +5013,8 @@ KnownAssignedXidsRemovePreceding(TransactionId removeXid)
+@@ -5088,7 +5091,8 @@ KnownAssignedXidsRemovePreceding(TransactionId removeXid)
  		return;
  	}
  
@@ -2753,7 +2754,7 @@ index 200f72c6e2..6d9329ded2 100644
  
  	/*
  	 * Mark entries invalid starting at the tail.  Since array is sorted, we
-@@ -5196,7 +5200,8 @@ KnownAssignedXidsDisplay(int trace_level)
+@@ -5274,7 +5278,8 @@ KnownAssignedXidsDisplay(int trace_level)
  		if (KnownAssignedXidsValid[i])
  		{
  			nxids++;
@@ -2764,10 +2765,10 @@ index 200f72c6e2..6d9329ded2 100644
  	}
  
 diff --git a/src/backend/storage/ipc/standby.c b/src/backend/storage/ipc/standby.c
-index 4222bdab07..032b31f52c 100644
+index 7f011e04990..73607e224fa 100644
 --- a/src/backend/storage/ipc/standby.c
 +++ b/src/backend/storage/ipc/standby.c
-@@ -1042,15 +1042,17 @@ StandbyReleaseXidEntryLocks(RecoveryLockXidEntry *xidentry)
+@@ -1044,15 +1044,17 @@ StandbyReleaseXidEntryLocks(RecoveryLockXidEntry *xidentry)
  		LOCKTAG		locktag;
  
  		elog(DEBUG4,
@@ -2789,7 +2790,7 @@ index 4222bdab07..032b31f52c 100644
  			Assert(false);
  		}
  		/* ... and remove the per-lock hash entry */
-@@ -1376,20 +1378,20 @@ LogCurrentRunningXacts(RunningTransactions CurrRunningXacts)
+@@ -1379,20 +1381,20 @@ LogCurrentRunningXacts(RunningTransactions CurrRunningXacts)
  
  	if (xlrec.subxid_overflow)
  		elog(DEBUG2,
@@ -2819,10 +2820,10 @@ index 4222bdab07..032b31f52c 100644
  	/*
  	 * Ensure running_xacts information is synced to disk not too far in the
 diff --git a/src/backend/storage/lmgr/predicate.c b/src/backend/storage/lmgr/predicate.c
-index bb807d8c9c..03a00a8c9a 100644
+index 0ae85b7d5b4..2092e951e10 100644
 --- a/src/backend/storage/lmgr/predicate.c
 +++ b/src/backend/storage/lmgr/predicate.c
-@@ -4068,7 +4068,8 @@ CheckForSerializableConflictOut(Relation relation, TransactionId xid, Snapshot s
+@@ -3997,7 +3997,8 @@ CheckForSerializableConflictOut(Relation relation, TransactionId xid, Snapshot s
  				ereport(ERROR,
  						(errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
  						 errmsg("could not serialize access due to read/write dependencies among transactions"),
@@ -2832,7 +2833,7 @@ index bb807d8c9c..03a00a8c9a 100644
  						 errhint("The transaction might succeed if retried.")));
  
  			if (SxactHasSummaryConflictIn(MySerializableXact)
-@@ -4076,7 +4077,8 @@ CheckForSerializableConflictOut(Relation relation, TransactionId xid, Snapshot s
+@@ -4005,7 +4006,8 @@ CheckForSerializableConflictOut(Relation relation, TransactionId xid, Snapshot s
  				ereport(ERROR,
  						(errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
  						 errmsg("could not serialize access due to read/write dependencies among transactions"),
@@ -2842,7 +2843,7 @@ index bb807d8c9c..03a00a8c9a 100644
  						 errhint("The transaction might succeed if retried.")));
  
  			MySerializableXact->flags |= SXACT_FLAG_SUMMARY_CONFLICT_OUT;
-@@ -4676,7 +4678,8 @@ OnConflict_CheckForSerializationFailure(const SERIALIZABLEXACT *reader,
+@@ -4605,7 +4607,8 @@ OnConflict_CheckForSerializationFailure(const SERIALIZABLEXACT *reader,
  			ereport(ERROR,
  					(errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
  					 errmsg("could not serialize access due to read/write dependencies among transactions"),
@@ -2853,7 +2854,7 @@ index bb807d8c9c..03a00a8c9a 100644
  		}
  		writer->flags |= SXACT_FLAG_DOOMED;
 diff --git a/src/backend/utils/adt/lockfuncs.c b/src/backend/utils/adt/lockfuncs.c
-index df938812dd..cdf29057f2 100644
+index 2899749abe6..c3107f0d5a9 100644
 --- a/src/backend/utils/adt/lockfuncs.c
 +++ b/src/backend/utils/adt/lockfuncs.c
 @@ -80,7 +80,8 @@ VXIDGetDatum(ProcNumber procNumber, LocalTransactionId lxid)
@@ -2867,9 +2868,10 @@ index df938812dd..cdf29057f2 100644
  	return CStringGetTextDatum(vxidstr);
  }
 diff --git a/src/backend/utils/adt/multixactfuncs.c b/src/backend/utils/adt/multixactfuncs.c
+index d9aa58e821d..b1437b3bf70 100644
 --- a/src/backend/utils/adt/multixactfuncs.c
 +++ b/src/backend/utils/adt/multixactfuncs.c
-@@ -45,7 +45,8 @@
+@@ -45,7 +45,8 @@ pg_get_multixact_members(PG_FUNCTION_ARGS)
  	if (mxid < FirstMultiXactId)
  		ereport(ERROR,
  				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
@@ -2879,7 +2881,7 @@ diff --git a/src/backend/utils/adt/multixactfuncs.c b/src/backend/utils/adt/mult
  
  	if (SRF_IS_FIRSTCALL())
  	{
-@@ -78,7 +79,8 @@
+@@ -78,7 +79,8 @@ pg_get_multixact_members(PG_FUNCTION_ARGS)
  		HeapTuple	tuple;
  		char	   *values[2];
  
@@ -2890,7 +2892,7 @@ diff --git a/src/backend/utils/adt/multixactfuncs.c b/src/backend/utils/adt/mult
  
  		tuple = BuildTupleFromCStrings(funccxt->attinmeta, values);
 diff --git a/src/backend/utils/error/csvlog.c b/src/backend/utils/error/csvlog.c
-index c3159ed7d9..2bac628714 100644
+index ee4e2a7104a..18a10c4e976 100644
 --- a/src/backend/utils/error/csvlog.c
 +++ b/src/backend/utils/error/csvlog.c
 @@ -151,11 +151,12 @@ write_csvlog(ErrorData *edata)
@@ -2909,10 +2911,10 @@ index c3159ed7d9..2bac628714 100644
  
  	/* Error severity */
 diff --git a/src/backend/utils/error/elog.c b/src/backend/utils/error/elog.c
-index 29643c5143..22c4a4a968 100644
+index a6936a0c664..07b9a7709ce 100644
 --- a/src/backend/utils/error/elog.c
 +++ b/src/backend/utils/error/elog.c
-@@ -3176,12 +3176,15 @@ log_status_format(StringInfo buf, const char *format, ErrorData *edata)
+@@ -3609,12 +3609,15 @@ log_status_format(StringInfo buf, const char *format, ErrorData *edata)
  					{
  						char		strfbuf[128];
  
@@ -2931,7 +2933,7 @@ index 29643c5143..22c4a4a968 100644
  				}
  				else if (padding != 0)
  					appendStringInfoSpaces(buf,
-@@ -3189,9 +3192,11 @@ log_status_format(StringInfo buf, const char *format, ErrorData *edata)
+@@ -3622,9 +3625,11 @@ log_status_format(StringInfo buf, const char *format, ErrorData *edata)
  				break;
  			case 'x':
  				if (padding != 0)
@@ -2946,7 +2948,7 @@ index 29643c5143..22c4a4a968 100644
  			case 'e':
  				if (padding != 0)
 diff --git a/src/backend/utils/error/jsonlog.c b/src/backend/utils/error/jsonlog.c
-index 2619f49904..0acf64ec08 100644
+index 4a76072830d..1fd4204a6de 100644
 --- a/src/backend/utils/error/jsonlog.c
 +++ b/src/backend/utils/error/jsonlog.c
 @@ -196,12 +196,13 @@ write_jsonlog(ErrorData *edata)
@@ -2968,9 +2970,10 @@ index 2619f49904..0acf64ec08 100644
  	/* Error severity */
  	if (edata->elevel)
 diff --git a/src/backend/utils/misc/pg_controldata.c b/src/backend/utils/misc/pg_controldata.c
+index d229ae35209..6be8d46eb04 100644
 --- a/src/backend/utils/misc/pg_controldata.c
 +++ b/src/backend/utils/misc/pg_controldata.c
-@@ -119,9 +119,9 @@
+@@ -119,9 +119,9 @@ pg_control_checkpoint(PG_FUNCTION_ARGS)
  	values[6] = BoolGetDatum(ControlFile->checkPointCopy.logicalDecodingEnabled);
  	nulls[6] = false;
  
@@ -2983,10 +2986,10 @@ diff --git a/src/backend/utils/misc/pg_controldata.c b/src/backend/utils/misc/pg
  
  	values[8] = ObjectIdGetDatum(ControlFile->checkPointCopy.nextOid);
 diff --git a/src/backend/utils/time/snapmgr.c b/src/backend/utils/time/snapmgr.c
-index 65561cc6bc..9d1845567b 100644
+index 10fe18df2e7..4d959f254fe 100644
 --- a/src/backend/utils/time/snapmgr.c
 +++ b/src/backend/utils/time/snapmgr.c
-@@ -1193,14 +1193,15 @@ ExportSnapshot(Snapshot snapshot)
+@@ -1195,14 +1195,15 @@ ExportSnapshot(Snapshot snapshot)
  	 */
  	initStringInfo(&buf);
  
@@ -3005,7 +3008,7 @@ index 65561cc6bc..9d1845567b 100644
  
  	/*
  	 * We must include our own top transaction ID in the top-xid data, since
-@@ -1217,9 +1218,10 @@ ExportSnapshot(Snapshot snapshot)
+@@ -1219,9 +1220,10 @@ ExportSnapshot(Snapshot snapshot)
  				 TransactionIdPrecedes(topXid, snapshot->xmax)) ? 1 : 0;
  	appendStringInfo(&buf, "xcnt:%d\n", snapshot->xcnt + addTopXid);
  	for (i = 0; i < snapshot->xcnt; i++)
@@ -3018,7 +3021,7 @@ index 65561cc6bc..9d1845567b 100644
  
  	/*
  	 * Similarly, we add our subcommitted child XIDs to the subxid data. Here,
-@@ -1233,9 +1235,11 @@ ExportSnapshot(Snapshot snapshot)
+@@ -1235,9 +1237,11 @@ ExportSnapshot(Snapshot snapshot)
  		appendStringInfoString(&buf, "sof:0\n");
  		appendStringInfo(&buf, "sxcnt:%d\n", snapshot->subxcnt + nchildren);
  		for (i = 0; i < snapshot->subxcnt; i++)
@@ -3032,7 +3035,7 @@ index 65561cc6bc..9d1845567b 100644
  	}
  	appendStringInfo(&buf, "rec:%u\n", snapshot->takenDuringRecovery);
  
-@@ -1338,7 +1342,7 @@ parseXidFromText(const char *prefix, char **s, const char *filename)
+@@ -1340,7 +1344,7 @@ parseXidFromText(const char *prefix, char **s, const char *filename)
  				(errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
  				 errmsg("invalid snapshot data in file \"%s\"", filename)));
  	ptr += prefixlen;
@@ -3041,7 +3044,7 @@ index 65561cc6bc..9d1845567b 100644
  		ereport(ERROR,
  				(errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
  				 errmsg("invalid snapshot data in file \"%s\"", filename)));
-@@ -1363,7 +1367,8 @@ parseVxidFromText(const char *prefix, char **s, const char *filename,
+@@ -1365,7 +1369,8 @@ parseVxidFromText(const char *prefix, char **s, const char *filename,
  				(errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
  				 errmsg("invalid snapshot data in file \"%s\"", filename)));
  	ptr += prefixlen;
@@ -3052,9 +3055,10 @@ index 65561cc6bc..9d1845567b 100644
  				(errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
  				 errmsg("invalid snapshot data in file \"%s\"", filename)));
 diff --git a/src/bin/pg_controldata/pg_controldata.c b/src/bin/pg_controldata/pg_controldata.c
+index 6fc87ed114d..aa236e62edb 100644
 --- a/src/bin/pg_controldata/pg_controldata.c
 +++ b/src/bin/pg_controldata/pg_controldata.c
-@@ -266,29 +266,29 @@
+@@ -266,29 +266,29 @@ main(int argc, char *argv[])
  		   ControlFile->checkPointCopy.fullPageWrites ? _("on") : _("off"));
  	printf(_("Latest checkpoint's logical decoding: %s\n"),
  		   ControlFile->checkPointCopy.logicalDecodingEnabled ? _("on") : _("off"));
@@ -3099,10 +3103,10 @@ diff --git a/src/bin/pg_controldata/pg_controldata.c b/src/bin/pg_controldata/pg
  		   ControlFile->checkPointCopy.dataChecksumState);
  	printf(_("Time of latest checkpoint:            %s\n"),
 diff --git a/src/bin/pg_dump/pg_dump.c b/src/bin/pg_dump/pg_dump.c
-index a00918bacb..362f3470d1 100644
+index 0abc80ea5b6..b6cdcb2794a 100644
 --- a/src/bin/pg_dump/pg_dump.c
 +++ b/src/bin/pg_dump/pg_dump.c
-@@ -3626,9 +3626,10 @@ dumpDatabase(Archive *fout)
+@@ -3630,9 +3630,10 @@ dumpDatabase(Archive *fout)
  	{
  		appendPQExpBufferStr(creaQry, "\n-- For binary upgrade, set datfrozenxid and datminmxid.\n");
  		appendPQExpBuffer(creaQry, "UPDATE pg_catalog.pg_database\n"
@@ -3115,7 +3119,7 @@ index a00918bacb..362f3470d1 100644
  		appendStringLiteralAH(creaQry, datname, fout);
  		appendPQExpBufferStr(creaQry, ";\n");
  	}
-@@ -17782,9 +17783,10 @@ dumpTableSchema(Archive *fout, const TableInfo *tbinfo)
+@@ -18031,9 +18032,10 @@ dumpTableSchema(Archive *fout, const TableInfo *tbinfo)
  		{
  			appendPQExpBufferStr(q, "\n-- For binary upgrade, set heap's relfrozenxid and relminmxid\n");
  			appendPQExpBuffer(q, "UPDATE pg_catalog.pg_class\n"
@@ -3128,7 +3132,7 @@ index a00918bacb..362f3470d1 100644
  			appendStringLiteralAH(q, qualrelname, fout);
  			appendPQExpBufferStr(q, "::pg_catalog.regclass;\n");
  
-@@ -17796,10 +17798,11 @@ dumpTableSchema(Archive *fout, const TableInfo *tbinfo)
+@@ -18045,10 +18047,11 @@ dumpTableSchema(Archive *fout, const TableInfo *tbinfo)
  				 */
  				appendPQExpBufferStr(q, "\n-- For binary upgrade, set toast's relfrozenxid and relminmxid\n");
  				appendPQExpBuffer(q, "UPDATE pg_catalog.pg_class\n"
@@ -3144,9 +3148,10 @@ index a00918bacb..362f3470d1 100644
  		}
  
 diff --git a/src/bin/pg_resetwal/pg_resetwal.c b/src/bin/pg_resetwal/pg_resetwal.c
+index 884a6eac547..897e9a718b2 100644
 --- a/src/bin/pg_resetwal/pg_resetwal.c
 +++ b/src/bin/pg_resetwal/pg_resetwal.c
-@@ -206,7 +206,8 @@
+@@ -206,7 +206,8 @@ main(int argc, char *argv[])
  					exit(1);
  				}
  				if (!TransactionIdIsNormal(oldest_xid_val))
@@ -3156,7 +3161,7 @@ diff --git a/src/bin/pg_resetwal/pg_resetwal.c b/src/bin/pg_resetwal/pg_resetwal
  				oldest_xid_given = true;
  				break;
  
-@@ -220,7 +221,8 @@
+@@ -220,7 +221,8 @@ main(int argc, char *argv[])
  					exit(1);
  				}
  				if (!TransactionIdIsNormal(next_xid_val))
@@ -3166,7 +3171,7 @@ diff --git a/src/bin/pg_resetwal/pg_resetwal.c b/src/bin/pg_resetwal/pg_resetwal
  				next_xid_given = true;
  				break;
  
-@@ -243,11 +245,15 @@
+@@ -243,11 +245,15 @@ main(int argc, char *argv[])
  
  				if (oldest_commit_ts_xid_val < FirstNormalTransactionId &&
  					oldest_commit_ts_xid_val != InvalidTransactionId)
@@ -3184,7 +3189,7 @@ diff --git a/src/bin/pg_resetwal/pg_resetwal.c b/src/bin/pg_resetwal/pg_resetwal
  				commit_ts_xids_given = true;
  				break;
  
-@@ -467,7 +473,7 @@
+@@ -467,7 +473,7 @@ main(int argc, char *argv[])
  	if (next_xid_epoch_given)
  		ControlFile.checkPointCopy.nextXid =
  			FullTransactionIdFromEpochAndXid(next_xid_epoch_val,
@@ -3193,7 +3198,7 @@ diff --git a/src/bin/pg_resetwal/pg_resetwal.c b/src/bin/pg_resetwal/pg_resetwal
  
  	if (oldest_xid_given)
  	{
-@@ -772,29 +778,29 @@
+@@ -772,29 +778,29 @@ PrintControlValues(bool guessed)
  		   ControlFile.checkPointCopy.ThisTimeLineID);
  	printf(_("Latest checkpoint's full_page_writes: %s\n"),
  		   ControlFile.checkPointCopy.fullPageWrites ? _("on") : _("off"));
@@ -3237,7 +3242,7 @@ diff --git a/src/bin/pg_resetwal/pg_resetwal.c b/src/bin/pg_resetwal/pg_resetwal
  	printf(_("Maximum data alignment:               %u\n"),
  		   ControlFile.maxAlign);
  	/* we don't print floatFormat since can't say much useful about it */
-@@ -845,10 +851,10 @@
+@@ -845,10 +851,10 @@ PrintNewControlValues(void)
  
  	if (mxids_given)
  	{
@@ -3252,7 +3257,7 @@ diff --git a/src/bin/pg_resetwal/pg_resetwal.c b/src/bin/pg_resetwal/pg_resetwal
  		printf(_("OldestMulti's DB:                     %u\n"),
  			   ControlFile.checkPointCopy.oldestMultiDB);
  	}
-@@ -867,14 +873,14 @@
+@@ -867,14 +873,14 @@ PrintNewControlValues(void)
  
  	if (next_xid_given)
  	{
@@ -3271,7 +3276,7 @@ diff --git a/src/bin/pg_resetwal/pg_resetwal.c b/src/bin/pg_resetwal/pg_resetwal
  		printf(_("OldestXID's DB:                       %u\n"),
  			   ControlFile.checkPointCopy.oldestXidDB);
  	}
-@@ -887,10 +893,10 @@
+@@ -887,10 +893,10 @@ PrintNewControlValues(void)
  
  	if (commit_ts_xids_given)
  	{
@@ -3286,10 +3291,35 @@ diff --git a/src/bin/pg_resetwal/pg_resetwal.c b/src/bin/pg_resetwal/pg_resetwal
  	}
  
  	if (wal_segsize_given)
+diff --git a/src/bin/pg_upgrade/multixact_read_v18.c b/src/bin/pg_upgrade/multixact_read_v18.c
+index c92b977530a..1f11ab80e97 100644
+--- a/src/bin/pg_upgrade/multixact_read_v18.c
++++ b/src/bin/pg_upgrade/multixact_read_v18.c
+@@ -261,7 +261,7 @@ GetOldMultiXactIdSingleMember(OldMultiXactReader *state, MultiXactId multi,
+ 		 * This entry is corrupt.  We should not see these even after a server
+ 		 * crash.
+ 		 */
+-		pg_fatal("multixact %u has an invalid length (%d)", multi, length);
++		pg_fatal("multixact %llu has an invalid length (%d)", (unsigned long long) multi, length);
+ 	}
+ 	if (length == 0)
+ 	{
+@@ -332,8 +332,8 @@ GetOldMultiXactIdSingleMember(OldMultiXactReader *state, MultiXactId multi,
+ 				 * We don't expect to see more than one updating member, even
+ 				 * if the server had crashed.
+ 				 */
+-				pg_fatal("multixact %u has more than one updating member",
+-						 multi);
++				pg_fatal("multixact %llu has more than one updating member",
++						 (unsigned long long) multi);
+ 			}
+ 			result_xid = *xactptr;
+ 			result_status = status;
 diff --git a/src/bin/pg_upgrade/pg_upgrade.c b/src/bin/pg_upgrade/pg_upgrade.c
+index 2127d297bfe..c02e2df9406 100644
 --- a/src/bin/pg_upgrade/pg_upgrade.c
 +++ b/src/bin/pg_upgrade/pg_upgrade.c
-@@ -784,16 +784,18 @@
+@@ -784,16 +784,18 @@ copy_xact_xlog_xid(void)
  
  	prep_status("Setting oldest XID for new cluster");
  	exec_prog(UTILITY_LOG_FILE, NULL, true, true,
@@ -3312,7 +3342,7 @@ diff --git a/src/bin/pg_upgrade/pg_upgrade.c b/src/bin/pg_upgrade/pg_upgrade.c
  			  new_cluster.pgdata);
  	exec_prog(UTILITY_LOG_FILE, NULL, true, true,
  			  "\"%s/pg_resetwal\" -f -e %u \"%s\"",
-@@ -801,10 +803,10 @@
+@@ -801,10 +803,10 @@ copy_xact_xlog_xid(void)
  			  new_cluster.pgdata);
  	/* must reset commit timestamp limits also */
  	exec_prog(UTILITY_LOG_FILE, NULL, true, true,
@@ -3326,7 +3356,7 @@ diff --git a/src/bin/pg_upgrade/pg_upgrade.c b/src/bin/pg_upgrade/pg_upgrade.c
  			  new_cluster.pgdata);
  	check_ok();
  
-@@ -827,9 +829,10 @@
+@@ -827,9 +829,10 @@ copy_xact_xlog_xid(void)
  		 * counters here and the oldest multi present on system.
  		 */
  		exec_prog(UTILITY_LOG_FILE, NULL, true, true,
@@ -3340,7 +3370,7 @@ diff --git a/src/bin/pg_upgrade/pg_upgrade.c b/src/bin/pg_upgrade/pg_upgrade.c
  				  new_cluster.pgdata);
  		check_ok();
  	}
-@@ -885,9 +888,10 @@
+@@ -885,9 +888,10 @@ copy_xact_xlog_xid(void)
  
  		prep_status("Setting next multixact ID and offset for new cluster");
  		exec_prog(UTILITY_LOG_FILE, NULL, true, true,
@@ -3353,7 +3383,7 @@ diff --git a/src/bin/pg_upgrade/pg_upgrade.c b/src/bin/pg_upgrade/pg_upgrade.c
  				  new_cluster.pgdata);
  		check_ok();
  	}
-@@ -946,14 +950,14 @@
+@@ -946,14 +950,14 @@ set_frozenxids(bool minmxid_only)
  		/* set pg_database.datfrozenxid */
  		PQclear(executeQueryOrDie(conn_template1,
  								  "UPDATE pg_catalog.pg_database "
@@ -3372,7 +3402,7 @@ diff --git a/src/bin/pg_upgrade/pg_upgrade.c b/src/bin/pg_upgrade/pg_upgrade.c
  
  	/* get database names */
  	dbres = executeQueryOrDie(conn_template1,
-@@ -987,24 +991,24 @@
+@@ -987,24 +991,24 @@ set_frozenxids(bool minmxid_only)
  			/* set pg_class.relfrozenxid */
  			PQclear(executeQueryOrDie(conn,
  									  "UPDATE	pg_catalog.pg_class "
@@ -3402,9 +3432,10 @@ diff --git a/src/bin/pg_upgrade/pg_upgrade.c b/src/bin/pg_upgrade/pg_upgrade.c
  
  		/* Reset datallowconn flag */
 diff --git a/src/bin/pg_waldump/pg_waldump.c b/src/bin/pg_waldump/pg_waldump.c
+index d6b2a7adcbf..9587acf5e06 100644
 --- a/src/bin/pg_waldump/pg_waldump.c
 +++ b/src/bin/pg_waldump/pg_waldump.c
-@@ -671,10 +671,10 @@
+@@ -671,10 +671,10 @@ XLogDumpDisplayRecord(XLogDumpConfig *config, XLogReaderState *record)
  
  	XLogRecGetLen(record, &rec_len, &fpi_len);
  
@@ -3417,7 +3448,7 @@ diff --git a/src/bin/pg_waldump/pg_waldump.c b/src/bin/pg_waldump/pg_waldump.c
  		   LSN_FORMAT_ARGS(record->ReadRecPtr),
  		   LSN_FORMAT_ARGS(xl_prev));
  
-@@ -1193,14 +1193,24 @@
+@@ -1193,14 +1193,24 @@ main(int argc, char **argv)
  				config.filter_by_fpw = true;
  				break;
  			case 'x':
@@ -3449,7 +3480,7 @@ diff --git a/src/bin/pg_waldump/pg_waldump.c b/src/bin/pg_waldump/pg_waldump.c
  				config.stats = true;
  				config.stats_per_record = false;
 diff --git a/src/test/modules/xid_wraparound/xid_wraparound.c b/src/test/modules/xid_wraparound/xid_wraparound.c
-index e27a5fa576..14d42d4eab 100644
+index ca25d7e0206..57364f506c8 100644
 --- a/src/test/modules/xid_wraparound/xid_wraparound.c
 +++ b/src/test/modules/xid_wraparound/xid_wraparound.c
 @@ -136,16 +136,16 @@ consume_xids_common(FullTransactionId untilxid, uint64 nxids)
@@ -3475,5 +3506,5 @@ index e27a5fa576..14d42d4eab 100644
  		}
  	}
 -- 
-2.51.0
+2.55.0
 

@@ -1,0 +1,110 @@
+XID64 v1900 aggregated branch (2026-10-26)
+=========================================
+
+Branch: pg19xid64evoro1900 (source and Baloo repositories)
+Base: 3638289fb57bdabec00deda98ee9624a35f5d66a (Stamp 19beta3)
+Source snapshot: d64b5f0220f262b52dcc88a93cf66e9803d4d16b
+Preserved source branch: pg19beta3xid64_CODEX_OVERNIGHT_20261021
+Preserved Baloo snapshot: df5d86829d46b5ad174dcde45ff7182bc07ad817
+Source series tip: a15f01026cba8e9e3e97fdc3305b1c0481a9ddf6
+
+Apply the seven entries in patches/func/pg19xid64evoro1900/series in order.
+They contain source and native PostgreSQL tests/documentation only. They do
+not introduce the Baloo submodule, logs, TODOs or standalone test probes.
+The complete resulting source tree is byte-for-byte identical to the source
+snapshot, excluding .gitmodules, the Baloo gitlink and codex_todo.txt, which
+belong to the subsequent infrastructure commit.
+
+Source commits and exported filenames
+------------------------------------
+0001 6cf34113ff408640db4f0edcbafcd269fb454204 v1900-0001-Use-64-bit-format-to-output-XIDs.patch
+0002 3d34a6494b8c27f6cd49d3390bf96376c790d5d1 v1900-0002-Use-64-bit-FullTransactionId-instead-of-Epoch-xi.patch
+0003 a97680af1e578707d25afffe5073924f1ab95d5a v1900-0003-Use-64-bit-SLRU-pages-in-callers.patch
+0004 fc8e48db90257f037223df6a3723b90d7d8d6539 v1900-0004-Use-64-bit-GUCs.patch
+0005 1765ef52efd90d5a16872da3d13ab71f210a0a00 v1900-0005-Use-64-bit-XIDs.patch
+0006 431bb3af90d26a76b3ecd35e743eb4d55f87a7e9 v1900-0006-README.XID64.patch
+0007 a15f01026cba8e9e3e97fdc3305b1c0481a9ddf6 v1900-0007-Resolve-the-upgrade-issues.patch
+
+Grouping
+--------
+0001: original formatting adaptation, plus two PG19 MultiXact reader diagnostic
+      casts formerly introduced alongside 0005; safe for 32/64-bit identifiers.
+0002: FullTransactionId input/output in place of the Epoch:xid representation.
+0003: 64-bit SLRU callers, retaining native PG19 offset behavior.
+0004: 64-bit GUC infrastructure and the v67-0012 MSVC reserved-member fix.
+0005: core 64-bit IDs, tuple caches/accessors, page layouts/bases, pruning and
+      freeze/WAL/VM semantics, full-width locks/logical decoding, HSF H tag,
+      future-horizon rejection, age limits, initdb counters, portable formats
+      and normal regression coverage. Includes adapted v67-0007/0008/0009/0010.
+      Core page layout/accessor and freeze-fallback correctness stays here:
+      ordinary xid64 heap operations also require it. Control-data field
+      widths/parsing follow the type change; transfer is deferred to 0007.
+0006: original README.XID64, preserving its authors. 0007 updates the backend
+      conversion and immediate-WAL sections to describe the implemented design.
+0007: complete pg_upgrade transfer/conversion paths, source-format detection,
+      SLRU/auxiliary conversion, checksums/swap/index invalidation, by-value
+      AIO/CREATE DATABASE metadata, backend private-copy conversion, atomic
+      pending publication, access gates, immediate WAL and exceptional image
+      obligations, legacy no-hints visibility, HOT roots, and their native
+      conversion/upgrade/recovery tests and regression helper corrections.
+      The shared item comparator and lock predicates are supplied by 0005
+      so the core builds without the converter. The converter joins its
+      eventual translation unit in 0007; no new runtime change is introduced.
+
+Authorship
+----------
+0001-0006 retain the original v67 From/Git author Maxim Orlov
+<m.orlov@postgrespro.ru>, original author dates, original named author lists
+and reviewer credits. Each also credits Evgeny Voropaev <evorop@gmail.com>.
+0007 is authored by Evgeny Voropaev and retains the original page-format/
+conversion authors. Supplied-patch names/emails are preserved literally;
+Maxim/Maksim spelling variants have not been silently merged.
+
+Supplied tt186xid64 contributions
+-------------------------------
+0005: applicable 0002 test/restrict-key changes, 0010 test ideas, and the
+      pg_combinebackup fixture correction with no mail author header.
+0007: source-format dispatch (0005: Evgeny Voropaev, Artem Bugaenko,
+      Andrey Borodin, Maksim Starkov, Stanislav Antonov); SLRU and auxiliary
+      conversion (0006/0007: Evgeny); AIO metadata (0008: Evgeny); nonzero
+      epoch addressing (0011: OpenAI Codex); MultiXact/index fixes (0012:
+      Maxim Starkov, Evgeny, Andrey Borodin); double-xmax decoding/test
+      (0013: Stanislav Antonov, Evgeny); CREATE DATABASE metadata (0014:
+      Evgeny, Maksim Starkov <maksim.starkov@tantorlabs.com>); WAL images
+      (0015: Evgeny). The worker conversion/deferred ordinary WAL portions
+      of 0008 are superseded by the authorized backend/immediate-WAL design.
+Optional/rejected supplied patches remain optional/rejected; aggregation
+does not apply them. See xid64-post-adaptation-audit.md for dispositions.
+No Tantor 18 directory was accessed for this aggregation.
+
+Infrastructure and historical artifacts
+--------------------------------------
+The final source-branch infrastructure commit adds .gitmodules, the updated
+Baloo gitlink and the existing codex_todo.txt. Reports, standalone probes,
+patch exports and this aggregation recipe live in Baloo separately.
+Original v67 mail files are unchanged. All 34 previous top-level adapted
+patch files and the old 33-entry series are preserved under
+patches/func/pg19xid64evoro1900/archive/overnight-20261026/.
+The extra archived patch outside that manifest remains historical, not an
+additional patch to apply. Historical minis likewise refer to the previous
+working split; use the new seven-entry series for the aggregated branch.
+Untracked user-supplied patches and codex.log are left untracked.
+
+Validation
+----------
+Final source tree equality with the overnight snapshot: PASS.
+Core six-patch world-bin build: PASS, assertions/TAP/injection points,
+-O0 -g -Werror=format -Werror=pointer-arith.
+Build log: /tmp/xid64-aggregate-core-build-complete.log.
+Core regression and seven-patch git-am replay: results appended below.
+The prior complete check-world with PG_TEST_EXTRA=wal_consistency_checking
+remains applicable to the unchanged final runtime tree; it was not rerun
+solely for this history reorganization. Its exact evidence and remaining
+logical issues are retained in xid64-post-adaptation-audit.md.
+
+Core regression: PASS, all 245 tests (the additional conversion regression joins in 0007).
+Log: /tmp/xid64-aggregate-core-regress.log.
+
+Seven-patch git-am replay: PASS, exact tree 8b9a82a7d6c5fa097093188bcc4eba992a511952.
+Replay directory: /tmp/xid64-1900-verified-am-rkfr9if3.
+Every intermediate commit tree, author identity/date and infrastructure exclusion: PASS.

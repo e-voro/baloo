@@ -1,0 +1,135 @@
+From ed143a05f0f5ebdc79a58fd63c026a3cad92839d Mon Sep 17 00:00:00 2001
+From: Maxim Orlov <m.orlov@postgrespro.ru>
+Date: Thu, 7 Dec 2023 18:52:45 +0300
+Subject: [PATCH v67 03/12] Use 64-bit SLRU pages in callers.
+
+TODO:
+ - add upgrade for slru segments
+---
+ src/backend/access/transam/clog.c                        | 2 +-
+ src/backend/access/transam/commit_ts.c                   | 2 +-
+ src/backend/access/transam/multixact.c                   | 2 +-
+ src/backend/access/transam/subtrans.c                    | 2 +-
+ src/backend/storage/lmgr/predicate.c                     | 2 +-
+ src/bin/pg_upgrade/multixact_rewrite.c                   | 2 +-
+ src/bin/pg_verifybackup/t/003_corruption.pl              | 2 +-
+ src/test/modules/test_slru/t/002_multixact_wraparound.pl | 6 +++---
+ 8 files changed, 10 insertions(+), 10 deletions(-)
+
+diff --git a/src/backend/access/transam/clog.c b/src/backend/access/transam/clog.c
+index 5366f9a777f..64926e89cdc 100644
+--- a/src/backend/access/transam/clog.c
++++ b/src/backend/access/transam/clog.c
+@@ -812,7 +812,7 @@ CLOGShmemRequest(void *arg)
+ 	SimpleLruRequest(.desc = &XactSlruDesc,
+ 					 .name = "transaction",
+ 					 .Dir = "pg_xact",
+-					 .long_segment_names = false,
++					 .long_segment_names = true,
+ 
+ 					 .nslots = CLOGShmemBuffers(),
+ 					 .nlsns = CLOG_LSNS_PER_PAGE,
+diff --git a/src/backend/access/transam/commit_ts.c b/src/backend/access/transam/commit_ts.c
+index 9b9b524795c..5401afd8c88 100644
+--- a/src/backend/access/transam/commit_ts.c
++++ b/src/backend/access/transam/commit_ts.c
+@@ -552,7 +552,7 @@ CommitTsShmemRequest(void *arg)
+ 	SimpleLruRequest(.desc = &CommitTsSlruDesc,
+ 					 .name = "commit_timestamp",
+ 					 .Dir = "pg_commit_ts",
+-					 .long_segment_names = false,
++					 .long_segment_names = true,
+ 
+ 					 .nslots = CommitTsShmemBuffers(),
+ 
+diff --git a/src/backend/access/transam/multixact.c b/src/backend/access/transam/multixact.c
+index 929455cab7e..067927f624c 100644
+--- a/src/backend/access/transam/multixact.c
++++ b/src/backend/access/transam/multixact.c
+@@ -1795,7 +1795,7 @@ MultiXactShmemRequest(void *arg)
+ 	SimpleLruRequest(.desc = &MultiXactOffsetSlruDesc,
+ 					 .name = "multixact_offset",
+ 					 .Dir = "pg_multixact/offsets",
+-					 .long_segment_names = false,
++					 .long_segment_names = true,
+ 
+ 					 .nslots = multixact_offset_buffers,
+ 
+diff --git a/src/backend/access/transam/subtrans.c b/src/backend/access/transam/subtrans.c
+index 8a11a8208ae..40973f6f9a1 100644
+--- a/src/backend/access/transam/subtrans.c
++++ b/src/backend/access/transam/subtrans.c
+@@ -247,7 +247,7 @@ SUBTRANSShmemRequest(void *arg)
+ 	SimpleLruRequest(.desc = &SubTransSlruDesc,
+ 					 .name = "subtransaction",
+ 					 .Dir = "pg_subtrans",
+-					 .long_segment_names = false,
++					 .long_segment_names = true,
+ 
+ 					 .nslots = SUBTRANSShmemBuffers(),
+ 
+diff --git a/src/backend/storage/lmgr/predicate.c b/src/backend/storage/lmgr/predicate.c
+index 2092e951e10..25afb38b426 100644
+--- a/src/backend/storage/lmgr/predicate.c
++++ b/src/backend/storage/lmgr/predicate.c
+@@ -1218,7 +1218,7 @@ PredicateLockShmemRequest(void *arg)
+ 	SimpleLruRequest(.desc = &SerialSlruDesc,
+ 					 .name = "serializable",
+ 					 .Dir = "pg_serial",
+-					 .long_segment_names = false,
++					 .long_segment_names = true,
+ 
+ 					 .nslots = serializable_buffers,
+ 
+diff --git a/src/bin/pg_upgrade/multixact_rewrite.c b/src/bin/pg_upgrade/multixact_rewrite.c
+index 823984ec8f3..35cfe29c5e3 100644
+--- a/src/bin/pg_upgrade/multixact_rewrite.c
++++ b/src/bin/pg_upgrade/multixact_rewrite.c
+@@ -52,7 +52,7 @@ rewrite_multixacts(MultiXactId from_multi, MultiXactId to_multi)
+ 
+ 	/* Prepare to write the new SLRU files */
+ 	pg_sprintf(dir, "%s/pg_multixact/offsets", new_cluster.pgdata);
+-	offsets_writer = AllocSlruWrite(dir, false);
++	offsets_writer = AllocSlruWrite(dir, true /* use long segment names */ );
+ 	SlruWriteSwitchPage(offsets_writer, MultiXactIdToOffsetPage(from_multi));
+ 
+ 	pg_sprintf(dir, "%s/pg_multixact/members", new_cluster.pgdata);
+diff --git a/src/bin/pg_verifybackup/t/003_corruption.pl b/src/bin/pg_verifybackup/t/003_corruption.pl
+index 405ea793b68..37300634bfa 100644
+--- a/src/bin/pg_verifybackup/t/003_corruption.pl
++++ b/src/bin/pg_verifybackup/t/003_corruption.pl
+@@ -259,7 +259,7 @@ sub mutilate_extra_tablespace_file
+ sub mutilate_missing_file
+ {
+ 	my ($backup_path) = @_;
+-	my $pathname = "$backup_path/pg_xact/0000";
++	my $pathname = "$backup_path/pg_xact/000000000000000";
+ 	unlink($pathname) || die "$pathname: $!";
+ 	return;
+ }
+diff --git a/src/test/modules/test_slru/t/002_multixact_wraparound.pl b/src/test/modules/test_slru/t/002_multixact_wraparound.pl
+index 3793ac1c450..8b4601ab8e1 100644
+--- a/src/test/modules/test_slru/t/002_multixact_wraparound.pl
++++ b/src/test/modules/test_slru/t/002_multixact_wraparound.pl
+@@ -40,7 +40,7 @@ my $slru_pages_per_segment = $1;
+ my $multixact_offsets_per_page = $blcksz / 8;   # sizeof(MultiXactOffset) == 8
+ my $segno =
+   int(0xFFFFFFF8 / $multixact_offsets_per_page / $slru_pages_per_segment);
+-my $slru_file = sprintf('%s/pg_multixact/offsets/%04X', $node_pgdata, $segno);
++my $slru_file = sprintf('%s/pg_multixact/offsets/%015X', $node_pgdata, $segno);
+ open my $fh, ">", $slru_file
+   or die "could not open \"$slru_file\": $!";
+ binmode $fh;
+@@ -50,8 +50,8 @@ syswrite($fh, "\0" x $bytes_per_seg) == $bytes_per_seg
+ close $fh;
+ 
+ # remove old file
+-unlink("$node_pgdata/pg_multixact/offsets/0000")
+-  or die "could not unlink \"$node_pgdata/pg_multixact/offsets/0000\": $!";
++unlink("$node_pgdata/pg_multixact/offsets/000000000000000")
++  or die "could not unlink \"$node_pgdata/pg_multixact/offsets/000000000000000\": $!";
+ 
+ # Consume multixids to wrap around.  We start at 0xFFFFFFF8, so after
+ # creating 16 multixacts we should definitely have wrapped around.
+-- 
+2.51.0

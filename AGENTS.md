@@ -1,5 +1,16 @@
 # Instructions for future AI instances
 
+> **CURRENT AGGREGATION (2026-10-26): active source/Baloo branch is
+> `pg19xid64evoro1900`. Apply the seven entries in
+> `patches/func/pg19xid64evoro1900/series` from vanilla beta3 `3638289fb57`.
+> The first six retain v67 authors and add Evgeny Voropaev; the seventh is
+> "Resolve the upgrade issues". Baloo/TODO/probes remain separate infrastructure.
+> Final source equals overnight `d64b5f0220f`; both overnight branches survive.
+> Read `xid64-aggregation-1900.txt` for boundaries, credits and validation.
+> Older 33-patch manifests/minis below are historical; their complete artifacts
+> are archived under `patches/func/pg19xid64evoro1900/archive/overnight-20261026/`.
+
+
 Read baloo/xid64-rebase-report.md for the current checkpoint and adaptation map.
 Read the tail of baloo/codex.log, inspect git status in both the main repository
 and baloo, and inspect branch history before changing anything. The report is

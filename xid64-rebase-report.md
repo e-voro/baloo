@@ -1,3 +1,11 @@
+> **2026-10-26 aggregated history:** branch `pg19xid64evoro1900` now
+> contains six v1900 core commits plus **Resolve the upgrade issues**, based
+> directly on vanilla beta3 `3638289fb57`. The complete source is unchanged
+> from overnight `d64b5f0220f`. The new seven-entry `series` replaces the
+> working 33-patch list (archived, with the overnight branches preserved).
+> See `xid64-aggregation-1900.txt` for commits, author credits and checks.
+> Infrastructure remains separate. Older checkpoints below are historical.
+
 # xid64 PostgreSQL 19 rebase: handoff and validation
 
 ## Post adaptation TODO audit (2026-10-26)

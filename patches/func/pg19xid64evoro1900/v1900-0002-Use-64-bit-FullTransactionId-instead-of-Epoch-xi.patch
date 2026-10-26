@@ -1,7 +1,7 @@
-From b67a12ceb12b10bf5116394d72c2b67414987887 Mon Sep 17 00:00:00 2001
+From 3d34a6494b8c27f6cd49d3390bf96376c790d5d1 Mon Sep 17 00:00:00 2001
 From: Maxim Orlov <m.orlov@postgrespro.ru>
 Date: Fri, 25 Mar 2022 12:36:24 +0300
-Subject: [PATCH v67 02/12] Use 64-bit FullTransactionId instead of Epoch:xid
+Subject: [PATCH v1900 2/7] Use 64-bit FullTransactionId instead of Epoch:xid
 
 NextXid in controldata is now compatible with old format Epoch:xid and the new
 one. This is next step to make XIDs 64-bit.
@@ -16,24 +16,26 @@ Author: Aleksander Alekseev <aleksander@timescale.com>
 Reviewed-by: Aleksander Alekseev <aleksander@timescale.com>
 Discussion: https://postgr.es/m/CACG%3DezZe1NQSCnfHOr78AtAZxJZeCvxrts0ygrxYwe%3DpyyjVWA%40mail.gmail.com
 Discussion: https://postgr.es/m/CAJ7c6TPDOYBYrnCAeyndkBktO0WG2xSdYduTF0nxq%2BvfkmTF5Q%40mail.gmail.com
+
+Author: Evgeny Voropaev <evorop@gmail.com>
 ---
- contrib/amcheck/verify_heapam.c                  | 75 ++++++++++--------------
- contrib/pageinspect/btreefuncs.c                 |  5 +-
- src/backend/access/rmgrdesc/gistdesc.c           | 10 ++--
- src/backend/access/rmgrdesc/nbtdesc.c            | 10 ++--
- src/backend/access/rmgrdesc/xlogdesc.c           |  5 +-
- src/backend/utils/misc/pg_controldata.c          |  5 +-
- src/bin/pg_amcheck/t/004_verify_heapam.pl        | 10 ++--
- src/bin/pg_controldata/pg_controldata.c          |  5 +-
- src/bin/pg_upgrade/controldata.c                 | 32 ++++++++--
- src/test/modules/xid_wraparound/xid_wraparound.c | 12 ++--
- 10 files changed, 83 insertions(+), 86 deletions(-)
+ contrib/amcheck/verify_heapam.c               | 75 ++++++++-----------
+ contrib/pageinspect/btreefuncs.c              |  5 +-
+ src/backend/access/rmgrdesc/gistdesc.c        | 10 +--
+ src/backend/access/rmgrdesc/nbtdesc.c         | 10 +--
+ src/backend/access/rmgrdesc/xlogdesc.c        |  5 +-
+ src/backend/utils/misc/pg_controldata.c       |  5 +-
+ src/bin/pg_amcheck/t/004_verify_heapam.pl     | 10 +--
+ src/bin/pg_controldata/pg_controldata.c       |  5 +-
+ src/bin/pg_upgrade/controldata.c              | 32 ++++++--
+ .../modules/xid_wraparound/xid_wraparound.c   | 13 ++--
+ 10 files changed, 83 insertions(+), 87 deletions(-)
 
 diff --git a/contrib/amcheck/verify_heapam.c b/contrib/amcheck/verify_heapam.c
-index fa8b8dcd9e..e5ea68b801 100644
+index 25b4914cfa1..056dd210923 100644
 --- a/contrib/amcheck/verify_heapam.c
 +++ b/contrib/amcheck/verify_heapam.c
-@@ -1136,24 +1136,21 @@ check_tuple_visibility(HeapCheckContext *ctx, bool *xmin_commit_status_ok,
+@@ -1138,24 +1138,21 @@ check_tuple_visibility(HeapCheckContext *ctx, bool *xmin_commit_status_ok,
  			break;
  		case XID_IN_FUTURE:
  			report_corruption(ctx,
@@ -64,7 +66,7 @@ index fa8b8dcd9e..e5ea68b801 100644
  			return false;
  	}
  
-@@ -1177,24 +1174,21 @@ check_tuple_visibility(HeapCheckContext *ctx, bool *xmin_commit_status_ok,
+@@ -1179,24 +1176,21 @@ check_tuple_visibility(HeapCheckContext *ctx, bool *xmin_commit_status_ok,
  					return false;
  				case XID_IN_FUTURE:
  					report_corruption(ctx,
@@ -95,7 +97,7 @@ index fa8b8dcd9e..e5ea68b801 100644
  					return false;
  				case XID_BOUNDS_OK:
  					break;
-@@ -1246,24 +1240,21 @@ check_tuple_visibility(HeapCheckContext *ctx, bool *xmin_commit_status_ok,
+@@ -1248,24 +1242,21 @@ check_tuple_visibility(HeapCheckContext *ctx, bool *xmin_commit_status_ok,
  					return false;
  				case XID_IN_FUTURE:
  					report_corruption(ctx,
@@ -126,7 +128,7 @@ index fa8b8dcd9e..e5ea68b801 100644
  					return false;
  				case XID_BOUNDS_OK:
  					break;
-@@ -1409,24 +1400,21 @@ check_tuple_visibility(HeapCheckContext *ctx, bool *xmin_commit_status_ok,
+@@ -1411,24 +1402,21 @@ check_tuple_visibility(HeapCheckContext *ctx, bool *xmin_commit_status_ok,
  				return true;
  			case XID_IN_FUTURE:
  				report_corruption(ctx,
@@ -157,7 +159,7 @@ index fa8b8dcd9e..e5ea68b801 100644
  				return true;
  			case XID_BOUNDS_OK:
  				break;
-@@ -1474,24 +1462,21 @@ check_tuple_visibility(HeapCheckContext *ctx, bool *xmin_commit_status_ok,
+@@ -1476,24 +1464,21 @@ check_tuple_visibility(HeapCheckContext *ctx, bool *xmin_commit_status_ok,
  			return true;
  		case XID_IN_FUTURE:
  			report_corruption(ctx,
@@ -189,7 +191,7 @@ index fa8b8dcd9e..e5ea68b801 100644
  		case XID_BOUNDS_OK:
  			break;
 diff --git a/contrib/pageinspect/btreefuncs.c b/contrib/pageinspect/btreefuncs.c
-index 73079f4089..1d851cae78 100644
+index 061928c9c2f..832a005df0e 100644
 --- a/contrib/pageinspect/btreefuncs.c
 +++ b/contrib/pageinspect/btreefuncs.c
 @@ -143,9 +143,8 @@ GetBTPageStatistics(BlockNumber blkno, Buffer buffer, BTPageStat *stat)
@@ -205,7 +207,7 @@ index 73079f4089..1d851cae78 100644
  		else
  			elog(DEBUG2, "deleted page from block %u has safexid %llu",
 diff --git a/src/backend/access/rmgrdesc/gistdesc.c b/src/backend/access/rmgrdesc/gistdesc.c
-index db64873256..b079acd753 100644
+index 3ee428ed3c6..2f2e293df2f 100644
 --- a/src/backend/access/rmgrdesc/gistdesc.c
 +++ b/src/backend/access/rmgrdesc/gistdesc.c
 @@ -25,11 +25,10 @@ out_gistxlogPageUpdate(StringInfo buf, gistxlogPageUpdate *xlrec)
@@ -235,7 +237,7 @@ index db64873256..b079acd753 100644
  }
  
 diff --git a/src/backend/access/rmgrdesc/nbtdesc.c b/src/backend/access/rmgrdesc/nbtdesc.c
-index 8747dd64c6..21f6c460ab 100644
+index 698a37eff61..56a43144b6f 100644
 --- a/src/backend/access/rmgrdesc/nbtdesc.c
 +++ b/src/backend/access/rmgrdesc/nbtdesc.c
 @@ -94,10 +94,9 @@ btree_desc(StringInfo buf, XLogReaderState *record)
@@ -266,9 +268,10 @@ index 8747dd64c6..21f6c460ab 100644
  				break;
  			}
 diff --git a/src/backend/access/rmgrdesc/xlogdesc.c b/src/backend/access/rmgrdesc/xlogdesc.c
+index 832561d78e7..c95b2c9683b 100644
 --- a/src/backend/access/rmgrdesc/xlogdesc.c
 +++ b/src/backend/access/rmgrdesc/xlogdesc.c
-@@ -101,7 +101,7 @@
+@@ -101,7 +101,7 @@ xlog_desc(StringInfo buf, XLogReaderState *record)
  		CheckPoint *checkpoint = (CheckPoint *) rec;
  
  		appendStringInfo(buf, "redo %X/%08X; "
@@ -277,7 +280,7 @@ diff --git a/src/backend/access/rmgrdesc/xlogdesc.c b/src/backend/access/rmgrdes
  						 "oldest xid %llu in DB %u; oldest multi %llu in DB %u; "
  						 "oldest/newest commit timestamp xid: %llu/%llu; "
  						 "oldest running xid %llu; "
-@@ -112,8 +112,7 @@
+@@ -112,8 +112,7 @@ xlog_desc(StringInfo buf, XLogReaderState *record)
  						 checkpoint->fullPageWrites ? "true" : "false",
  						 get_wal_level_string(checkpoint->wal_level),
  						 checkpoint->logicalDecodingEnabled ? "true" : "false",
@@ -288,9 +291,10 @@ diff --git a/src/backend/access/rmgrdesc/xlogdesc.c b/src/backend/access/rmgrdes
  						 (unsigned long long) checkpoint->nextMulti,
  						 checkpoint->nextMultiOffset,
 diff --git a/src/backend/utils/misc/pg_controldata.c b/src/backend/utils/misc/pg_controldata.c
+index 6be8d46eb04..028a5f54b69 100644
 --- a/src/backend/utils/misc/pg_controldata.c
 +++ b/src/backend/utils/misc/pg_controldata.c
-@@ -119,9 +119,8 @@
+@@ -119,9 +119,8 @@ pg_control_checkpoint(PG_FUNCTION_ARGS)
  	values[6] = BoolGetDatum(ControlFile->checkPointCopy.logicalDecodingEnabled);
  	nulls[6] = false;
  
@@ -303,7 +307,7 @@ diff --git a/src/backend/utils/misc/pg_controldata.c b/src/backend/utils/misc/pg
  
  	values[8] = ObjectIdGetDatum(ControlFile->checkPointCopy.nextOid);
 diff --git a/src/bin/pg_amcheck/t/004_verify_heapam.pl b/src/bin/pg_amcheck/t/004_verify_heapam.pl
-index 72693660fb..5cdab044b9 100644
+index 95f1f34c90d..47c42b4a0e8 100644
 --- a/src/bin/pg_amcheck/t/004_verify_heapam.pl
 +++ b/src/bin/pg_amcheck/t/004_verify_heapam.pl
 @@ -455,7 +455,7 @@ for (my $tupidx = 0; $tupidx < $ROWCOUNT; $tupidx++)
@@ -352,9 +356,10 @@ index 72693660fb..5cdab044b9 100644
  	elsif ($offnum == 17)
  	{
 diff --git a/src/bin/pg_controldata/pg_controldata.c b/src/bin/pg_controldata/pg_controldata.c
+index aa236e62edb..650a9d5309c 100644
 --- a/src/bin/pg_controldata/pg_controldata.c
 +++ b/src/bin/pg_controldata/pg_controldata.c
-@@ -266,9 +266,8 @@
+@@ -266,9 +266,8 @@ main(int argc, char *argv[])
  		   ControlFile->checkPointCopy.fullPageWrites ? _("on") : _("off"));
  	printf(_("Latest checkpoint's logical decoding: %s\n"),
  		   ControlFile->checkPointCopy.logicalDecodingEnabled ? _("on") : _("off"));
@@ -367,7 +372,7 @@ diff --git a/src/bin/pg_controldata/pg_controldata.c b/src/bin/pg_controldata/pg
  		   ControlFile->checkPointCopy.nextOid);
  	printf(_("Latest checkpoint's NextMultiXactId:  %llu\n"),
 diff --git a/src/bin/pg_upgrade/controldata.c b/src/bin/pg_upgrade/controldata.c
-index 90cef0864d..b603758599 100644
+index fd772ba4f38..28ab5cdc420 100644
 --- a/src/bin/pg_upgrade/controldata.c
 +++ b/src/bin/pg_upgrade/controldata.c
 @@ -8,6 +8,7 @@
@@ -378,7 +383,7 @@ index 90cef0864d..b603758599 100644
  
  #include <ctype.h>
  #include <limits.h>				/* for CHAR_MIN */
-@@ -271,13 +272,22 @@ get_control_data(ClusterInfo *cluster)
+@@ -272,13 +273,22 @@ get_control_data(ClusterInfo *cluster)
  		}
  		else if ((p = strstr(bufin, "Latest checkpoint's NextXID:")) != NULL)
  		{
@@ -402,7 +407,7 @@ index 90cef0864d..b603758599 100644
  
  			/*
  			 * Delimiter changed from '/' to ':' in 9.6.  We don't test for
-@@ -292,11 +302,23 @@ get_control_data(ClusterInfo *cluster)
+@@ -293,11 +303,23 @@ get_control_data(ClusterInfo *cluster)
  			else
  				p = NULL;
  
@@ -431,9 +436,10 @@ index 90cef0864d..b603758599 100644
  		}
  		else if ((p = strstr(bufin, "Latest checkpoint's NextOID:")) != NULL)
 diff --git a/src/test/modules/xid_wraparound/xid_wraparound.c b/src/test/modules/xid_wraparound/xid_wraparound.c
+index 57364f506c8..3d5f00e2a4d 100644
 --- a/src/test/modules/xid_wraparound/xid_wraparound.c
 +++ b/src/test/modules/xid_wraparound/xid_wraparound.c
-@@ -136,16 +136,13 @@
+@@ -136,16 +136,13 @@ consume_xids_common(FullTransactionId untilxid, uint64 nxids)
  		if (consumed - last_reported_at >= REPORT_INTERVAL)
  		{
  			if (nxids > 0)
@@ -455,7 +461,6 @@ diff --git a/src/test/modules/xid_wraparound/xid_wraparound.c b/src/test/modules
  			last_reported_at = consumed;
  		}
  	}
-
 -- 
-2.51.0
+2.55.0
 

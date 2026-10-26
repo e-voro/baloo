@@ -1,10 +1,12 @@
-From ed143a05f0f5ebdc79a58fd63c026a3cad92839d Mon Sep 17 00:00:00 2001
+From a97680af1e578707d25afffe5073924f1ab95d5a Mon Sep 17 00:00:00 2001
 From: Maxim Orlov <m.orlov@postgrespro.ru>
 Date: Thu, 7 Dec 2023 18:52:45 +0300
-Subject: [PATCH v67 03/12] Use 64-bit SLRU pages in callers.
+Subject: [PATCH v1900 3/7] Use 64-bit SLRU pages in callers.
 
 TODO:
  - add upgrade for slru segments
+
+Author: Evgeny Voropaev <evorop@gmail.com>
 ---
  src/backend/access/transam/clog.c                        | 2 +-
  src/backend/access/transam/commit_ts.c                   | 2 +-
@@ -132,4 +134,5 @@ index 3793ac1c450..8b4601ab8e1 100644
  # Consume multixids to wrap around.  We start at 0xFFFFFFF8, so after
  # creating 16 multixacts we should definitely have wrapped around.
 -- 
-2.51.0
+2.55.0
+

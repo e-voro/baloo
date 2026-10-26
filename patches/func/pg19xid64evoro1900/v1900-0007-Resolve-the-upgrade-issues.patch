@@ -1,0 +1,5156 @@
+From a15f01026cba8e9e3e97fdc3305b1c0481a9ddf6 Mon Sep 17 00:00:00 2001
+From: Evgeny Voropaev <evorop@gmail.com>
+Date: Mon, 26 Oct 2026 19:27:52 +0800
+Subject: [PATCH v1900 7/7] Resolve the upgrade issues
+
+Aggregate the PG19 upgrade and legacy-page conversion implementation and
+the corrections collected during the complete xid64 adaptation.
+
+Detect source XID/MultiXact formats; retain native PG19 64-bit offsets and
+its short offset filenames; convert SLRUs, wrapped per-object horizons and
+FSM/VM headers/checksums for copy, link and swap; invalidate destination
+indexes and avoid system-column upgrade false positives.
+
+Carry relation conversion metadata by value, including CREATE DATABASE.
+Convert validated private copies in the reading backend under the content
+lock. Publish BM_VALID together with BM_CONVERSION_PENDING at physical I/O
+completion, gate normal readers, and WAL-log permanent converted pages
+before publishing readiness. Retain the exceptional conversion-image WAL
+obligation, hint durability and redo image precedence. Preserve legacy HOT
+roots and retryable shared pages after conversion errors.
+
+Add the native cross-source upgrade/recovery/database-copy/double-xmax/HOT
+tests, conversion helper corrections and updated README. Standalone Baloo
+probes, reports and logs remain outside this source series.
+
+Supplied tt186xid64 sources: adapted 0005, 0006, 0007, 0008, 0011 (nonzero
+epoch), 0012, 0013 (decoding/test), 0014 and 0015. The worker/deferred-WAL
+parts of 0008 are superseded by the backend/immediate-WAL design.
+
+Original xid64 page-format/conversion authors:
+Authors:
+- Alexander Korotkov <aekorotkov@gmail.com>
+- Teodor Sigaev <teodor@sigaev.ru>
+- Nikita Glukhov <n.gluhov@postgrespro.ru>
+- Maxim Orlov <orlovmg@gmail.com>
+- Pavel Borisov <pashkin.elfe@gmail.com>
+- Yura Sokolov <y.sokolov@postgrespro.ru> <funny.falcon@gmail.com>
+- Aleksander Alekseev <aleksander@timescale.com>
+
+Supplied patch author credits (names/emails preserved where supplied):
+Author: Evgeny Voropaev <evorop@gmail.com>
+Author: Artem Bugaenko
+Co-author: Andrey Borodin
+Co-author: Maksim Starkov
+Co-author: Maxim Starkov
+Co-author: Maksim Starkov <maksim.starkov@tantorlabs.com>
+Co-author: Stanislav Antonov
+Author: OpenAI Codex <codex@openai.com>
+
+Names without email addresses are retained as written in the supplied
+patches; no identities have been inferred from other repositories.
+---
+ src/backend/access/heap/README.XID64          |  27 +-
+ src/backend/access/heap/heapam_visibility.c   |  34 +-
+ src/backend/access/heap/pruneheap.c           |  10 +-
+ src/backend/access/transam/xloginsert.c       |  21 +-
+ src/backend/commands/dbcommands.c             |  14 +-
+ src/backend/storage/aio/read_stream.c         |  15 +-
+ src/backend/storage/buffer/bufmgr.c           | 256 ++++++-
+ src/backend/storage/buffer/heap_convert.c     | 695 +++++++++++++++++-
+ src/bin/pg_upgrade/Makefile                   |   3 +-
+ src/bin/pg_upgrade/check.c                    |  71 +-
+ src/bin/pg_upgrade/file.c                     | 120 ++-
+ src/bin/pg_upgrade/info.c                     |  14 +
+ src/bin/pg_upgrade/meson.build                |   5 +
+ src/bin/pg_upgrade/multixact_read_v18.c       | 151 ++--
+ src/bin/pg_upgrade/multixact_read_v18.h       |  19 +-
+ src/bin/pg_upgrade/multixact_rewrite.c        |  45 +-
+ src/bin/pg_upgrade/pg_upgrade.c               | 304 +++++---
+ src/bin/pg_upgrade/pg_upgrade.h               |  26 +-
+ src/bin/pg_upgrade/relfilenumber.c            | 102 ++-
+ src/bin/pg_upgrade/segresize.c                |  48 ++
+ src/bin/pg_upgrade/t/002_pg_upgrade.pl        |  17 +
+ .../pg_upgrade/t/007_multixact_conversion.pl  |  59 +-
+ .../t/009_xid32_to_xid64_recovery.pl          | 260 +++++++
+ .../t/010_xid32_to_xid64_createdb.pl          | 135 ++++
+ .../t/011_xid32_to_xid64_double_xmax.pl       | 216 ++++++
+ .../pg_upgrade/t/012_xid32_to_xid64_hot.pl    | 156 ++++
+ src/bin/pg_upgrade/version.c                  | 233 ++++++
+ src/include/access/xloginsert.h               |   1 +
+ src/include/storage/aio_types.h               |   2 +
+ src/include/storage/buf_internals.h           |   9 +-
+ src/include/storage/bufmgr.h                  |  11 +-
+ src/include/storage/read_stream.h             |   3 +-
+ src/include/storage/relation_extra_data.h     |  31 +
+ .../perl/PostgreSQL/Test/AdjustUpgrade.pm     |   4 +
+ src/test/regress/expected/xid64.out           |  92 +++
+ src/test/regress/parallel_schedule            |   2 +-
+ src/test/regress/regress.c                    | 336 ++++++++-
+ src/test/regress/sql/xid64.sql                |  84 +++
+ src/test/xid-64/t/006_zeropage.pl             |  33 +
+ 39 files changed, 3373 insertions(+), 291 deletions(-)
+ create mode 100644 src/bin/pg_upgrade/segresize.c
+ create mode 100644 src/bin/pg_upgrade/t/009_xid32_to_xid64_recovery.pl
+ create mode 100644 src/bin/pg_upgrade/t/010_xid32_to_xid64_createdb.pl
+ create mode 100644 src/bin/pg_upgrade/t/011_xid32_to_xid64_double_xmax.pl
+ create mode 100644 src/bin/pg_upgrade/t/012_xid32_to_xid64_hot.pl
+ create mode 100644 src/include/storage/relation_extra_data.h
+ create mode 100644 src/test/regress/expected/xid64.out
+ create mode 100644 src/test/regress/sql/xid64.sql
+ create mode 100644 src/test/xid-64/t/006_zeropage.pl
+
+diff --git a/src/backend/access/heap/README.XID64 b/src/backend/access/heap/README.XID64
+index 9b4e6e03a22..41f8859d331 100644
+--- a/src/backend/access/heap/README.XID64
++++ b/src/backend/access/heap/README.XID64
+@@ -125,10 +125,23 @@ This lazy conversion is called only on pages being read. This can slow down
+ performance after upgrade, but just for a short period of time while "hot"
+ pages are read (and therefore converted to 64-bit format).
+ 
+-There is a special case when the first read of a tuple is done in read-only
+-state (in read-only transaction or on replica). This tuples are to be converted
+-"in memory", but not sync "to disk", unless cluster or transaction changed to
+-read-write state (e.g. replica is promoted). In order to support this, we mark
+-"in memory" pages with converted tuples with bit REGBUF_CONVERTED in buffer
+-descriptor. When in read-write state this will trigger full page write xlog
+-record.
++Physical input may be asynchronous, but the reading backend validates and
++converts a private page copy under the buffer's exclusive content lock. Normal
++read APIs do not expose the page until conversion has finished. An ordinary
++conversion error before installation leaves the shared legacy page unchanged;
++a later attempt is possible, but malformed data still requires repair.
++
++AIO completion sets BM_VALID together with BM_CONVERSION_PENDING and
++BM_CONVERSION_NEEDS_WAL for a legacy page. BM_VALID denotes physical input;
++the pending flag denotes unfinished conversion, not ownership of the converter.
++The content lock serializes competing converters.
++
++For a permanent relation when WAL insertion is allowed, the backend installs
++the converted copy, marks the buffer dirty, emits a forced XLOG_FPI and sets
++the page LSN before atomically clearing both conversion flags. This applies
++to read-only queries too. Recovery and operations deliberately skipping WAL
++retain a clean converted page with an outstanding WAL obligation. A later
++WAL-logged change must cover that conversion; this includes promotion after
++a standby converted the page in memory. Unlogged pages are dirtied without
++ordinary WAL. These flags are buffer-descriptor state and are never read from
++or written into the on-disk page header.
+diff --git a/src/backend/access/heap/heapam_visibility.c b/src/backend/access/heap/heapam_visibility.c
+index e0f58cb023d..98f906fa2f8 100644
+--- a/src/backend/access/heap/heapam_visibility.c
++++ b/src/backend/access/heap/heapam_visibility.c
+@@ -9,6 +9,8 @@
+  * If the hint bits are changed, MarkBufferDirtyHint is called on
+  * the passed-in buffer.  The caller must hold not only a pin, but at least
+  * shared buffer content lock on the buffer containing the tuple.
++ * Vacuum checks additionally accept InvalidBuffer for predecoded tuples:
++ * that mode never sets hint bits and the caller owns the tuple storage.
+  *
+  * NOTE: When using a non-MVCC snapshot, we must check
+  * TransactionIdIsInProgress (which looks in the PGPROC array) before
+@@ -142,6 +144,13 @@ static inline void
+ SetHintBitsExt(HeapTupleHeader tuple, Buffer buffer,
+ 			   uint16 infomask, TransactionId xid, SetHintBitsState *state)
+ {
++	/* Legacy conversion checks predecoded tuples in a private page copy. */
++	if (!BufferIsValid(buffer))
++	{
++		Assert(state == NULL);
++		return;
++	}
++
+ 	/*
+ 	 * In batched mode, if we previously did not get permission to set hint
+ 	 * bits, don't try again - in all likelihood IO is still going on.
+@@ -516,7 +525,7 @@ HeapTupleSatisfiesUpdate(HeapTuple htup, CommandId curcid,
+ 
+ 	Assert(ItemPointerIsValid(&htup->t_self));
+ 	Assert(htup->t_tableOid != InvalidOid);
+-	Assert(PageGetSpecialSize(page) != 0);
++	Assert(PageGetPageLayoutVersion(page) == PG_PAGE_LAYOUT_VERSION);
+ 
+ 	HeapTupleCopyXidsFromPage(buffer, htup, page);
+ 
+@@ -1112,6 +1121,10 @@ HeapTupleSatisfiesMVCC(HeapTuple htup, Snapshot snapshot,
+  * OldestXmin are deemed "recently dead"; they might still be visible to some
+  * open transaction, so we can't remove them, even if we see that the deleting
+  * transaction has committed.
++ *
++ * With InvalidBuffer, the caller must provide full xmin/xmax in htup.
++ * No hint bits will be written.  Legacy-page conversion uses this mode
++ * while owning a page through I/O, without a private buffer pin or lock.
+  */
+ HTSV_Result
+ HeapTupleSatisfiesVacuum(HeapTuple htup, TransactionId OldestXmin,
+@@ -1151,14 +1164,25 @@ HTSV_Result
+ HeapTupleSatisfiesVacuumHorizon(HeapTuple htup, Buffer buffer, TransactionId *dead_after)
+ {
+ 	HeapTupleHeader tuple = htup->t_data;
+-	Page			page = BufferGetPage(buffer);
+ 
+ 	Assert(ItemPointerIsValid(&htup->t_self));
+ 	Assert(htup->t_tableOid != InvalidOid);
+ 	Assert(dead_after != NULL);
+ 
+-	/* Also initializes full XIDs for legacy pages without special space. */
+-	HeapTupleCopyXidsFromPage(buffer, htup, page);
++	/*
++	 * Decode current-format pages, including real double-xmax pages without
++	 * special space, under the caller's content lock.  InvalidBuffer selects
++	 * the no-hints mode documented above: conversion has already populated
++	 * full XIDs and expanded wrapped source MultiXacts.  Re-decoding its
++	 * legacy page as double-xmax would destroy those values.
++	 */
++	if (BufferIsValid(buffer))
++	{
++		Page page = BufferGetPage(buffer);
++
++		Assert(PageGetPageLayoutVersion(page) == PG_PAGE_LAYOUT_VERSION);
++		HeapTupleCopyXidsFromPage(buffer, htup, page);
++	}
+ 
+ 	*dead_after = InvalidTransactionId;
+ 
+@@ -1742,7 +1766,7 @@ HeapTupleSatisfiesVisibility(HeapTuple htup, Snapshot snapshot, Buffer buffer)
+ {
+ 	Page page = BufferGetPage(buffer);
+ 
+-	Assert(PageGetSpecialSize(page) != 0);
++	Assert(PageGetPageLayoutVersion(page) == PG_PAGE_LAYOUT_VERSION);
+ 
+ 	HeapTupleCopyXidsFromPage(buffer, htup, page);
+ 
+diff --git a/src/backend/access/heap/pruneheap.c b/src/backend/access/heap/pruneheap.c
+index 010d61e1f60..83b4849af68 100644
+--- a/src/backend/access/heap/pruneheap.c
++++ b/src/backend/access/heap/pruneheap.c
+@@ -2672,14 +2672,18 @@ log_heap_prune_and_freeze(Relation relation, Buffer buffer,
+ 	 * making to it is to set PD_ALL_VISIBLE and checksums/wal_log_hints are
+ 	 * disabled.
+ 	 *
+-	 * However, if the page has never been WAL-logged (LSN is invalid), we
+-	 * must force an FPI regardless.  This can happen when another backend
++	 * A converted page needs an FPI even with checksums and hints disabled:
++	 * redo has no relcache metadata with which to decode the old disk page.
++	 * We must also stamp its heap LSN when logging the conversion image.
++	 *
++	 * If the page has never been WAL-logged (LSN is invalid), we must force
++	 * an FPI regardless.  This can happen when another backend
+ 	 * extends the heap, initializes the page, and then fails before WAL-
+ 	 * logging it.  Since heap extension is not WAL-logged, recovery might try
+ 	 * to replay our record and find that the page isn't initialized, which
+ 	 * would cause a PANIC.
+ 	 */
+-	if (!XLogRecPtrIsValid(PageGetLSN(heap_page)))
++	if (BufferConversionNeedsWAL(buffer) || !XLogRecPtrIsValid(PageGetLSN(heap_page)))
+ 		regbuf_flags_heap |= REGBUF_FORCE_IMAGE;
+ 	else if (!do_prune && nfrozen == 0 && (!do_set_vm || !XLogHintBitIsNeeded()))
+ 	{
+diff --git a/src/backend/access/transam/xloginsert.c b/src/backend/access/transam/xloginsert.c
+index f2e10b82b7d..bb2eb19c3ac 100644
+--- a/src/backend/access/transam/xloginsert.c
++++ b/src/backend/access/transam/xloginsert.c
+@@ -281,6 +281,16 @@ XLogRegisterBuffer(uint8 block_id, Buffer buffer, uint8 flags)
+ 	BufferGetTag(buffer, &regbuf->rlocator, &regbuf->forkno, &regbuf->block);
+ 	regbuf->page = BufferGetPage(buffer);
+ 	regbuf->flags = flags;
++	if (BufferConversionNeedsWAL(buffer))
++	{
++		/* WILL_INIT reconstructs the page without reading legacy contents. */
++		if ((flags & REGBUF_WILL_INIT) != REGBUF_WILL_INIT)
++			regbuf->flags |= REGBUF_CONVERTED;
++
++		/* Keep the marker on references that need not make the page durable. */
++		if (!(flags & REGBUF_NO_CHANGE))
++			MarkBufferConversionNeedsWAL(buffer, false);
++	}
+ 	regbuf->rdata_tail = (XLogRecData *) &regbuf->rdata_head;
+ 	regbuf->rdata_len = 0;
+ 
+@@ -675,8 +685,8 @@ XLogRecordAssemble(RmgrId rmid, uint8 info,
+ 		if (!regbuf->in_use)
+ 			continue;
+ 
+-		/* Determine if this block needs to be backed up */
+-		if (regbuf->flags & REGBUF_FORCE_IMAGE)
++		/* Conversion images are required even without torn-page protection. */
++		if (regbuf->flags & (REGBUF_FORCE_IMAGE | REGBUF_CONVERTED))
+ 			needs_backup = true;
+ 		else if (regbuf->flags & REGBUF_NO_IMAGE)
+ 			needs_backup = false;
+@@ -1127,8 +1137,9 @@ XLogCheckBufferNeedsBackup(Buffer buffer)
+  * MarkBufferDirtyHint().
+  *
+  * We only need to do something if page has not yet been full page written in
+- * this checkpoint round. The LSN of the inserted wal record is returned if we
+- * had to write, InvalidXLogRecPtr otherwise.
++ * this checkpoint round, or if its conversion has not yet been WAL-logged.
++ * The LSN of the inserted WAL record is returned if we had to write,
++ * InvalidXLogRecPtr otherwise.
+  */
+ XLogRecPtr
+ XLogSaveBufferForHint(Buffer buffer, bool buffer_std)
+@@ -1158,7 +1169,7 @@ XLogSaveBufferForHint(Buffer buffer, bool buffer_std)
+ 	 */
+ 	lsn = PageGetLSN(BufferGetPage(buffer));
+ 
+-	if (lsn <= RedoRecPtr)
++	if (BufferConversionNeedsWAL(buffer) || lsn <= RedoRecPtr)
+ 	{
+ 		int			flags = 0;
+ 
+diff --git a/src/backend/commands/dbcommands.c b/src/backend/commands/dbcommands.c
+index 600fc742a68..add085e9515 100644
+--- a/src/backend/commands/dbcommands.c
++++ b/src/backend/commands/dbcommands.c
+@@ -110,6 +110,7 @@ typedef struct CreateDBRelInfo
+ 	RelFileLocator rlocator;	/* physical relation identifier */
+ 	Oid			reloid;			/* relation oid */
+ 	bool		permanent;		/* relation is permanent or unlogged */
++	RelationExtraData rel_extra; /* source tuple conversion metadata */
+ } CreateDBRelInfo;
+ 
+ 
+@@ -217,7 +218,8 @@ CreateDatabaseUsingWalLog(Oid src_dboid, Oid dst_dboid,
+ 		LockRelationId(&dstrelid, AccessShareLock);
+ 
+ 		/* Copy relation storage from source to the destination. */
+-		CreateAndCopyRelationData(srcrlocator, dstrlocator, relinfo->permanent);
++		CreateAndCopyRelationData(srcrlocator, dstrlocator, relinfo->permanent,
++								  &relinfo->rel_extra);
+ 
+ 		/* Release the relation locks. */
+ 		UnlockRelationId(&srcrelid, AccessShareLock);
+@@ -311,6 +313,7 @@ ScanSourceDatabasePgClass(Oid tbid, Oid dbid, char *srcpath)
+ 		}
+ 
+ 		/* Append relevant pg_class tuples for current page to rlocatorlist. */
++		/* No toast is expected in sys tables */
+ 		rlocatorlist = ScanSourceDatabasePgClassPage(page, buf, tbid, dbid,
+ 													 srcpath, rlocatorlist,
+ 													 snapshot);
+@@ -362,6 +365,10 @@ ScanSourceDatabasePgClassPage(Page page, Buffer buf, Oid tbid, Oid dbid,
+ 		tuple.t_data = (HeapTupleHeader) PageGetItem(page, itemid);
+ 		tuple.t_len = ItemIdGetLength(itemid);
+ 		tuple.t_tableOid = RelationRelationId;
++		/*
++		 * Do not need HeapTupleCopyXidsFromPage here, it is inside
++		 * HeapTupleSatisfiesVisibility.
++		 */
+ 
+ 		/* Skip tuples that are not visible to this snapshot. */
+ 		if (HeapTupleSatisfiesVisibility(&tuple, snapshot, buf))
+@@ -444,6 +451,11 @@ ScanSourceDatabasePgClassTuple(HeapTupleData *tuple, Oid tbid, Oid dbid,
+ 	relinfo->rlocator.relNumber = relfilenumber;
+ 	relinfo->reloid = classForm->oid;
+ 
++	/* Cross-database reads cannot use the connected database's relcache. */
++	relinfo->rel_extra.relfrozenxid = classForm->relfrozenxid;
++	relinfo->rel_extra.relminmxid = classForm->relminmxid;
++	relinfo->rel_extra.relkind = classForm->relkind;
++
+ 	/* Temporary relations were rejected above. */
+ 	Assert(classForm->relpersistence != RELPERSISTENCE_TEMP);
+ 	relinfo->permanent =
+diff --git a/src/backend/storage/aio/read_stream.c b/src/backend/storage/aio/read_stream.c
+index e7dbbe03326..f70b7a51b61 100644
+--- a/src/backend/storage/aio/read_stream.c
++++ b/src/backend/storage/aio/read_stream.c
+@@ -959,6 +959,8 @@ read_stream_begin_impl(int flags,
+ 	for (int i = 0; i < max_ios; ++i)
+ 	{
+ 		stream->ios[i].op.rel = rel;
++		stream->ios[i].op.rel_extra = (RelationExtraData)
++			{InvalidTransactionId, InvalidMultiXactId, RELKIND_UNKNOWN};
+ 		stream->ios[i].op.smgr = smgr;
+ 		stream->ios[i].op.persistence = persistence;
+ 		stream->ios[i].op.forknum = forknum;
+@@ -994,6 +996,7 @@ read_stream_begin_relation(int flags,
+ 
+ /*
+  * Create a new read stream for reading a SMgr relation.
++ * rel_extra supplies conversion metadata unavailable without a Relation.
+  * See read_stream_begin_impl() for the detailed explanation.
+  */
+ ReadStream *
+@@ -1004,9 +1007,10 @@ read_stream_begin_smgr_relation(int flags,
+ 								ForkNumber forknum,
+ 								ReadStreamBlockNumberCB callback,
+ 								void *callback_private_data,
+-								size_t per_buffer_data_size)
++								size_t per_buffer_data_size,
++								const RelationExtraData *rel_extra)
+ {
+-	return read_stream_begin_impl(flags,
++	ReadStream *stream = read_stream_begin_impl(flags,
+ 								  strategy,
+ 								  NULL,
+ 								  smgr,
+@@ -1015,6 +1019,13 @@ read_stream_begin_smgr_relation(int flags,
+ 								  callback,
+ 								  callback_private_data,
+ 								  per_buffer_data_size);
++
++	/* The caller may release its descriptor once the stream has been built. */
++	Assert(rel_extra != NULL);
++	for (int i = 0; i < stream->max_ios; ++i)
++		stream->ios[i].op.rel_extra = *rel_extra;
++
++	return stream;
+ }
+ 
+ /*
+diff --git a/src/backend/storage/buffer/bufmgr.c b/src/backend/storage/buffer/bufmgr.c
+index 2afb20a0c69..801d50d5857 100644
+--- a/src/backend/storage/buffer/bufmgr.c
++++ b/src/backend/storage/buffer/bufmgr.c
+@@ -40,6 +40,7 @@
+ #include "access/tableam.h"
+ #include "access/xloginsert.h"
+ #include "access/xlogutils.h"
++#include "catalog/pg_control.h"
+ #ifdef USE_ASSERT_CHECKING
+ #include "catalog/pg_tablespace_d.h"
+ #endif
+@@ -64,6 +65,7 @@
+ #include "storage/read_stream.h"
+ #include "storage/smgr.h"
+ #include "storage/standby.h"
++#include "utils/injection_point.h"
+ #include "utils/memdebug.h"
+ #include "utils/ps_status.h"
+ #include "utils/rel.h"
+@@ -664,7 +666,8 @@ static void FindAndDropRelationBuffers(RelFileLocator rlocator,
+ 									   BlockNumber firstDelBlock);
+ static void RelationCopyStorageUsingBuffer(RelFileLocator srclocator,
+ 										   RelFileLocator dstlocator,
+-										   ForkNumber forkNum, bool permanent);
++										   ForkNumber forkNum, bool permanent,
++										   const RelationExtraData *rel_extra);
+ static void AtProcExit_Buffers(int code, Datum arg);
+ static void CheckForBufferLeaks(void);
+ #ifdef USE_ASSERT_CHECKING
+@@ -859,8 +862,11 @@ ReadRecentBuffer(RelFileLocator rlocator, ForkNumber forkNum, BlockNumber blockN
+ 		if (BufferTagsEqual(&tag, &bufHdr->tag) &&
+ 			PinBuffer(bufHdr, NULL, true))
+ 		{
+-			if (BufferTagsEqual(&tag, &bufHdr->tag))
++			if (BufferTagsEqual(&tag, &bufHdr->tag) &&
++				!(pg_atomic_read_u64(&bufHdr->state) & BM_CONVERSION_PENDING))
+ 			{
++				/* Pair with publication's pending-bit clear. */
++				pg_read_barrier();
+ 				pgBufferUsage.shared_blks_hit++;
+ 				return true;
+ 			}
+@@ -1267,6 +1273,127 @@ PinBufferForBlock(Relation rel,
+ 	return BufferDescriptorGetBuffer(bufHdr);
+ }
+ 
++/*
++ * Finish a legacy read that cannot be converted in shared AIO completion.
++ * BM_CONVERSION_PENDING is published atomically with BM_VALID and is cleared
++ * only after the full page has been installed.  The page version must not be
++ * used as an unlocked completion test: a memcpy may expose its header first.
++ * Permanent pages log their conversion image before readiness is published.
++ * BM_CONVERSION_NEEDS_WAL preserves the first-image obligation on paths that
++ * cannot insert WAL.  Readers serialize on the content lock, and a failed
++ * private conversion leaves the shared page unchanged for retry.
++ */
++static void
++FinishReadBufferConversion(ReadBuffersOperation *operation, Buffer buffer)
++{
++	BufferDesc *bufHdr;
++	Page		page;
++	RelationExtraData rel_extra;
++	RelFileLocator locator;
++	ForkNumber forknum;
++	BlockNumber blocknum;
++	PGAlignedBlock copy;
++	bool		permanent;
++	bool		log_conversion;
++
++	if (BufferIsLocal(buffer))
++		return;
++	bufHdr = GetBufferDescriptor(buffer - 1);
++	if (!(pg_atomic_read_u64(&bufHdr->state) & BM_CONVERSION_PENDING))
++	{
++		/* Acquire page bytes published before the pending-bit clear. */
++		pg_read_barrier();
++		return;
++	}
++
++	LockBuffer(buffer, BUFFER_LOCK_EXCLUSIVE);
++	if (!(pg_atomic_read_u64(&bufHdr->state) & BM_CONVERSION_PENDING))
++	{
++		LockBuffer(buffer, BUFFER_LOCK_UNLOCK);
++		return;
++	}
++	page = BufferGetPage(buffer);
++	/* An explicit overwrite/FPI may have replaced the legacy contents. */
++	if (PageIsNew(page) ||
++		PageGetPageLayoutVersion(page) == PG_PAGE_LAYOUT_VERSION)
++	{
++		pg_atomic_fetch_and_u64(&bufHdr->state, ~BM_CONVERSION_PENDING);
++		LockBuffer(buffer, BUFFER_LOCK_UNLOCK);
++		return;
++	}
++	Assert(CritSectionCount == 0);
++	BufferGetTag(buffer, &locator, &forknum, &blocknum);
++	if (PageGetPageLayoutVersion(page) != PG_PAGE_LAYOUT_VERSION - 1)
++		ereport(ERROR,
++				(errcode(ERRCODE_DATA_CORRUPTED),
++				 errmsg("unsupported page version %u in block %u of relation %s",
++						PageGetPageLayoutVersion(page), blocknum,
++						relpathperm(locator, forknum).str)));
++	if (operation->rel)
++	{
++		rel_extra.relfrozenxid = operation->rel->rd_rel->relfrozenxid;
++		rel_extra.relminmxid = operation->rel->rd_rel->relminmxid;
++		rel_extra.relkind = operation->rel->rd_rel->relkind;
++	}
++	else
++		rel_extra = operation->rel_extra;
++	if (forknum != MAIN_FORKNUM || rel_extra.relkind == RELKIND_UNKNOWN)
++		ereport(ERROR,
++				(errcode(ERRCODE_DATA_CORRUPTED),
++				 errmsg("cannot convert legacy block %u of relation %s without heap conversion metadata",
++						blocknum, relpathperm(locator, forknum).str)));
++
++	memcpy(copy.data, page, BLCKSZ);
++	convert_page(&rel_extra, &locator, forknum, copy.data, buffer, blocknum);
++	permanent = BufferIsPermanent(buffer);
++	log_conversion = permanent && XLogInsertAllowed() &&
++		!RelFileLocatorSkippingWAL(locator);
++	/*
++	 * Prepare the forced image before changing shared bytes.  In particular,
++	 * an invalid WAL insertion context must fail outside the critical section.
++	 * Register the private copy: it remains stable until XLogInsert finishes.
++	 */
++	if (log_conversion)
++	{
++		XLogBeginInsert();
++		XLogRegisterBlock(0, &locator, forknum, blocknum, copy.data,
++						 REGBUF_FORCE_IMAGE | REGBUF_STANDARD);
++	}
++	INJECTION_POINT_LOAD("buffer-conversion-header-published");
++	START_CRIT_SECTION();
++	/* Expose a legal partial-copy interleaving to concurrency tests. */
++#ifdef USE_INJECTION_POINTS
++	memcpy(page, copy.data, SizeOfPageHeaderData);
++	INJECTION_POINT_CACHED("buffer-conversion-header-published", &buffer);
++	memcpy((char *) page + SizeOfPageHeaderData,
++		   copy.data + SizeOfPageHeaderData, BLCKSZ - SizeOfPageHeaderData);
++#else
++	memcpy(page, copy.data, BLCKSZ);
++#endif
++	/*
++	 * Dirty before WAL insertion so a concurrent checkpoint cannot miss the
++	 * format change.  The exclusive content lock prevents flushing until the
++	 * image and its LSN are installed.  A crash then replays conversion even
++	 * if the first access was a read with no hint updates.
++	 */
++	if (log_conversion || !permanent)
++		MarkBufferDirty(buffer);
++	if (log_conversion)
++		PageSetLSN(page, XLogInsert(RM_XLOG_ID, XLOG_FPI));
++	/*
++	 * Recovery and permanent relations skipping WAL retain a clean converted
++	 * page and its WAL obligation.  Their existing overwrite/first-write paths
++	 * must discharge that obligation before the page becomes durable.
++	 */
++	/* Full-barrier atomic publication; fast readers never inspect half a copy. */
++	pg_atomic_fetch_and_u64(&bufHdr->state,
++							~(BM_CONVERSION_PENDING |
++							  ((log_conversion || !permanent) ?
++							   BM_CONVERSION_NEEDS_WAL : 0)));
++	END_CRIT_SECTION();
++	LockBuffer(buffer, BUFFER_LOCK_UNLOCK);
++}
++
+ /*
+  * ReadBuffer_common -- common logic for all ReadBuffer variants
+  *
+@@ -1355,6 +1482,8 @@ ReadBuffer_common(Relation rel, SMgrRelation smgr, char smgr_persistence,
+ 		flags |= READ_BUFFERS_ZERO_ON_ERROR;
+ 	operation.smgr = smgr;
+ 	operation.rel = rel;
++	operation.rel_extra = (RelationExtraData)
++		{InvalidTransactionId, InvalidMultiXactId, RELKIND_UNKNOWN};
+ 	operation.persistence = persistence;
+ 	operation.forknum = forkNum;
+ 	operation.strategy = strategy;
+@@ -1464,6 +1593,7 @@ StartReadBuffersImpl(ReadBuffersOperation *operation,
+ 			 */
+ 			if (i == 0)
+ 			{
++				FinishReadBufferConversion(operation, buffers[i]);
+ 				*nblocks = 1;
+ 
+ #ifdef USE_ASSERT_CHECKING
+@@ -1586,6 +1716,10 @@ StartReadBuffersImpl(ReadBuffersOperation *operation,
+ 		did_start_io = true;
+ 	}
+ 
++	if (!did_start_io)
++		for (int i = 0; i < operation->nblocks; ++i)
++			FinishReadBufferConversion(operation, operation->buffers[i]);
++
+ 	CheckReadBuffersOperation(operation, !did_start_io);
+ 
+ 	return did_start_io;
+@@ -1671,6 +1805,8 @@ CheckReadBuffersOperation(ReadBuffersOperation *operation, bool is_complete)
+ 
+ 		if (i < operation->nblocks_done)
+ 			Assert(pg_atomic_read_u64(&buf_hdr->state) & BM_VALID);
++		if (is_complete && !BufferIsLocal(buffer))
++			Assert(!(pg_atomic_read_u64(&buf_hdr->state) & BM_CONVERSION_PENDING));
+ 	}
+ #endif
+ }
+@@ -1911,6 +2047,9 @@ WaitReadBuffers(ReadBuffersOperation *operation)
+ 		AsyncReadBuffers(operation, &ignored_nblocks_progress);
+ 	}
+ 
++	for (int i = 0; i < operation->nblocks; ++i)
++		FinishReadBufferConversion(operation, operation->buffers[i]);
++
+ 	CheckReadBuffersOperation(operation, true);
+ 
+ 	/* NB: READ_DONE tracepoint was already executed in completion callback */
+@@ -1952,6 +2091,7 @@ AsyncReadBuffers(ReadBuffersOperation *operation, int *nblocks_progress)
+ 	IOContext	io_context;
+ 	IOObject	io_object;
+ 	instr_time	io_start;
++	PgAioTargetData *sd;
+ 	StartBufferIOResult status;
+ 
+ 	if (persistence == RELPERSISTENCE_TEMP)
+@@ -2149,6 +2289,20 @@ AsyncReadBuffers(ReadBuffersOperation *operation, int *nblocks_progress)
+ 	 *   table)
+ 	 * ---
+ 	 */
++	/* Copy backend-local relation metadata before the IO can be submitted. */
++	sd = pgaio_io_get_target_data(ioh);
++	if (operation->rel)
++	{
++		sd->smgr.relextradata.relfrozenxid = operation->rel->rd_rel->relfrozenxid;
++		sd->smgr.relextradata.relminmxid = operation->rel->rd_rel->relminmxid;
++		sd->smgr.relextradata.relkind = operation->rel->rd_rel->relkind;
++	}
++	else
++	{
++		/* Copy values into the shared handle, never a backend-local pointer. */
++		sd->smgr.relextradata = operation->rel_extra;
++	}
++
+ 	io_start = pgstat_prepare_io_time(track_io_timing);
+ 	smgrstartreadv(ioh, operation->smgr, forknum,
+ 				   blocknum,
+@@ -5370,7 +5524,8 @@ FlushRelationsAllBuffers(SMgrRelation *smgrs, int nrels)
+ static void
+ RelationCopyStorageUsingBuffer(RelFileLocator srclocator,
+ 							   RelFileLocator dstlocator,
+-							   ForkNumber forkNum, bool permanent)
++							   ForkNumber forkNum, bool permanent,
++							   const RelationExtraData *rel_extra)
+ {
+ 	Buffer		srcBuf;
+ 	Buffer		dstBuf;
+@@ -5430,7 +5585,7 @@ RelationCopyStorageUsingBuffer(RelFileLocator srclocator,
+ 												 forkNum,
+ 												 block_range_read_stream_cb,
+ 												 &p,
+-												 0);
++												 0, rel_extra);
+ 
+ 	/* Iterate over each block of the source relation file. */
+ 	for (blkno = 0; blkno < nblocks; blkno++)
+@@ -5478,12 +5633,14 @@ RelationCopyStorageUsingBuffer(RelFileLocator srclocator,
+  *
+  *		Pass permanent as true for permanent relations and false for
+  *		unlogged relations.  Currently this API is not supported for
+- *		temporary relations.
++ *		temporary relations. rel_extra describes the source relation for
++ *		worker-side conversion without consulting backend-local relcache.
+  * --------------------------------------------------------------------
+  */
+ void
+ CreateAndCopyRelationData(RelFileLocator src_rlocator,
+-						  RelFileLocator dst_rlocator, bool permanent)
++						  RelFileLocator dst_rlocator, bool permanent,
++						  const RelationExtraData *rel_extra)
+ {
+ 	char		relpersistence;
+ 	SMgrRelation src_rel;
+@@ -5506,7 +5663,7 @@ CreateAndCopyRelationData(RelFileLocator src_rlocator,
+ 
+ 	/* copy main fork. */
+ 	RelationCopyStorageUsingBuffer(src_rlocator, dst_rlocator, MAIN_FORKNUM,
+-								   permanent);
++								   permanent, rel_extra);
+ 
+ 	/* copy those extra forks that exist */
+ 	for (ForkNumber forkNum = MAIN_FORKNUM + 1;
+@@ -5525,7 +5682,7 @@ CreateAndCopyRelationData(RelFileLocator src_rlocator,
+ 
+ 			/* Copy a fork's data, block by block. */
+ 			RelationCopyStorageUsingBuffer(src_rlocator, dst_rlocator, forkNum,
+-										   permanent);
++										   permanent, rel_extra);
+ 		}
+ 	}
+ }
+@@ -5740,6 +5897,7 @@ MarkSharedBufferDirtyHint(Buffer buffer, BufferDesc *bufHdr, uint64 lockstate,
+ 	{
+ 		XLogRecPtr	lsn = InvalidXLogRecPtr;
+ 		bool		wal_log = false;
++		bool		needs_wal = (lockstate & BM_CONVERSION_NEEDS_WAL) != 0;
+ 		uint64		buf_state;
+ 
+ 		/*
+@@ -5750,8 +5908,14 @@ MarkSharedBufferDirtyHint(Buffer buffer, BufferDesc *bufHdr, uint64 lockstate,
+ 		 *
+ 		 * We don't check full_page_writes here because that logic is included
+ 		 * when we call XLogInsert() since the value changes dynamically.
++		 *
++		 * Conversion is a persistent format change even when the only backend
++		 * change is a hint.  Log its image before the page can reach disk;
++		 * otherwise eviction or restart loses the WAL obligation and subsequent
++		 * incremental WAL reaches an old-format page on the standby.
+ 		 */
+-		if (XLogHintBitIsNeeded() && (lockstate & BM_PERMANENT))
++		if ((XLogHintBitIsNeeded() || needs_wal) &&
++			(lockstate & BM_PERMANENT))
+ 		{
+ 			/*
+ 			 * If we must not write WAL, due to a relfilelocator-specific
+@@ -5768,6 +5932,10 @@ MarkSharedBufferDirtyHint(Buffer buffer, BufferDesc *bufHdr, uint64 lockstate,
+ 			wal_log = true;
+ 		}
+ 
++		/* A converted page must not remain dirty after a WAL insertion error. */
++		if (needs_wal && wal_log)
++			START_CRIT_SECTION();
++
+ 		/*
+ 		 * We must mark the page dirty before we emit the WAL record, as per
+ 		 * the usual rules, to ensure that BufferSync()/SyncOneBuffer() try to
+@@ -5819,6 +5987,9 @@ MarkSharedBufferDirtyHint(Buffer buffer, BufferDesc *bufHdr, uint64 lockstate,
+ 			UnlockBufHdr(bufHdr);
+ 		}
+ 
++		if (needs_wal && wal_log)
++			END_CRIT_SECTION();
++
+ 		pgBufferUsage.shared_blks_dirtied++;
+ 		if (VacuumCostActive)
+ 			VacuumCostBalance += VacuumCostPageDirty;
+@@ -5861,6 +6032,54 @@ MarkBufferDirtyHint(Buffer buffer, bool buffer_std)
+ 							  buffer_std);
+ }
+ 
++/*
++ * Track a format conversion that must be covered by a full image in WAL.
++ * AIO completion publishes this marker together with BM_CONVERSION_PENDING.
++ * Normal backend conversion logs its image immediately and clears both bits.
++ * When conversion cannot insert WAL, this marker remains until WAL covers the
++ * format change.  A completed overwrite can discharge both obligations when
++ * its buffer is registered for WAL.  It does not mean conversion is pending.
++ */
++void
++MarkBufferConversionNeedsWAL(Buffer buffer, bool needs_wal)
++{
++	BufferDesc *bufHdr;
++	uint64		buf_state;
++
++	Assert(BufferIsValid(buffer) && !BufferIsLocal(buffer));
++	bufHdr = GetBufferDescriptor(buffer - 1);
++	buf_state = pg_atomic_read_u64(&bufHdr->state);
++	Assert(!needs_wal ||
++		   ((buf_state & BM_IO_IN_PROGRESS) && !(buf_state & BM_VALID)) ||
++		   BufferLockHeldByMe(bufHdr));
++
++	if (((buf_state & BM_CONVERSION_NEEDS_WAL) != 0) == needs_wal &&
++		(needs_wal || !(buf_state & BM_CONVERSION_PENDING)))
++		return;
++	/* A WAL-logged overwrite can discharge both obligations together. */
++	Assert(needs_wal || !(buf_state & BM_CONVERSION_PENDING) ||
++		   (BufferLockHeldByMe(bufHdr) &&
++			(PageIsNew(BufferGetPage(buffer)) ||
++			 PageGetPageLayoutVersion(BufferGetPage(buffer)) == PG_PAGE_LAYOUT_VERSION)));
++
++	buf_state = LockBufHdr(bufHdr);
++	UnlockBufHdrExt(bufHdr, buf_state,
++					needs_wal ? BM_CONVERSION_NEEDS_WAL : 0,
++					needs_wal ? 0 :
++					(BM_CONVERSION_NEEDS_WAL | BM_CONVERSION_PENDING), 0);
++}
++
++bool
++BufferConversionNeedsWAL(Buffer buffer)
++{
++	BufferDesc *bufHdr;
++
++	Assert(BufferIsValid(buffer) && !BufferIsLocal(buffer));
++	Assert(BufferIsPinned(buffer));
++	bufHdr = GetBufferDescriptor(buffer - 1);
++	return (pg_atomic_read_u64(&bufHdr->state) & BM_CONVERSION_NEEDS_WAL) != 0;
++}
++
+ bool
+ IsBufferLocked(Buffer buffer)
+ {
+@@ -8705,8 +8924,25 @@ buffer_readv_complete_one(PgAioTargetData *td, uint8 buf_off, Buffer buffer,
+ 		}
+ 	}
+ 
+-	/* Terminate I/O and set BM_VALID. */
++	/*
++	 * Leave legacy conversion to a backend before the read API returns.
++	 * Conversion may resolve MultiXacts, allocate memory or raise an ERROR;
++	 * shared AIO completion has neither backend transaction state nor an
++	 * error-safe context.  Publish the pending marker in the same atomic state
++	 * change as BM_VALID.  Conversion readiness is independent of the header
++	 * version and of the BM_CONVERSION_NEEDS_WAL first-image WAL marker.
++	 */
+ 	set_flag_bits = failed ? BM_IO_ERROR : BM_VALID;
++	if (!failed &&
++		PageGetPageLayoutVersion((Page) bufdata) != 0 &&
++		PageGetPageLayoutVersion((Page) bufdata) != PG_PAGE_LAYOUT_VERSION &&
++		!PageIsNew((Page) bufdata))
++	{
++		Assert(!is_temp);
++		set_flag_bits |= BM_CONVERSION_NEEDS_WAL | BM_CONVERSION_PENDING;
++	}
++
++	/* Terminate I/O and set BM_VALID. */
+ 	if (is_temp)
+ 		TerminateLocalBufferIO(buf_hdr, false, set_flag_bits, true);
+ 	else
+diff --git a/src/backend/storage/buffer/heap_convert.c b/src/backend/storage/buffer/heap_convert.c
+index 84b52ca5beb..1848c8bc61a 100644
+--- a/src/backend/storage/buffer/heap_convert.c
++++ b/src/backend/storage/buffer/heap_convert.c
+@@ -13,8 +13,78 @@
+ 
+ #include "postgres.h"
+ 
+-#include "storage/bufpage.h"
++#include "access/heapam.h"
++#include "access/multixact.h"
++#include "catalog/catalog.h"
++#include "catalog/pg_class.h"
++#include "storage/bufmgr.h"
++#include "storage/checksum.h"
++#include "storage/relation_extra_data.h"
+ 
++static void repack_heap_tuples(RelationExtraData *rel_extra,
++							   RelFileLocator *relfilelocator,
++							   ForkNumber forknumber, Page page, Buffer buf,
++							   BlockNumber blkno, bool double_xmax);
++
++/*
++ * Convert heap/toast page into 64-xid format.
++ *
++ */
++static void
++convert_page_internal(RelationExtraData *rel_extra, RelFileLocator *relfilelocator,
++					  ForkNumber forknumber, Page page, Buffer buf,
++					  BlockNumber blkno)
++{
++	PageHeader	hdr = (PageHeader) page;
++	bool		try_double_xmax;
++
++	Assert(rel_extra != NULL);
++	/* Accept only the relation kinds handled by the conversion switch below. */
++	Assert(rel_extra->relkind == RELKIND_RELATION ||
++		   rel_extra->relkind == RELKIND_INDEX ||
++		   rel_extra->relkind == RELKIND_SEQUENCE ||
++		   rel_extra->relkind == RELKIND_TOASTVALUE ||
++		   rel_extra->relkind == RELKIND_MATVIEW ||
++		   rel_extra->relkind == RELKIND_PARTITIONED_TABLE);
++
++	switch (rel_extra->relkind)
++	{
++		case RELKIND_TOASTVALUE:
++			try_double_xmax = hdr->pd_upper - hdr->pd_lower <
++									MAXALIGN(sizeof(ToastPageSpecialData));
++			repack_heap_tuples(rel_extra, relfilelocator, forknumber, page, buf, blkno, try_double_xmax);
++			break;
++		case RELKIND_RELATION:
++		case RELKIND_PARTITIONED_TABLE:
++		case RELKIND_MATVIEW:
++			try_double_xmax = hdr->pd_upper - hdr->pd_lower <
++									MAXALIGN(sizeof(HeapPageSpecialData));
++			repack_heap_tuples(rel_extra, relfilelocator, forknumber, page, buf, blkno, try_double_xmax);
++			break;
++		case RELKIND_INDEX:
++			/* no need to convert index */
++		case RELKIND_SEQUENCE:
++			/* no real need to convert sequences */
++			break;
++		default:
++			ereport(ERROR,
++					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
++					 errmsg("conversion for blkno %u, relation \"%s\" cannot be done",
++							blkno,
++							relpathperm(*relfilelocator, forknumber).str),
++					 errdetail_relkind_not_supported(rel_extra->relkind)));
++	}
++
++	hdr->pd_checksum = pg_checksum_page((char *) page, blkno);
++
++	PageSetPageSizeAndVersion(page, PageGetPageSize(page),
++							  PG_PAGE_LAYOUT_VERSION);
++}
++
++/*
++ * itemoffcompare
++ *		Sorting support for repack_tuples()
++ */
+ int
+ itemoffcompare(const void *item1, const void *item2)
+ {
+@@ -22,3 +92,626 @@ itemoffcompare(const void *item1, const void *item2)
+ 	return ((ItemIdCompactData *) item2)->itemoff -
+ 		   ((ItemIdCompactData *) item1)->itemoff;
+ }
++
++/* Validate tuple storage before conversion can move or enlarge any data. */
++static void
++validate_legacy_heap_page(Page page)
++{
++	PageHeader header = (PageHeader) page;
++	ItemIdCompactData items[MaxHeapTuplesPerPage];
++	OffsetNumber maxoff = PageGetMaxOffsetNumber(page);
++	int nitems = 0;
++	int upper = header->pd_special;
++
++	if (maxoff > MaxHeapTuplesPerPage || header->pd_special != BLCKSZ)
++		ereport(ERROR,
++				(errcode(ERRCODE_DATA_CORRUPTED),
++				 errmsg("invalid legacy heap page layout")));
++	for (OffsetNumber off = FirstOffsetNumber; off <= maxoff; ++off)
++	{
++		ItemId item = PageGetItemId(page, off);
++		HeapTupleHeader tuple;
++		int length = ItemIdGetLength(item);
++		int offset = ItemIdGetOffset(item);
++
++		if (!ItemIdHasStorage(item))
++			continue;
++		if (!ItemIdIsNormal(item) || length < SizeofHeapTupleHeader ||
++			offset != MAXALIGN(offset) || offset < header->pd_upper ||
++			offset + MAXALIGN(length) > header->pd_special)
++			ereport(ERROR,
++					(errcode(ERRCODE_DATA_CORRUPTED),
++					 errmsg("invalid legacy tuple storage at offset %u", off)));
++		tuple = (HeapTupleHeader) PageGetItem(page, item);
++		if (tuple->t_hoff < SizeofHeapTupleHeader || tuple->t_hoff > length)
++			ereport(ERROR,
++					(errcode(ERRCODE_DATA_CORRUPTED),
++					 errmsg("invalid legacy tuple header at offset %u", off)));
++		items[nitems].itemoff = offset;
++		items[nitems++].alignedlen = MAXALIGN(length);
++	}
++	qsort(items, nitems, sizeof(ItemIdCompactData), itemoffcompare);
++	for (int i = 0; i < nitems; ++i)
++	{
++		if (items[i].itemoff + items[i].alignedlen > upper)
++			ereport(ERROR,
++					(errcode(ERRCODE_DATA_CORRUPTED),
++					 errmsg("overlapping legacy tuple storage")));
++		upper = items[i].itemoff;
++	}
++}
++
++/*
++ * Lazy page conversion from 32-bit to 64-bit XID at first read.
++ */
++void
++convert_page(RelationExtraData *rel_extra, RelFileLocator *relfilelocator, ForkNumber forknum,
++			 Page page, Buffer buf, BlockNumber blkno)
++{
++	/*
++	 * The reading backend converts a private copy before exposing the page.
++	 * The caller publishes it and logs a conversion image when WAL is allowed.
++	 */
++	if (rel_extra->relkind == RELKIND_RELATION ||
++		rel_extra->relkind == RELKIND_MATVIEW ||
++		rel_extra->relkind == RELKIND_TOASTVALUE)
++		validate_legacy_heap_page(page);
++
++	convert_page_internal(rel_extra, relfilelocator, forknum, page, buf, blkno);
++	MarkBufferConversionNeedsWAL(buf, true);
++}
++
++/* Expand a source 32-bit MultiXactId using the relation's source horizon. */
++static inline MultiXactId
++full_source_multixact(MultiXactId mxid, MultiXactId source_multi_base)
++{
++	if (mxid < source_multi_base)
++		mxid += ((MultiXactId) 1 << 32) - FirstMultiXactId;
++
++	Assert(mxid >= source_multi_base);
++	return mxid;
++}
++
++/*
++ * Convert xmin and xmax in a tuple.
++ * This also considers special cases: "double xmax" page format and multixact
++ * in xmax.
++ */
++static void
++convert_heap_tuple_xids(HeapTupleHeader tuple, TransactionId xid_base,
++						MultiXactId source_multi_base,
++						MultiXactId page_multi_base, bool double_xmax)
++{
++	/* Convert xmin */
++	if (double_xmax)
++	{
++		/* Prepare tuple for "double xmax" page format */
++		tuple->t_infomask |= HEAP_XMIN_FROZEN;
++		tuple->t_choice.t_heap.t_xmin = 0;
++	}
++	else
++	{
++		TransactionId xmin = tuple->t_choice.t_heap.t_xmin;
++
++		if (TransactionIdIsNormal(xmin))
++		{
++			if (HeapTupleHeaderXminFrozen(tuple))
++				tuple->t_choice.t_heap.t_xmin = FrozenTransactionId;
++			else if (HeapTupleHeaderXminInvalid(tuple))
++				tuple->t_choice.t_heap.t_xmin = InvalidTransactionId;
++			else
++			{
++				Assert(xmin >= xid_base + FirstNormalTransactionId);
++				/* Subtract xid_base from normal xmin */
++				tuple->t_choice.t_heap.t_xmin = xmin - xid_base;
++			}
++		}
++	}
++
++	/* If tuple has multixact flag, handle mxid wraparound */
++	if ((tuple->t_infomask & HEAP_XMAX_IS_MULTI) &&
++		!(tuple->t_infomask & HEAP_XMAX_INVALID))
++	{
++		MultiXactId mxid = full_source_multixact(
++			tuple->t_choice.t_heap.t_xmax, source_multi_base);
++
++		if (double_xmax)
++		{
++			/* Save converted mxid into "double xmax" format */
++			HeapTupleHeaderSetDoubleXmax(tuple, mxid);
++		}
++		else
++		{
++			/*
++			 * The short field is relative to the destination page's MultiXact
++			 * base.  As with short XIDs, relative values begin at 3; values 1
++			 * and 2 are read as absolute special values.
++			 */
++			Assert(mxid >= page_multi_base);
++			Assert(mxid - page_multi_base <= PG_UINT32_MAX);
++			Assert(page_multi_base == InvalidMultiXactId ||
++				   mxid - page_multi_base >= FirstNormalTransactionId);
++			tuple->t_choice.t_heap.t_xmax =
++				(uint32) (mxid - page_multi_base);
++		}
++	}
++	/* Convert xmax */
++	else if (!(tuple->t_infomask & HEAP_XMAX_INVALID))
++	{
++		TransactionId xmax = tuple->t_choice.t_heap.t_xmax;
++
++		if (double_xmax)
++		{
++			/* Save converted xmax into "double xmax" format */
++			HeapTupleHeaderSetDoubleXmax(tuple, xmax);
++		}
++		else if (TransactionIdIsNormal(xmax))
++		{
++			/* Subtract xid_base from normal xmax */
++			Assert(xmax >= xid_base + FirstNormalTransactionId);
++			tuple->t_choice.t_heap.t_xmax = xmax - xid_base;
++		}
++	}
++	else
++	{
++		if (double_xmax)
++			HeapTupleHeaderSetDoubleXmax(tuple, InvalidTransactionId);
++		else
++			tuple->t_choice.t_heap.t_xmax = InvalidTransactionId;
++	}
++}
++
++/*
++ * Correct page xmin/xmax based on tuple xmin/xmax values.
++ */
++static void
++compute_xid_min_max(HeapTuple tuple, MultiXactId multi_base,
++					TransactionId *xid_min, TransactionId *xid_max,
++					MultiXactId *multi_min, MultiXactId *multi_max)
++{
++	/* xmin */
++	if (!HeapTupleHeaderXminInvalid(tuple->t_data) &&
++		!HeapTupleHeaderXminFrozen(tuple->t_data))
++	{
++		TransactionId xid = HeapTupleGetRawXmin(tuple);
++
++		if (TransactionIdIsNormal(xid))
++		{
++			*xid_max = Max(*xid_max, xid);
++			*xid_min = Min(*xid_min, xid);
++		}
++	}
++
++	/* xmax */
++	if (!(tuple->t_data->t_infomask & HEAP_XMAX_INVALID))
++	{
++		TransactionId xid;
++
++		if (tuple->t_data->t_infomask & HEAP_XMAX_IS_MULTI)
++		{
++			MultiXactId mxid = HeapTupleGetRawXmax(tuple);
++
++			Assert(MultiXactIdIsValid(mxid));
++
++			mxid = full_source_multixact(mxid, multi_base);
++
++			*multi_max = Max(*multi_max, mxid);
++			*multi_min = Min(*multi_min, mxid);
++
++			/*
++			 * Also take into account hidden update xid, which can be
++			 * extracted by the vacuum.
++			 */
++			if (tuple->t_data->t_infomask & HEAP_XMAX_LOCK_ONLY)
++				xid = InvalidTransactionId;
++			else
++				xid = HeapTupleGetUpdateXid(tuple);
++		}
++		else
++		{
++			xid = HeapTupleGetRawXmax(tuple);
++		}
++
++		if (TransactionIdIsNormal(xid))
++		{
++			*xid_max = Max(*xid_max, xid);
++			*xid_min = Min(*xid_min, xid);
++		}
++	}
++}
++
++/*
++ * Returns true if both:
++ *  - xid_max: an uppper boundary of xmin's and xmax'es of all tuples on a page
++ *  - xid_min: a lower boundary of xmin's and xmax'es of all tuples on a page
++ *    can be expressed by 32-bit number relative to page's xid_base/multi_base
++ *    or invalid.
++ *
++ * True value effectively means that these tuples can be directly put on one
++ * page in 64-xid format.
++ */
++static inline bool
++xids_fit_page(TransactionId xid_min, TransactionId xid_max,
++			  MultiXactId multi_min, MultiXactId multi_max)
++{
++	bool xid_max_fits = false;
++	bool multi_max_fits = false;
++
++	if (xid_max == InvalidTransactionId)
++		xid_max_fits = true;
++
++	if (xid_max - xid_min <= MaxShortTransactionId - FirstNormalTransactionId)
++		xid_max_fits = true;
++
++	if (multi_max == InvalidMultiXactId)
++		multi_max_fits = true;
++
++	if (multi_max - multi_min <= MaxShortTransactionId - FirstNormalTransactionId)
++		multi_max_fits = true;
++
++	return xid_max_fits && multi_max_fits;
++}
++
++/*
++ * Set "base" for page in 64-bit XID format.
++ *
++ * This should not be called for double xmax pages. They do not have place for
++ * page special.
++ */
++static inline void
++heap_page_set_base(Page page,
++				   TransactionId xid_min, TransactionId xid_max,
++				   MultiXactId multi_min, MultiXactId multi_max,
++				   TransactionId *xid_base, MultiXactId *multi_base,
++				   bool is_toast)
++{
++	PageHeader			hdr = (PageHeader) page;
++
++	if (xid_max != InvalidTransactionId)
++		*xid_base = xid_min - FirstNormalTransactionId;
++	else
++		*xid_base = InvalidTransactionId;
++
++	if (multi_max != InvalidMultiXactId)
++		*multi_base = multi_min >= FirstNormalTransactionId ?
++			multi_min - FirstNormalTransactionId : InvalidMultiXactId;
++	else
++		*multi_base = InvalidMultiXactId;
++
++	if (is_toast)
++	{
++		ToastPageSpecial		special;
++
++		hdr->pd_special = ToastPageSpecialOffset;
++		special = ToastPageGetSpecial(page);
++		special->pd_xid_base = *xid_base;
++	}
++	else
++	{
++		HeapPageSpecial		special;
++
++		hdr->pd_special = HeapPageSpecialOffset;
++		special = HeapPageGetSpecial(page);
++		special->pd_xid_base = *xid_base;
++		special->pd_multi_base = *multi_base;
++	}
++}
++
++/*
++ * Prune source HOT chains before xmin identities are frozen for double xmax.
++ * All source transactions precede the target's first normal counter.  This
++ * runs on the reading backend's private copy, before any page is exposed, so
++ * eligible tuple storage can be reclaimed and the conversion image will log
++ * the resulting redirects/dead/unused items together with the new format.
++ */
++static void
++prune_legacy_heap_page(Page page, MultiXactId source_multi_base,
++					   BlockNumber blkno)
++{
++	HeapTupleData tuples[MaxHeapTuplesPerPage + 1];
++	bool		dead[MaxHeapTuplesPerPage + 1] = {false};
++	bool		processed[MaxHeapTuplesPerPage + 1] = {false};
++	OffsetNumber maxoff = PageGetMaxOffsetNumber(page);
++
++	for (OffsetNumber off = FirstOffsetNumber; off <= maxoff; ++off)
++	{
++		ItemId		item = PageGetItemId(page, off);
++		HeapTuple	tuple = &tuples[off];
++		HTSV_Result status;
++
++		if (!ItemIdIsNormal(item))
++			continue;
++		tuple->t_data = (HeapTupleHeader) PageGetItem(page, item);
++		tuple->t_len = ItemIdGetLength(item);
++		tuple->t_tableOid = 1;
++		ItemPointerSet(&tuple->t_self, blkno, off);
++		HeapTupleCopyHeaderXids(tuple);
++		if ((tuple->t_data->t_infomask & HEAP_XMAX_IS_MULTI) &&
++			!(tuple->t_data->t_infomask & HEAP_XMAX_INVALID))
++			tuple->t_xmax = full_source_multixact(tuple->t_xmax,
++												 source_multi_base);
++		status = HeapTupleSatisfiesVacuum(tuple, UINT64CONST(1) << 32,
++									 InvalidBuffer);
++		if (status != HEAPTUPLE_LIVE && status != HEAPTUPLE_DEAD)
++			ereport(ERROR,
++					(errcode(ERRCODE_DATA_CORRUPTED),
++					 errmsg("unexpected in-progress source tuple during legacy conversion")));
++		dead[off] = status == HEAPTUPLE_DEAD;
++
++		/*
++		 * Visibility's no-buffer mode does not write hints.  On this private
++		 * copy, mark aborted insertions explicitly so their HOT flag cannot
++		 * make an unlinked aborted heap-only tuple look like a live chain.
++		 */
++		if (dead[off] && !HeapTupleHeaderXminCommitted(tuple->t_data) &&
++			!TransactionIdDidCommit(HeapTupleGetRawXmin(tuple)))
++			tuple->t_data->t_infomask |= HEAP_XMIN_INVALID;
++	}
++
++	for (OffsetNumber root = FirstOffsetNumber; root <= maxoff; ++root)
++	{
++		ItemId		rootitem = PageGetItemId(page, root);
++		OffsetNumber off;
++		OffsetNumber chain[MaxHeapTuplesPerPage];
++		int			ndead = 0;
++		TransactionId prior_xmax = InvalidTransactionId;
++
++		if (ItemIdIsRedirected(rootitem))
++			off = ItemIdGetRedirect(rootitem);
++		else if (ItemIdIsNormal(rootitem) &&
++				 !HeapTupleIsHeapOnly(&tuples[root]))
++			off = root;
++		else
++			continue;
++
++		for (;;)
++		{
++			ItemId		item;
++			HeapTuple	tuple;
++
++			if (off < FirstOffsetNumber || off > maxoff || processed[off])
++				ereport(ERROR,
++						(errcode(ERRCODE_DATA_CORRUPTED),
++						 errmsg("invalid legacy HOT chain at offset %u", root)));
++			item = PageGetItemId(page, off);
++			if (!ItemIdIsNormal(item))
++				ereport(ERROR,
++						(errcode(ERRCODE_DATA_CORRUPTED),
++						 errmsg("invalid legacy HOT successor at offset %u", off)));
++			tuple = &tuples[off];
++			if ((off != root && !HeapTupleIsHeapOnly(tuple)) ||
++				(TransactionIdIsValid(prior_xmax) &&
++				 !TransactionIdEquals(prior_xmax, HeapTupleGetXmin(tuple))))
++				ereport(ERROR,
++						(errcode(ERRCODE_DATA_CORRUPTED),
++						 errmsg("broken legacy HOT chain at offset %u", off)));
++			if (!dead[off])
++				break;
++
++			processed[off] = true;
++			chain[ndead++] = off;
++			if (!HeapTupleIsHotUpdated(tuple))
++			{
++				off = InvalidOffsetNumber;
++				break;
++			}
++			if (ItemPointerGetBlockNumber(&tuple->t_data->t_ctid) != blkno)
++				ereport(ERROR,
++						(errcode(ERRCODE_DATA_CORRUPTED),
++						 errmsg("legacy HOT chain leaves its source page")));
++			prior_xmax = HeapTupleGetUpdateXidAny(tuple);
++			off = ItemPointerGetOffsetNumber(&tuple->t_data->t_ctid);
++		}
++
++		if (ndead == 0)
++			continue;
++		for (int i = 0; i < ndead; ++i)
++		{
++			if (chain[i] != root)
++			{
++				ItemIdSetUnused(PageGetItemId(page, chain[i]));
++				PageSetHasFreeLinePointers(page);
++			}
++		}
++		if (OffsetNumberIsValid(off))
++			ItemIdSetRedirect(rootitem, off);
++		else
++			ItemIdSetDead(rootitem);
++	}
++
++	/* Aborted heap-only versions need not be linked from a surviving chain. */
++	for (OffsetNumber off = FirstOffsetNumber; off <= maxoff; ++off)
++	{
++		ItemId		item = PageGetItemId(page, off);
++
++		if (!ItemIdIsNormal(item) || !dead[off])
++			continue;
++		if (!HeapTupleIsHeapOnly(&tuples[off]) ||
++			HeapTupleIsHotUpdated(&tuples[off]))
++			ereport(ERROR,
++					(errcode(ERRCODE_DATA_CORRUPTED),
++					 errmsg("unlinked dead legacy HOT tuple at offset %u", off)));
++		ItemIdSetUnused(item);
++		PageSetHasFreeLinePointers(page);
++	}
++}
++
++/*
++ * repack_heap_tuples
++ *		Convert heap page format reusing space of dead tuples
++ */
++static void
++repack_heap_tuples(RelationExtraData *rel_extra, RelFileLocator *relfilelocator,
++				   ForkNumber forknumber, Page page, Buffer buf, BlockNumber blkno,
++				   bool try_double_xmax)
++{
++	ItemIdCompactData	items[MaxHeapTuplesPerPage];
++	ItemIdCompact		itemPtr = items;
++	int					nitems = 0,
++						maxoff = PageGetMaxOffsetNumber(page),
++						idx,
++						occupied_space = 0;
++	Offset				upper;
++	bool				double_xmax,
++						special_fits,
++						toast;
++	PageHeader			hdr = (PageHeader) page,
++						new_hdr;
++	PGAlignedBlock		zerobuf = {0};
++	Page				new_page;
++	MultiXactId			source_multi_base = rel_extra->relminmxid,
++						page_multi_base = InvalidMultiXactId,
++						multi_min = MaxMultiXactId,
++						multi_max = InvalidMultiXactId;
++	TransactionId		xid_base = rel_extra->relfrozenxid,
++						xid_min = MaxTransactionId,
++						xid_max = InvalidTransactionId;
++
++	toast = rel_extra->relkind == RELKIND_TOASTVALUE;
++
++	if (try_double_xmax)
++		prune_legacy_heap_page(page, source_multi_base, blkno);
++
++	if (TransactionIdIsNormal(hdr->pd_prune_xid))
++		xid_min = xid_max = hdr->pd_prune_xid;
++
++	for (idx = 0; idx < maxoff; idx++)
++	{
++		HeapTupleData		tuple;
++		ItemId				lp;
++
++		lp = PageGetItemId(page, idx + 1);
++
++		/* Skip redirects and items without storage */
++		if (!ItemIdHasStorage(lp))
++			continue;
++
++		/* Build in-memory tuple representation */
++		tuple.t_tableOid = 1;	/* doesn't matter in this case */
++		tuple.t_data = (HeapTupleHeader) PageGetItem(page, lp);
++		HeapTupleCopyHeaderXids(&tuple);
++		/* A wrapped source MXID must be valid before visibility checks. */
++		if ((tuple.t_data->t_infomask & HEAP_XMAX_IS_MULTI) &&
++			!(tuple.t_data->t_infomask & HEAP_XMAX_INVALID))
++			tuple.t_xmax = full_source_multixact(tuple.t_xmax,
++												 source_multi_base);
++		tuple.t_len = ItemIdGetLength(lp);
++		ItemPointerSet(&(tuple.t_self), blkno, idx + 1);
++
++
++		if (ItemIdIsNormal(lp) && ItemIdHasStorage(lp))
++		{
++			itemPtr->offsetindex = idx;
++			itemPtr->itemoff = ItemIdGetOffset(lp);
++			if (unlikely(itemPtr->itemoff < hdr->pd_upper ||
++						 itemPtr->itemoff >= hdr->pd_special))
++			{
++				ereport(ERROR,
++						(errcode(ERRCODE_DATA_CORRUPTED),
++						 errmsg("corrupted item pointer: %u of relation \"%s\"",
++								itemPtr->itemoff,
++								relpathperm(*relfilelocator, forknumber).str)));
++			}
++
++			itemPtr->alignedlen = MAXALIGN(ItemIdGetLength(lp));
++			occupied_space += itemPtr->alignedlen;
++			nitems++;
++			itemPtr++;
++			if (try_double_xmax)
++			{
++				HeapTupleSetXmin(&tuple, FrozenTransactionId);
++				HeapTupleHeaderStoreXminFrozen(tuple.t_data);
++			}
++
++			compute_xid_min_max(&tuple, source_multi_base,
++								&xid_min, &xid_max,
++								&multi_min, &multi_max);
++		}
++	}
++
++	new_page = (Page) zerobuf.data;
++	MemSet(new_page, 0, BLCKSZ);
++	/* Write new header */
++	new_hdr = (PageHeader) new_page;
++	*new_hdr = *hdr;
++	new_hdr->pd_lower = SizeOfPageHeaderData + maxoff * sizeof(ItemIdData);
++
++	if (toast)
++		special_fits = ToastPageSpecialOffset >=
++						new_hdr->pd_lower + occupied_space;
++	else
++		special_fits = HeapPageSpecialOffset >=
++						new_hdr->pd_lower + occupied_space;
++
++	double_xmax = !special_fits ||
++				  !xids_fit_page(xid_min, xid_max, multi_min, multi_max);
++
++	if (!double_xmax)
++	{
++		Assert(xid_max == InvalidTransactionId || xid_max >= xid_min);
++		Assert(multi_max == InvalidMultiXactId || multi_max >= multi_min);
++
++		heap_page_set_base(new_page,
++						   xid_min, xid_max,
++						   multi_min, multi_max,
++						   &xid_base, &page_multi_base,
++						   toast);
++
++		HeapPageSetPruneXid(new_page, new_hdr->pd_prune_xid);
++	}
++	else
++	{
++		/* No space for special area, switch to "double xmax" format */
++		elog(DEBUG2, "convert heap page %u of relation \"%s\" to double xmax format",
++			 blkno, relpathperm(*relfilelocator, forknumber).str);
++
++		if (try_double_xmax)
++		{
++			xid_base = InvalidTransactionId;
++			page_multi_base = InvalidMultiXactId;
++		}
++		else
++		{
++			repack_heap_tuples(rel_extra, relfilelocator, forknumber, page, buf, blkno, true);
++			return;
++		}
++	}
++
++	/* Copy ItemIds with an offset */
++	memcpy((char *) new_page + SizeOfPageHeaderData,
++		   (char *) page + SizeOfPageHeaderData,
++		   hdr->pd_lower - SizeOfPageHeaderData);
++
++	/* Move live tuples */
++	upper = new_hdr->pd_special;
++	for (idx = 0; idx < nitems; idx++)
++	{
++		HeapTupleHeader		tuple;
++		ItemId				lp;
++
++		itemPtr = &items[idx];
++		lp = PageGetItemId(new_page, itemPtr->offsetindex + 1);
++		upper -= itemPtr->alignedlen;
++		occupied_space -= itemPtr->alignedlen;
++
++		memcpy((char *) new_page + upper,
++			   (char *) page + itemPtr->itemoff,
++			   itemPtr->alignedlen);
++
++		tuple = (HeapTupleHeader) (((char *) new_page) + upper);
++
++		convert_heap_tuple_xids(tuple, xid_base, source_multi_base,
++								page_multi_base, double_xmax);
++
++		lp->lp_off = upper;
++	}
++
++	Assert(occupied_space == 0);
++
++	new_hdr->pd_upper = upper;
++	if (new_hdr->pd_lower > new_hdr->pd_upper)
++		elog(ERROR, "cannot convert block %u of relation \"%s\"",
++			 blkno, relpathperm(*relfilelocator, forknumber).str);
++
++	memcpy(page, new_page, BLCKSZ);
++}
+diff --git a/src/bin/pg_upgrade/Makefile b/src/bin/pg_upgrade/Makefile
+index 771addb675a..a5bc9bf93b6 100644
+--- a/src/bin/pg_upgrade/Makefile
++++ b/src/bin/pg_upgrade/Makefile
+@@ -3,7 +3,7 @@
+ PGFILEDESC = "pg_upgrade - an in-place binary upgrade utility"
+ PGAPPICON = win32
+ 
+-EXTRA_INSTALL=contrib/test_decoding src/test/modules/dummy_seclabel src/test/modules/test_extensions
++EXTRA_INSTALL=contrib/test_decoding contrib/pg_visibility contrib/pg_walinspect src/test/modules/dummy_seclabel src/test/modules/test_extensions
+ 
+ subdir = src/bin/pg_upgrade
+ top_builddir = ../../..
+@@ -24,6 +24,7 @@ OBJS = \
+ 	parallel.o \
+ 	pg_upgrade.o \
+ 	relfilenumber.o \
++	segresize.o \
+ 	server.o \
+ 	slru_io.o \
+ 	tablespace.o \
+diff --git a/src/bin/pg_upgrade/check.c b/src/bin/pg_upgrade/check.c
+index e298e5658da..8aaab74da06 100644
+--- a/src/bin/pg_upgrade/check.c
++++ b/src/bin/pg_upgrade/check.c
+@@ -37,6 +37,7 @@ static void check_new_cluster_subscription_configuration(void);
+ static void check_old_cluster_for_valid_slots(void);
+ static void check_old_cluster_subscription_state(void);
+ static void check_old_cluster_global_names(ClusterInfo *cluster);
++static bool is_xid_wraparound(ClusterInfo *cluster);
+ 
+ /*
+  * DataTypesUsageChecks - definitions of data type checks for the old cluster
+@@ -315,6 +316,22 @@ static DataTypesUsageChecks data_types_usage_checks[] =
+ 		.threshold_version = 1100
+ 	},
+ 
++	/* xid64 changes the on-disk storage size of the xid type. */
++	{
++		.status = gettext_noop("Checking for changed \"xid\" data type in user tables"),
++		.report_filename = "tables_using_xid.txt",
++		.base_query =
++		"SELECT 'pg_catalog.xid'::pg_catalog.regtype AS oid",
++		.report_text =
++		gettext_noop("Your installation contains the \"xid\" data type in user tables.\n"
++					 "The size of the \"xid\" type changes from four to eight bytes,\n"
++					 "so this cluster cannot currently be upgraded.  You can drop the\n"
++					 "problem columns, or change them to another data type, and restart\n"
++					 "the upgrade.\n"),
++		.threshold_version = MANUAL_CHECK,
++		.version_hook = xid_check_applicable
++	},
++
+ 	/* End of checks marker, must remain last */
+ 	{
+ 		NULL, NULL, NULL, NULL, 0, NULL
+@@ -358,6 +375,7 @@ data_type_check_query(int checknum)
+ 					"			WHERE t.typtype = 'c' AND "
+ 					"				  t.oid = c.reltype AND "
+ 					"				  c.oid = a.attrelid AND "
++					"				  a.attnum > 0 AND "
+ 					"				  NOT a.attisdropped AND "
+ 					"				  a.atttypid = x.oid "
+ 					"			UNION ALL "
+@@ -372,6 +390,7 @@ data_type_check_query(int checknum)
+ 					"		pg_catalog.pg_namespace n, "
+ 					"		pg_catalog.pg_attribute a "
+ 					"WHERE	c.oid = a.attrelid AND "
++					"		a.attnum > 0 AND "
+ 					"		NOT a.attisdropped AND "
+ 					"		a.atttypid IN (SELECT oid FROM oids) AND "
+ 					"		c.relkind IN ("
+@@ -590,7 +609,7 @@ output_check_banner(void)
+ 
+ 
+ void
+-check_and_dump_old_cluster(void)
++check_and_dump_old_cluster(bool *is_wraparound)
+ {
+ 	/* -- OLD -- */
+ 
+@@ -726,6 +745,14 @@ check_and_dump_old_cluster(void)
+ 	if (GET_MAJOR_VERSION(old_cluster.major_version) <= 905)
+ 		check_for_pg_role_prefix(&old_cluster);
+ 
++	/* Check index formats affected by conversion from 32-bit XIDs. */
++	if (cluster_is_xid32(&old_cluster))
++	{
++		invalidate_spgist_indexes(&old_cluster, true);
++		invalidate_gin_indexes(&old_cluster, true);
++		invalidate_external_indexes(&old_cluster, true);
++	}
++
+ 	/*
+ 	 * While not a check option, we do this now because this is the only time
+ 	 * the old server is running.
+@@ -733,6 +760,9 @@ check_and_dump_old_cluster(void)
+ 	if (!user_opts.check)
+ 		generate_old_dump();
+ 
++	*is_wraparound = cluster_is_xid32(&old_cluster) &&
++		is_xid_wraparound(&old_cluster);
++
+ 	if (!user_opts.live_check)
+ 		stop_postmaster(false);
+ }
+@@ -835,6 +865,15 @@ issue_warnings_and_set_wal_level(void)
+ 	if (GET_MAJOR_VERSION(old_cluster.major_version) <= 906)
+ 		old_9_6_invalidate_hash_indexes(&new_cluster, false);
+ 
++	/* Reindex formats affected by the 32-bit to 64-bit XID conversion. */
++	if (cluster_is_xid32(&old_cluster))
++	{
++		/* The old server is stopped; invalidate indexes in the new cluster. */
++		invalidate_spgist_indexes(&new_cluster, false);
++		invalidate_gin_indexes(&new_cluster, false);
++		invalidate_external_indexes(&new_cluster, false);
++	}
++
+ 	report_extension_updates(&new_cluster);
+ 
+ 	stop_postmaster(false);
+@@ -2723,3 +2762,33 @@ check_old_cluster_global_names(ClusterInfo *cluster)
+ 	else
+ 		check_ok();
+ }
++
++/*
++ * is_xid_wraparound()
++ *
++ * Return true if a database horizon precedes the current XID in modulo order.
++ */
++static bool
++is_xid_wraparound(ClusterInfo *cluster)
++{
++	PGconn	   *conn;
++	PGresult   *res;
++	bool		is_wraparound;
++
++	conn = connectToServer(cluster, "template1");
++
++	/*
++	 * txid_current() includes an epoch.  Extract its low 32 bits to compare
++	 * with the old cluster's raw datfrozenxid values.
++	 */
++	res = executeQueryOrDie(conn,
++							"SELECT 1 "
++							"FROM   pg_catalog.pg_database, txid_current() tx "
++							"WHERE  (tx %% 4294967296)::bigint <= datfrozenxid::text::bigint "
++							"LIMIT  1");
++	is_wraparound = PQntuples(res) ? true : false;
++	PQclear(res);
++	PQfinish(conn);
++
++	return is_wraparound;
++}
+diff --git a/src/bin/pg_upgrade/file.c b/src/bin/pg_upgrade/file.c
+index 5b276008614..7100a53d90d 100644
+--- a/src/bin/pg_upgrade/file.c
++++ b/src/bin/pg_upgrade/file.c
+@@ -214,7 +214,8 @@ linkFile(const char *src, const char *dst,
+  */
+ void
+ rewriteVisibilityMap(const char *fromfile, const char *tofile,
+-					 const char *schemaName, const char *relName)
++					 const char *schemaName, const char *relName,
++					 bool update_version)
+ {
+ 	int			src_fd;
+ 	int			dst_fd;
+@@ -330,6 +331,11 @@ rewriteVisibilityMap(const char *fromfile, const char *tofile,
+ 			if (old_lastpart && empty)
+ 				break;
+ 
++			if (update_version)
++				PageSetPageSizeAndVersion((Page) new_vmbuf.data,
++										  PageGetPageSize((Page) new_vmbuf.data),
++										  PG_PAGE_LAYOUT_VERSION);
++
+ 			/* Set new checksum for visibility map page, if enabled */
+ 			if (new_cluster.controldata.data_checksum_version != PG_DATA_CHECKSUM_OFF)
+ 				((PageHeader) new_vmbuf.data)->pd_checksum =
+@@ -356,6 +362,118 @@ rewriteVisibilityMap(const char *fromfile, const char *tofile,
+ 	close(src_fd);
+ }
+ 
++/*
++ * updateSegmentPagesVersion()
++ *
++ * Transform a segment file, copying from src to dst.
++ * schemaName/relName are relation's SQL name (used for error messages only).
++ *
++ * Read segment pages one by one and set version to PG_PAGE_LAYOUT_VERSION.
++ * first_block supplies the fork-relative block number for page checksums.
++ *
++ * Although FSM and VM formats do not change when switching to 64-bit XIDs, we
++ * must upgrade pages version in order to avoid lazy conversion on first read.
++ */
++void
++updateSegmentPagesVersion(const char *fromfile, const char *tofile,
++						  const char *schemaName, const char *relName,
++						  BlockNumber first_block)
++{
++	int			src_fd;
++	int			dst_fd;
++	struct stat statbuf;
++	ssize_t		src_filesize;
++	ssize_t		totalBytesRead;
++	ssize_t		bytesRead;
++	BlockNumber blkno;
++	PGAlignedBlock buf;
++
++	if ((src_fd = open(fromfile, O_RDONLY | PG_BINARY, 0)) < 0)
++		pg_fatal("error while copying relation \"%s.%s\": could not open file \"%s\": %s",
++				 schemaName, relName, fromfile, strerror(errno));
++
++	if (fstat(src_fd, &statbuf) != 0)
++		pg_fatal("error while copying relation \"%s.%s\": could not stat file \"%s\": %s",
++				 schemaName, relName, fromfile, strerror(errno));
++
++	if ((dst_fd = open(tofile, O_RDWR | O_CREAT | O_EXCL | PG_BINARY,
++					   pg_file_create_mode)) < 0)
++		pg_fatal("error while copying relation \"%s.%s\": could not create file \"%s\": %s",
++				 schemaName, relName, tofile, strerror(errno));
++
++	/* Save old file size */
++	src_filesize = statbuf.st_size;
++	totalBytesRead = 0;
++	blkno = first_block;
++
++	while (totalBytesRead < src_filesize)
++	{
++		errno = 0;
++		if ((bytesRead = read(src_fd, buf.data, BLCKSZ)) != BLCKSZ)
++		{
++			if (bytesRead < 0)
++				pg_fatal("error while copying relation \"%s.%s\": could not read file \"%s\": %s",
++						 schemaName, relName, fromfile, strerror(errno));
++			else
++				pg_fatal("error while copying relation \"%s.%s\": partial page found in file \"%s\"",
++						 schemaName, relName, fromfile);
++		}
++
++		totalBytesRead += BLCKSZ;
++
++		if (PageIsNew(buf.data))
++		{
++			/*
++			 * We probably have an uninitialised page. In this case we skip
++			 * changing the page's version, because there is no header on the page.
++			 *
++			 * But we have to check! If pd_upper is equal to zero, the only
++			 * correct case is that the whole page is equal to zero. Otherwise,
++			 * we have a corrupted page and we can't treat it properly further.
++			 */
++			if (buf.data[0] != 0 || memcmp(buf.data, buf.data + 1, BLCKSZ - 1) != 0)
++				pg_fatal("error while copying relation \"%s.%s\": page corrupted \"%s\"",
++						 schemaName, relName, fromfile);
++		}
++		else
++		{
++			PageSetPageSizeAndVersion((Page) buf.data,
++									  PageGetPageSize((Page) buf.data),
++									  PG_PAGE_LAYOUT_VERSION);
++
++			/* Set new checksum for page, if enabled */
++			if (new_cluster.controldata.data_checksum_version != PG_DATA_CHECKSUM_OFF)
++				((PageHeader) buf.data)->pd_checksum =
++					pg_checksum_page(buf.data, blkno);
++
++			/*
++			 * Only FSM and VM pages reach this function.
++			 */
++			if (((PageHeader) buf.data)->pd_lower != SizeOfPageHeaderData ||
++				((PageHeader) buf.data)->pd_upper != BLCKSZ)
++				pg_fatal("error while copying relation \"%s.%s\": unknown page format found in file \"%s\"",
++							 schemaName, relName, fromfile);
++		}
++
++		errno = 0;
++		if (write(dst_fd, buf.data, BLCKSZ) != BLCKSZ)
++		{
++			/* if write didn't set errno, assume problem is no disk space */
++			if (errno == 0)
++				errno = ENOSPC;
++			pg_fatal("error while copying relation \"%s.%s\": could not write file \"%s\": %s",
++						schemaName, relName, tofile, strerror(errno));
++		}
++
++		blkno++;
++	}
++
++	/* Clean up */
++	if (close(dst_fd) != 0)
++		pg_fatal("could not close file \"%s\": %m", tofile);
++	close(src_fd);
++}
++
+ void
+ check_file_clone(void)
+ {
+diff --git a/src/bin/pg_upgrade/info.c b/src/bin/pg_upgrade/info.c
+index 37fff93892f..ef693c8fab2 100644
+--- a/src/bin/pg_upgrade/info.c
++++ b/src/bin/pg_upgrade/info.c
+@@ -459,6 +459,20 @@ get_db_infos(ClusterInfo *cluster)
+ 	}
+ 	PQclear(res);
+ 
++	/* Read the built-in type, not a user-defined type also named xid. */
++	res = executeQueryOrDie(conn,
++							"SELECT typlen FROM pg_catalog.pg_type "
++							"WHERE oid = 'pg_catalog.xid'::pg_catalog.regtype");
++	if (PQntuples(res) != 1 || PQnfields(res) != 1 || PQgetisnull(res, 0, 0))
++		pg_fatal("could not determine storage size of type pg_catalog.xid");
++	if (strcmp(PQgetvalue(res, 0, 0), "4") == 0)
++		cluster->xid_sz = 4;
++	else if (strcmp(PQgetvalue(res, 0, 0), "8") == 0)
++		cluster->xid_sz = 8;
++	else
++		pg_fatal("unsupported xid type size: %s", PQgetvalue(res, 0, 0));
++	PQclear(res);
++
+ 	PQfinish(conn);
+ 
+ 	cluster->dbarr.dbs = dbinfos;
+diff --git a/src/bin/pg_upgrade/meson.build b/src/bin/pg_upgrade/meson.build
+index ffbf6ae8d75..9708566845c 100644
+--- a/src/bin/pg_upgrade/meson.build
++++ b/src/bin/pg_upgrade/meson.build
+@@ -14,6 +14,7 @@ pg_upgrade_sources = files(
+   'parallel.c',
+   'pg_upgrade.c',
+   'relfilenumber.c',
++  'segresize.c',
+   'server.c',
+   'slru_io.c',
+   'tablespace.c',
+@@ -69,6 +70,10 @@ tests += {
+       't/006_transfer_modes.pl',
+       't/007_multixact_conversion.pl',
+       't/008_extension_control_path.pl',
++      't/009_xid32_to_xid64_recovery.pl',
++      't/010_xid32_to_xid64_createdb.pl',
++      't/011_xid32_to_xid64_double_xmax.pl',
++      't/012_xid32_to_xid64_hot.pl',
+     ],
+     'deps': [test_ext],
+     'test_kwargs': {'priority': 40}, # pg_upgrade tests are slow
+diff --git a/src/bin/pg_upgrade/multixact_read_v18.c b/src/bin/pg_upgrade/multixact_read_v18.c
+index 1f11ab80e97..f5a88413e47 100644
+--- a/src/bin/pg_upgrade/multixact_read_v18.c
++++ b/src/bin/pg_upgrade/multixact_read_v18.c
+@@ -1,9 +1,8 @@
+ /*
+  * multixact_read_v18.c
+  *
+- * Functions to read multixact SLRUs from clusters of PostgreSQL version 18
+- * and older.  In version 19, the multixid offsets were expanded from 32 to 64
+- * bits.
++ * Functions to read multixact SLRUs with 32-bit member XIDs.  Offsets are
++ * four bytes before PostgreSQL 19 and eight bytes starting with that version.
+  *
+  * Copyright (c) 2025-2026, PostgreSQL Global Development Group
+  * src/bin/pg_upgrade/multixact_read_v18.c
+@@ -15,33 +14,37 @@
+ #include "pg_upgrade.h"
+ 
+ /*
+- * NOTE: below are a bunch of definitions that are copy-pasted from
+- * multixact.c from version 18.  It's important that this file doesn't
+- * #include the new definitions with same names from "multixact_internal.h"!
+- *
+- * To further avoid confusion in the functions exposed outside this source
+- * file, we use MultiXactOffset32 to represent the old-style 32-bit multixid
+- * offsets.  The new 64-bit MultiXactOffset should not be used anywhere in
+- * this file.
++ * Source member groups must use explicit 32-bit XIDs even when pg_upgrade
++ * itself is built with 64-bit TransactionId.  Do not include the target
++ * multixact_internal.h definitions here.
+  */
+ #ifdef MULTIXACT_INTERNAL_H
+ #error multixact_internal.h should not be included in multixact_read_v18.c
+ #endif
+-#define MultiXactOffset should_not_be_used
+-
+-/* We need four bytes per offset and 8 bytes per base for each page. */
+-#define MULTIXACT_OFFSETS_PER_PAGE (BLCKSZ / sizeof(MultiXactOffset32))
+ 
+-static inline int64
+-MultiXactIdToOffsetPage(MultiXactId multi)
++/* Decode the source offset layout independently of the member XID layout. */
++static uint64
++ReadOldMultiXactOffset(OldMultiXactReader *state, uint32 multi)
+ {
+-	return multi / MULTIXACT_OFFSETS_PER_PAGE;
+-}
++	int			width = state->offsets64 ? sizeof(uint64) : sizeof(uint32);
++	int			per_page = BLCKSZ / width;
++	char	   *buf = SlruReadSwitchPage(state->offset, multi / per_page);
++	int			entry = multi % per_page;
+ 
+-static inline int
+-MultiXactIdToOffsetEntry(MultiXactId multi)
+-{
+-	return multi % MULTIXACT_OFFSETS_PER_PAGE;
++	if (state->offsets64)
++	{
++		uint64		value;
++
++		memcpy(&value, buf + entry * width, sizeof(value));
++		return value;
++	}
++	else
++	{
++		uint32		value;
++
++		memcpy(&value, buf + entry * width, sizeof(value));
++		return value;
++	}
+ }
+ 
+ /*
+@@ -67,23 +70,23 @@ MultiXactIdToOffsetEntry(MultiXactId multi)
+ 	(MULTIXACT_FLAGBYTES_PER_GROUP * MXACT_MEMBER_FLAGS_PER_BYTE)
+ /* size in bytes of a complete group */
+ #define MULTIXACT_MEMBERGROUP_SIZE \
+-	(sizeof(TransactionId) * MULTIXACT_MEMBERS_PER_MEMBERGROUP + MULTIXACT_FLAGBYTES_PER_GROUP)
++	(sizeof(uint32) * MULTIXACT_MEMBERS_PER_MEMBERGROUP + MULTIXACT_FLAGBYTES_PER_GROUP)
+ #define MULTIXACT_MEMBERGROUPS_PER_PAGE (BLCKSZ / MULTIXACT_MEMBERGROUP_SIZE)
+ #define MULTIXACT_MEMBERS_PER_PAGE	\
+ 	(MULTIXACT_MEMBERGROUPS_PER_PAGE * MULTIXACT_MEMBERS_PER_MEMBERGROUP)
+ 
+ /* page in which a member is to be found */
+ static inline int64
+-MXOffsetToMemberPage(MultiXactOffset32 offset)
++MXOffsetToMemberPage(uint64 offset)
+ {
+ 	return offset / MULTIXACT_MEMBERS_PER_PAGE;
+ }
+ 
+ /* Location (byte offset within page) of flag word for a given member */
+ static inline int
+-MXOffsetToFlagsOffset(MultiXactOffset32 offset)
++MXOffsetToFlagsOffset(uint64 offset)
+ {
+-	MultiXactOffset32 group = offset / MULTIXACT_MEMBERS_PER_MEMBERGROUP;
++	uint64 group = offset / MULTIXACT_MEMBERS_PER_MEMBERGROUP;
+ 	int			grouponpg = group % MULTIXACT_MEMBERGROUPS_PER_PAGE;
+ 	int			byteoff = grouponpg * MULTIXACT_MEMBERGROUP_SIZE;
+ 
+@@ -92,17 +95,17 @@ MXOffsetToFlagsOffset(MultiXactOffset32 offset)
+ 
+ /* Location (byte offset within page) of TransactionId of given member */
+ static inline int
+-MXOffsetToMemberOffset(MultiXactOffset32 offset)
++MXOffsetToMemberOffset(uint64 offset)
+ {
+ 	int			member_in_group = offset % MULTIXACT_MEMBERS_PER_MEMBERGROUP;
+ 
+ 	return MXOffsetToFlagsOffset(offset) +
+ 		MULTIXACT_FLAGBYTES_PER_GROUP +
+-		member_in_group * sizeof(TransactionId);
++		member_in_group * sizeof(uint32);
+ }
+ 
+ static inline int
+-MXOffsetToFlagsBitShift(MultiXactOffset32 offset)
++MXOffsetToFlagsBitShift(uint64 offset)
+ {
+ 	int			member_in_group = offset % MULTIXACT_MEMBERS_PER_MEMBERGROUP;
+ 	int			bshift = member_in_group * MXACT_MEMBER_BITS_PER_XACT;
+@@ -116,20 +119,25 @@ MXOffsetToFlagsBitShift(MultiXactOffset32 offset)
+  * Returns the malloced memory used by the all other calls in this module.
+  */
+ OldMultiXactReader *
+-AllocOldMultiXactRead(char *pgdata, MultiXactId nextMulti,
+-					  MultiXactOffset32 nextOffset)
++AllocOldMultiXactRead(char *pgdata, uint32 nextMulti,
++					  uint64 nextOffset, bool offsets64)
+ {
+ 	OldMultiXactReader *state = pg_malloc_object(OldMultiXactReader);
+ 	char		dir[MAXPGPATH] = {0};
+ 
++	if (!offsets64 && nextOffset > PG_UINT32_MAX)
++		pg_fatal("member offset exceeds the source 32-bit range");
++
+ 	state->nextMXact = nextMulti;
+ 	state->nextOffset = nextOffset;
++	state->offsets64 = offsets64;
+ 
+ 	pg_sprintf(dir, "%s/pg_multixact/offsets", pgdata);
++	/* Vanilla sources retain short offset filenames even with 64-bit offsets. */
+ 	state->offset = AllocSlruRead(dir, false);
+ 
+ 	pg_sprintf(dir, "%s/pg_multixact/members", pgdata);
+-	state->members = AllocSlruRead(dir, false);
++	state->members = AllocSlruRead(dir, offsets64);
+ 
+ 	return state;
+ }
+@@ -158,21 +166,19 @@ AllocOldMultiXactRead(char *pgdata, MultiXactId nextMulti,
+  * Returns true on success, false if the multixact was invalid.
+  */
+ bool
+-GetOldMultiXactIdSingleMember(OldMultiXactReader *state, MultiXactId multi,
++GetOldMultiXactIdSingleMember(OldMultiXactReader *state, uint32 multi,
+ 							  MultiXactMember *member)
+ {
+-	MultiXactId nextMXact,
+-				nextOffset,
++	uint32		nextMXact,
+ 				tmpMXact;
++	uint64		nextOffset,
++				offset,
++				nextMXOffset,
++				length;
+ 	int64		pageno,
+ 				prev_pageno;
+-	int			entryno,
+-				length;
+-	char	   *buf;
+-	MultiXactOffset32 *offptr,
+-				offset;
+-	MultiXactOffset32 nextMXOffset;
+-	TransactionId result_xid = InvalidTransactionId;
++	char	   *buf = NULL;
++	uint32		result_xid = 0;
+ 	MultiXactStatus result_status = 0;
+ 
+ 	nextMXact = state->nextMXact;
+@@ -204,13 +210,7 @@ GetOldMultiXactIdSingleMember(OldMultiXactReader *state, MultiXactId multi,
+ 	 * read a zero from the members array, just ignore it.
+ 	 */
+ 
+-	pageno = MultiXactIdToOffsetPage(multi);
+-	entryno = MultiXactIdToOffsetEntry(multi);
+-
+-	buf = SlruReadSwitchPage(state->offset, pageno);
+-	offptr = (MultiXactOffset32 *) buf;
+-	offptr += entryno;
+-	offset = *offptr;
++	offset = ReadOldMultiXactOffset(state, multi);
+ 
+ 	if (offset == 0)
+ 	{
+@@ -235,17 +235,7 @@ GetOldMultiXactIdSingleMember(OldMultiXactReader *state, MultiXactId multi,
+ 		if (tmpMXact < FirstMultiXactId)
+ 			tmpMXact = FirstMultiXactId;
+ 
+-		prev_pageno = pageno;
+-
+-		pageno = MultiXactIdToOffsetPage(tmpMXact);
+-		entryno = MultiXactIdToOffsetEntry(tmpMXact);
+-
+-		if (pageno != prev_pageno)
+-			buf = SlruReadSwitchPage(state->offset, pageno);
+-
+-		offptr = (MultiXactOffset32 *) buf;
+-		offptr += entryno;
+-		nextMXOffset = *offptr;
++		nextMXOffset = ReadOldMultiXactOffset(state, tmpMXact);
+ 	}
+ 
+ 	if (nextMXOffset == 0)
+@@ -253,16 +243,18 @@ GetOldMultiXactIdSingleMember(OldMultiXactReader *state, MultiXactId multi,
+ 		/* Invalid entry.  These can be left behind on a server crash. */
+ 		return false;
+ 	}
+-	length = nextMXOffset - offset;
+-
+-	if (length < 0)
++	/* Only the four-byte source offset format can wrap. */
++	if (state->offsets64)
+ 	{
+-		/*
+-		 * This entry is corrupt.  We should not see these even after a server
+-		 * crash.
+-		 */
+-		pg_fatal("multixact %llu has an invalid length (%d)", (unsigned long long) multi, length);
++		if (nextMXOffset < offset)
++			pg_fatal("multixact %u has a decreasing member offset", multi);
++		length = nextMXOffset - offset;
+ 	}
++	else
++		length = (uint32) (nextMXOffset - offset);
++
++	if (length > PG_INT32_MAX)
++		pg_fatal("multixact %u has an invalid length (%" PRIu64 ")", multi, length);
+ 	if (length == 0)
+ 	{
+ 		/*
+@@ -275,9 +267,9 @@ GetOldMultiXactIdSingleMember(OldMultiXactReader *state, MultiXactId multi,
+ 
+ 	/* read the members */
+ 	prev_pageno = -1;
+-	for (int i = 0; i < length; i++, offset++)
++	for (uint64 i = 0; i < length; i++)
+ 	{
+-		TransactionId *xactptr;
++		uint32	   *xactptr;
+ 		uint32	   *flagsptr;
+ 		int			flagsoff;
+ 		int			bshift;
+@@ -287,21 +279,24 @@ GetOldMultiXactIdSingleMember(OldMultiXactReader *state, MultiXactId multi,
+ 		pageno = MXOffsetToMemberPage(offset);
+ 		memberoff = MXOffsetToMemberOffset(offset);
+ 
+-		if (pageno != prev_pageno)
++		if (buf == NULL || pageno != prev_pageno)
+ 		{
+ 			buf = SlruReadSwitchPage(state->members, pageno);
+ 			prev_pageno = pageno;
+ 		}
+ 
+-		xactptr = (TransactionId *) (buf + memberoff);
++		xactptr = (uint32 *) (buf + memberoff);
+ 		if (!TransactionIdIsValid(*xactptr))
+ 		{
+ 			/*
+ 			 * Corner case 2: offset must have wrapped around to unused slot
+ 			 * zero.
+ 			 */
+-			if (offset == 0)
++			if (!state->offsets64 && offset == 0)
++			{
++				offset++;
+ 				continue;
++			}
+ 
+ 			/*
+ 			 * Otherwise this is an invalid entry that should not be
+@@ -332,8 +327,8 @@ GetOldMultiXactIdSingleMember(OldMultiXactReader *state, MultiXactId multi,
+ 				 * We don't expect to see more than one updating member, even
+ 				 * if the server had crashed.
+ 				 */
+-				pg_fatal("multixact %llu has more than one updating member",
+-						 (unsigned long long) multi);
++				pg_fatal("multixact %u has more than one updating member",
++						 multi);
+ 			}
+ 			result_xid = *xactptr;
+ 			result_status = status;
+@@ -343,6 +338,10 @@ GetOldMultiXactIdSingleMember(OldMultiXactReader *state, MultiXactId multi,
+ 			result_xid = *xactptr;
+ 			result_status = status;
+ 		}
++		if (state->offsets64)
++			offset++;
++		else
++			offset = (uint32) (offset + 1);
+ 	}
+ 
+ 	member->xid = result_xid;
+diff --git a/src/bin/pg_upgrade/multixact_read_v18.h b/src/bin/pg_upgrade/multixact_read_v18.h
+index 88b52b9d2e8..c4b1f4bdb06 100644
+--- a/src/bin/pg_upgrade/multixact_read_v18.h
++++ b/src/bin/pg_upgrade/multixact_read_v18.h
+@@ -10,27 +10,22 @@
+ #include "access/multixact.h"
+ #include "slru_io.h"
+ 
+-/*
+- * MultiXactOffset changed from uint32 to uint64 between versions 18 and 19.
+- * MultiXactOffset32 is used to represent a 32-bit offset from the old
+- * cluster.
+- */
+-typedef uint32 MultiXactOffset32;
+-
++/* Source MXIDs/member XIDs stay 32-bit; offsets may be four or eight bytes. */
+ typedef struct OldMultiXactReader
+ {
+-	MultiXactId nextMXact;
+-	MultiXactOffset32 nextOffset;
++	uint32		nextMXact;
++	uint64		nextOffset;
++	bool		offsets64;
+ 
+ 	SlruSegState *offset;
+ 	SlruSegState *members;
+ } OldMultiXactReader;
+ 
+ extern OldMultiXactReader *AllocOldMultiXactRead(char *pgdata,
+-												 MultiXactId nextMulti,
+-												 MultiXactOffset32 nextOffset);
++												 uint32 nextMulti,
++												 uint64 nextOffset, bool offsets64);
+ extern bool GetOldMultiXactIdSingleMember(OldMultiXactReader *state,
+-										  MultiXactId multi,
++										  uint32 multi,
+ 										  MultiXactMember *member);
+ extern void FreeOldMultiXactReader(OldMultiXactReader *state);
+ 
+diff --git a/src/bin/pg_upgrade/multixact_rewrite.c b/src/bin/pg_upgrade/multixact_rewrite.c
+index 35cfe29c5e3..9efe3baea76 100644
+--- a/src/bin/pg_upgrade/multixact_rewrite.c
++++ b/src/bin/pg_upgrade/multixact_rewrite.c
+@@ -1,8 +1,8 @@
+ /*
+  * multixact_rewrite.c
+  *
+- * Functions to convert multixact SLRUs from the pre-v19 format to the current
+- * format with 64-bit MultiXactOffsets.
++ * Functions to convert multixact SLRUs with 32-bit member XIDs to the
++ * current format.  Source offsets may be either four or eight bytes.
+  *
+  * Copyright (c) 2025-2026, PostgreSQL Global Development Group
+  * src/bin/pg_upgrade/multixact_rewrite.c
+@@ -21,8 +21,8 @@ static void RecordMultiXactMembers(SlruSegState *members_writer,
+ 								   int nmembers, MultiXactMember *members);
+ 
+ /*
+- * Convert pg_multixact/offset and /members from the old pre-v19 format with
+- * 32-bit offsets to the current format.
++ * Convert pg_multixact/offsets and /members from a 32-bit-XID source.
++ * Source MXIDs wrap at 32 bits independently of the source offset width.
+  *
+  * Multixids in the range [from_multi, to_multi) are read from the old
+  * cluster, and written in the new format.  An important edge case is that if
+@@ -30,23 +30,27 @@ static void RecordMultiXactMembers(SlruSegState *members_writer,
+  * new format without trying to open any old files.  (We rely on that when
+  * upgrading from PostgreSQL version 9.2 or below.)
+  *
+- * Returns the new nextOffset value; the caller should set it in the new
+- * control file.  The new members always start from offset 1, regardless of
++ * Returns the new nextOffset value and sets *next_multi; the caller should
++ * save both counters in the new control file.  The new members always start from offset 1, regardless of
+  * the offset range used in the old cluster.
+  */
+ MultiXactOffset
+-rewrite_multixacts(MultiXactId from_multi, MultiXactId to_multi)
++rewrite_multixacts(uint32 from_multi, uint32 to_multi,
++				   MultiXactId *next_multi)
+ {
+ 	MultiXactOffset next_offset;
+ 	SlruSegState *offsets_writer;
+ 	SlruSegState *members_writer;
+ 	char		dir[MAXPGPATH] = {0};
+ 	bool		prev_multixid_valid = false;
++	MultiXactId destination_multi = from_multi;
++
++	Assert(from_multi >= FirstMultiXactId && to_multi >= FirstMultiXactId);
+ 
+ 	/*
+-	 * The range of valid multi XIDs is unchanged by the conversion (they are
+-	 * referenced from the heap tables), but the members SLRU is rewritten to
+-	 * start from offset 1.
++	 * The destination IDs are contiguous, starting at the source oldest MXID.
++	 * A wrapped source MXID 1 follows UINT32_MAX as destination 2^32.
++	 * The members SLRU is rewritten to start from offset 1.
+ 	 */
+ 	next_offset = 1;
+ 
+@@ -69,9 +73,10 @@ rewrite_multixacts(MultiXactId from_multi, MultiXactId to_multi)
+ 
+ 		old_reader = AllocOldMultiXactRead(old_cluster.pgdata,
+ 										   old_cluster.controldata.chkpnt_nxtmulti,
+-										   old_cluster.controldata.chkpnt_nxtmxoff);
++										   old_cluster.controldata.chkpnt_nxtmxoff,
++										   cluster_has_64bit_multixact_offsets(&old_cluster));
+ 
+-		for (MultiXactId multi = from_multi; multi != to_multi;)
++		for (uint32 multi = from_multi; multi != to_multi;)
+ 		{
+ 			MultiXactMember member;
+ 			bool		multixid_valid;
+@@ -95,7 +100,7 @@ rewrite_multixacts(MultiXactId from_multi, MultiXactId to_multi)
+ 			 * when reading a multixid, the number of members is calculated
+ 			 * from the difference between the two offsets.
+ 			 */
+-			RecordMultiXactOffset(offsets_writer, multi,
++			RecordMultiXactOffset(offsets_writer, destination_multi,
+ 								  (multixid_valid || prev_multixid_valid) ? next_offset : 0);
+ 
+ 			/* Write the members */
+@@ -109,6 +114,7 @@ rewrite_multixacts(MultiXactId from_multi, MultiXactId to_multi)
+ 			multi++;
+ 			if (multi < FirstMultiXactId)
+ 				multi = FirstMultiXactId;
++			destination_multi++;
+ 			prev_multixid_valid = multixid_valid;
+ 		}
+ 
+@@ -116,13 +122,14 @@ rewrite_multixacts(MultiXactId from_multi, MultiXactId to_multi)
+ 	}
+ 
+ 	/* Write the final 'next' offset to the last SLRU page */
+-	RecordMultiXactOffset(offsets_writer, to_multi,
++	RecordMultiXactOffset(offsets_writer, destination_multi,
+ 						  prev_multixid_valid ? next_offset : 0);
+ 
+ 	/* Flush the last SLRU pages */
+ 	FreeSlruWrite(offsets_writer);
+ 	FreeSlruWrite(members_writer);
+ 
++	*next_multi = destination_multi;
+ 	return next_offset;
+ }
+ 
+@@ -162,8 +169,8 @@ RecordMultiXactMembers(SlruSegState *members_writer,
+ 		int64		pageno;
+ 		char	   *buf;
+ 		TransactionId *memberptr;
+-		uint32	   *flagsptr;
+-		uint32		flagsval;
++		uint64	   *flagsptr;
++		uint64		flagsval;
+ 		int			bshift;
+ 		int			flagsoff;
+ 		int			memberoff;
+@@ -181,11 +188,11 @@ RecordMultiXactMembers(SlruSegState *members_writer,
+ 
+ 		*memberptr = members[i].xid;
+ 
+-		flagsptr = (uint32 *) (buf + flagsoff);
++		flagsptr = (uint64 *) (buf + flagsoff);
+ 
+ 		flagsval = *flagsptr;
+-		flagsval &= ~(((1 << MXACT_MEMBER_BITS_PER_XACT) - 1) << bshift);
+-		flagsval |= (members[i].status << bshift);
++		flagsval &= ~((uint64) ((1ULL << MXACT_MEMBER_BITS_PER_XACT) - 1) << bshift);
++		flagsval |= ((uint64) members[i].status << bshift);
+ 		*flagsptr = flagsval;
+ 	}
+ }
+diff --git a/src/bin/pg_upgrade/pg_upgrade.c b/src/bin/pg_upgrade/pg_upgrade.c
+index c02e2df9406..445f7fbe1b3 100644
+--- a/src/bin/pg_upgrade/pg_upgrade.c
++++ b/src/bin/pg_upgrade/pg_upgrade.c
+@@ -41,9 +41,11 @@
+ 
+ #include "postgres_fe.h"
+ 
++#include <dirent.h>
+ #include <time.h>
+ 
+ #include "access/multixact.h"
++#include "access/transam.h"
+ #include "catalog/pg_class_d.h"
+ #include "common/file_perm.h"
+ #include "common/logging.h"
+@@ -62,9 +64,10 @@ static void set_new_cluster_char_signedness(void);
+ static void set_locale_and_encoding(void);
+ static void prepare_new_cluster(void);
+ static void prepare_new_globals(void);
+-static void create_new_objects(void);
++static void create_new_objects(bool is_wraparound);
+ static void copy_xact_xlog_xid(void);
+-static void set_frozenxids(bool minmxid_only);
++static void set_frozenxids(bool minmxid_only, bool preserve_multixact_horizons);
++static void adjust_multixact_horizons(void);
+ static void make_outputdirs(char *pgdata);
+ static void setup(char *argv0);
+ static void create_logical_replication_slots(void);
+@@ -91,6 +94,7 @@ main(int argc, char **argv)
+ {
+ 	char	   *deletion_script_file_name = NULL;
+ 	bool		migrate_logical_slots;
++	bool		is_wraparound = false;
+ 
+ 	/*
+ 	 * pg_upgrade doesn't currently use common/logging.c, but initialize it
+@@ -136,7 +140,7 @@ main(int argc, char **argv)
+ 
+ 	check_cluster_compatibility();
+ 
+-	check_and_dump_old_cluster();
++	check_and_dump_old_cluster(&is_wraparound);
+ 
+ 
+ 	/* -- NEW -- */
+@@ -170,7 +174,7 @@ main(int argc, char **argv)
+ 
+ 	prepare_new_globals();
+ 
+-	create_new_objects();
++	create_new_objects(is_wraparound);
+ 
+ 	stop_postmaster(false);
+ 
+@@ -576,7 +580,7 @@ prepare_new_globals(void)
+ 	/*
+ 	 * Before we restore anything, set frozenxids of initdb-created tables.
+ 	 */
+-	set_frozenxids(false);
++	set_frozenxids(false, false);
+ 
+ 	/*
+ 	 * Now restore global objects (roles and tablespaces).
+@@ -593,7 +597,7 @@ prepare_new_globals(void)
+ 
+ 
+ static void
+-create_new_objects(void)
++create_new_objects(bool is_wraparound)
+ {
+ 	int			dbnum;
+ 	PGconn	   *conn_new_template1;
+@@ -719,7 +723,14 @@ create_new_objects(void)
+ 	 * so set those after we have restored the schema.
+ 	 */
+ 	if (GET_MAJOR_VERSION(old_cluster.major_version) <= 902)
+-		set_frozenxids(true);
++		set_frozenxids(true, false);
++	else if (cluster_is_xid32(&old_cluster) && cluster_is_xid64(&new_cluster))
++	{
++		/* Keep the individual MultiXact horizons restored by pg_dump. */
++		if (is_wraparound)
++			set_frozenxids(false, true);
++		adjust_multixact_horizons();
++	}
+ 
+ 	/* update new_cluster info now that we have objects in the databases */
+ 	get_db_rel_and_slot_infos(&new_cluster);
+@@ -770,132 +781,124 @@ copy_subdir_files(const char *old_subdir, const char *new_subdir)
+ 	check_ok();
+ }
+ 
++/* Copy xid64 SLRUs, normalizing the supported legacy 12-digit names. */
++static void
++copy_slru_subdir(const char *subdir)
++{
++	char	   *path;
++	DIR		   *dir;
++	struct dirent *entry;
++
++	copy_subdir_files(subdir, subdir);
++	if (GET_MAJOR_VERSION(old_cluster.major_version) >= 1800)
++		return;
++
++	path = psprintf("%s/%s", new_cluster.pgdata, subdir);
++	dir = opendir(path);
++	if (dir == NULL)
++		pg_fatal("could not open directory \"%s\": %m", path);
++	while ((entry = readdir(dir)) != NULL)
++	{
++		char	   *oldpath,
++			   *newpath;
++		uint64		segment;
++
++		if (strlen(entry->d_name) != 12 ||
++			strspn(entry->d_name, "0123456789ABCDEFabcdef") != 12)
++			continue;
++		segment = strtou64(entry->d_name, NULL, 16);
++		oldpath = psprintf("%s/%s", path, entry->d_name);
++		newpath = psprintf("%s/%015" PRIX64, path, segment);
++		if (rename(oldpath, newpath) != 0)
++			pg_fatal("could not rename file \"%s\" to \"%s\": %m", oldpath, newpath);
++		pg_free(oldpath);
++		pg_free(newpath);
++	}
++	closedir(dir);
++	pg_free(path);
++}
++
+ static void
+ copy_xact_xlog_xid(void)
+ {
+-	/*
+-	 * Copy old commit logs to new data dir. pg_clog has been renamed to
+-	 * pg_xact in post-10 clusters.
+-	 */
+-	copy_subdir_files(GET_MAJOR_VERSION(old_cluster.major_version) <= 906 ?
+-					  "pg_clog" : "pg_xact",
+-					  GET_MAJOR_VERSION(new_cluster.major_version) <= 906 ?
+-					  "pg_clog" : "pg_xact");
++	bool		xid32 = cluster_is_xid32(&old_cluster);
++	TransactionId next_xid = xid32 ? (UINT64CONST(1) << 32) :
++		old_cluster.controldata.chkpnt_nxtxid;
++	const char *old_clog = GET_MAJOR_VERSION(old_cluster.major_version) <= 906 ?
++		"pg_clog" : "pg_xact";
++
++	if (xid32)
++	{
++		remove_new_subdir("pg_xact", false);
++		prep_status("Converting transaction status segments");
++		convert_xact(psprintf("%s/%s", old_cluster.pgdata, old_clog),
++					 psprintf("%s/pg_xact", new_cluster.pgdata));
++		check_ok();
++	}
++	else
++		copy_slru_subdir(old_clog);
+ 
+ 	prep_status("Setting oldest XID for new cluster");
+ 	exec_prog(UTILITY_LOG_FILE, NULL, true, true,
+-			  "\"%s/pg_resetwal\" -f -u %llu \"%s\"",
++			  "\"%s/pg_resetwal\" -f -u %" PRIu64 " \"%s\"",
+ 			  new_cluster.bindir,
+-			  (unsigned long long) old_cluster.controldata.chkpnt_oldstxid,
++			  old_cluster.controldata.chkpnt_oldstxid,
+ 			  new_cluster.pgdata);
+ 	check_ok();
+ 
+-	/* set the next transaction id and epoch of the new cluster */
+-	prep_status("Setting next transaction ID and epoch for new cluster");
++	prep_status("Setting next transaction ID for new cluster");
+ 	exec_prog(UTILITY_LOG_FILE, NULL, true, true,
+-			  "\"%s/pg_resetwal\" -f -x %llu \"%s\"",
+-			  new_cluster.bindir,
+-			  (unsigned long long) old_cluster.controldata.chkpnt_nxtxid,
++			  "\"%s/pg_resetwal\" -f -x %" PRIu64 " \"%s\"",
++			  new_cluster.bindir, next_xid,
+ 			  new_cluster.pgdata);
+ 	exec_prog(UTILITY_LOG_FILE, NULL, true, true,
+-			  "\"%s/pg_resetwal\" -f -e %u \"%s\"",
+-			  new_cluster.bindir, old_cluster.controldata.chkpnt_nxtepoch,
+-			  new_cluster.pgdata);
+-	/* must reset commit timestamp limits also */
+-	exec_prog(UTILITY_LOG_FILE, NULL, true, true,
+-			  "\"%s/pg_resetwal\" -f -c %llu,%llu \"%s\"",
+-			  new_cluster.bindir,
+-			  (unsigned long long) old_cluster.controldata.chkpnt_nxtxid,
+-			  (unsigned long long) old_cluster.controldata.chkpnt_nxtxid,
+-			  new_cluster.pgdata);
++			  "\"%s/pg_resetwal\" -f -c %" PRIu64 ",%" PRIu64 " \"%s\"",
++			  new_cluster.bindir, next_xid,
++			  next_xid, new_cluster.pgdata);
++	new_cluster.controldata.chkpnt_nxtxid = next_xid;
+ 	check_ok();
+ 
+-	/* Copy or convert pg_multixact files */
+-	Assert(new_cluster.controldata.cat_ver >= MULTIXACT_FORMATCHANGE_CAT_VER);
+-	Assert(new_cluster.controldata.cat_ver >= MULTIXACTOFFSET_FORMATCHANGE_CAT_VER);
+-	if (old_cluster.controldata.cat_ver >= MULTIXACTOFFSET_FORMATCHANGE_CAT_VER)
++	if (!xid32)
+ 	{
+-		/* No change in multixact format, just copy the files */
+-		MultiXactId new_nxtmulti = old_cluster.controldata.chkpnt_nxtmulti;
+-		MultiXactOffset new_nxtmxoff = old_cluster.controldata.chkpnt_nxtmxoff;
+-
+-		copy_subdir_files("pg_multixact/offsets", "pg_multixact/offsets");
+-		copy_subdir_files("pg_multixact/members", "pg_multixact/members");
+-
+-		prep_status("Setting next multixact ID and offset for new cluster");
+-
+-		/*
+-		 * we preserve all files and contents, so we must preserve both "next"
+-		 * counters here and the oldest multi present on system.
+-		 */
+-		exec_prog(UTILITY_LOG_FILE, NULL, true, true,
+-				  "\"%s/pg_resetwal\" -O %" PRIu64 " -m %llu,%llu \"%s\"",
+-				  new_cluster.bindir, new_nxtmxoff,
+-				  (unsigned long long) new_nxtmulti,
+-				  (unsigned long long) old_cluster.controldata.chkpnt_oldstMulti,
+-				  new_cluster.pgdata);
+-		check_ok();
++		copy_slru_subdir("pg_multixact/offsets");
++		copy_slru_subdir("pg_multixact/members");
++		new_cluster.controldata.chkpnt_nxtmulti = old_cluster.controldata.chkpnt_nxtmulti;
++		new_cluster.controldata.chkpnt_oldstMulti = old_cluster.controldata.chkpnt_oldstMulti;
++		new_cluster.controldata.chkpnt_nxtmxoff = old_cluster.controldata.chkpnt_nxtmxoff;
+ 	}
+ 	else
+ 	{
+-		/* Conversion is needed */
+-		MultiXactId nxtmulti;
+-		MultiXactId oldstMulti;
+-		MultiXactOffset nxtmxoff;
++		uint32		next_multi,
++					oldest_multi;
++		MultiXactId destination_next;
++
++		if (old_cluster.controldata.chkpnt_nxtmulti > PG_UINT32_MAX ||
++			old_cluster.controldata.chkpnt_oldstMulti > PG_UINT32_MAX)
++			pg_fatal("MultiXact ID exceeds the source 32-bit range");
++		next_multi = Max(old_cluster.controldata.chkpnt_nxtmulti, FirstMultiXactId);
++		/* Pre-9.3 locking-only multis need not survive an upgrade. */
++		oldest_multi = old_cluster.controldata.cat_ver >= MULTIXACT_FORMATCHANGE_CAT_VER ?
++			Max(old_cluster.controldata.chkpnt_oldstMulti, FirstMultiXactId) : next_multi;
+ 
+-		/*
+-		 * Determine the range of multixacts to convert.
+-		 */
+-		nxtmulti = old_cluster.controldata.chkpnt_nxtmulti;
+-		if (old_cluster.controldata.cat_ver >= MULTIXACT_FORMATCHANGE_CAT_VER)
+-		{
+-			/* Versions 9.3 - 18: convert all multixids  */
+-			oldstMulti = old_cluster.controldata.chkpnt_oldstMulti;
+-		}
+-		else
+-		{
+-			/*
+-			 * In PostgreSQL 9.2 and below, multitransactions were only used
+-			 * for row locking, and as such don't need to be preserved during
+-			 * upgrade.  In that case, we utilize rewrite_multixacts() just to
+-			 * initialize new, empty files in the new format.
+-			 *
+-			 * It's important that the oldest multi is set to the latest value
+-			 * used by the old system, so that multixact.c returns the empty
+-			 * set for multis that might be present on disk.
+-			 */
+-			oldstMulti = nxtmulti;
+-		}
+-		/* handle wraparound */
+-		if (nxtmulti < FirstMultiXactId)
+-			nxtmulti = FirstMultiXactId;
+-		if (oldstMulti < FirstMultiXactId)
+-			oldstMulti = FirstMultiXactId;
+-
+-		/*
+-		 * Remove the files created by initdb in the new cluster.
+-		 * rewrite_multixacts() will create new ones.
+-		 */
+ 		remove_new_subdir("pg_multixact/members", false);
+ 		remove_new_subdir("pg_multixact/offsets", false);
+-
+-		/*
+-		 * Create new pg_multixact files, converting old ones if needed.
+-		 */
+ 		prep_status("Converting pg_multixact files");
+-		nxtmxoff = rewrite_multixacts(oldstMulti, nxtmulti);
+-		check_ok();
+-
+-		prep_status("Setting next multixact ID and offset for new cluster");
+-		exec_prog(UTILITY_LOG_FILE, NULL, true, true,
+-				  "\"%s/pg_resetwal\" -O %" PRIu64 " -m %llu,%llu \"%s\"",
+-				  new_cluster.bindir,
+-				  nxtmxoff, (unsigned long long) nxtmulti,
+-				  (unsigned long long) oldstMulti,
+-				  new_cluster.pgdata);
++		new_cluster.controldata.chkpnt_nxtmxoff =
++			rewrite_multixacts(oldest_multi, next_multi, &destination_next);
++		new_cluster.controldata.chkpnt_nxtmulti = destination_next;
++		new_cluster.controldata.chkpnt_oldstMulti = oldest_multi;
+ 		check_ok();
+ 	}
+ 
++	prep_status("Setting MultiXact counters for new cluster");
++	exec_prog(UTILITY_LOG_FILE, NULL, true, true,
++			  "\"%s/pg_resetwal\" -O %" PRIu64 " -m %" PRIu64 ",%" PRIu64 " \"%s\"",
++			  new_cluster.bindir, new_cluster.controldata.chkpnt_nxtmxoff,
++			  new_cluster.controldata.chkpnt_nxtmulti,
++			  new_cluster.controldata.chkpnt_oldstMulti,
++			  new_cluster.pgdata);
++	check_ok();
++
+ 	/* now reset the wal archives in the new cluster */
+ 	prep_status("Resetting WAL archives");
+ 	exec_prog(UTILITY_LOG_FILE, NULL, true, true,
+@@ -911,7 +914,7 @@ copy_xact_xlog_xid(void)
+  *	set_frozenxids()
+  *
+  * This is called on the new cluster before we restore anything, with
+- * minmxid_only = false.  Its purpose is to ensure that all initdb-created
++ * minmxid_only = false and preserve_multixact_horizons = false.  Its purpose is to ensure that all initdb-created
+  * vacuumable tables have relfrozenxid/relminmxid matching the old cluster's
+  * xid/mxid counters.  We also initialize the datfrozenxid/datminmxid of the
+  * built-in databases to match.
+@@ -927,9 +930,11 @@ copy_xact_xlog_xid(void)
+  * everything is restored, with minmxid_only = true.  This pass will
+  * initialize all tables and databases, both those made by initdb and user
+  * objects, with the desired minmxid value.  frozenxid values are left alone.
++ * A post-restore XID reset preserves these individual MultiXact horizons;
++ * adjust_multixact_horizons() maps wrapped values without replacing them.
+  */
+ static void
+-set_frozenxids(bool minmxid_only)
++set_frozenxids(bool minmxid_only, bool preserve_multixact_horizons)
+ {
+ 	int			dbnum;
+ 	PGconn	   *conn,
+@@ -938,6 +943,8 @@ set_frozenxids(bool minmxid_only)
+ 	int			ntups;
+ 	int			i_datname;
+ 	int			i_datallowconn;
++	TransactionId frozen_xid = cluster_is_xid32(&old_cluster) ?
++		FirstNormalTransactionId : old_cluster.controldata.chkpnt_nxtxid;
+ 
+ 	if (!minmxid_only)
+ 		prep_status("Setting frozenxid and minmxid counters in new cluster");
+@@ -950,14 +957,15 @@ set_frozenxids(bool minmxid_only)
+ 		/* set pg_database.datfrozenxid */
+ 		PQclear(executeQueryOrDie(conn_template1,
+ 								  "UPDATE pg_catalog.pg_database "
+-								  "SET	datfrozenxid = '%llu'",
+-								  (unsigned long long) old_cluster.controldata.chkpnt_nxtxid));
++								  "SET	datfrozenxid = '%" PRIu64 "'",
++								  frozen_xid));
+ 
+-	/* set pg_database.datminmxid */
+-	PQclear(executeQueryOrDie(conn_template1,
++	/* Preserve restored per-database horizons when only XIDs need resetting. */
++	if (!preserve_multixact_horizons)
++		PQclear(executeQueryOrDie(conn_template1,
+ 							  "UPDATE pg_catalog.pg_database "
+-							  "SET	datminmxid = '%llu'",
+-							  (unsigned long long) old_cluster.controldata.chkpnt_nxtmulti));
++							  "SET	datminmxid = '%" PRIu64 "'",
++							  new_cluster.controldata.chkpnt_nxtmulti));
+ 
+ 	/* get database names */
+ 	dbres = executeQueryOrDie(conn_template1,
+@@ -991,24 +999,25 @@ set_frozenxids(bool minmxid_only)
+ 			/* set pg_class.relfrozenxid */
+ 			PQclear(executeQueryOrDie(conn,
+ 									  "UPDATE	pg_catalog.pg_class "
+-									  "SET	relfrozenxid = '%llu' "
++									  "SET	relfrozenxid = '%" PRIu64 "' "
+ 			/* only heap, materialized view, and TOAST are vacuumed */
+ 									  "WHERE	relkind IN ("
+ 									  CppAsString2(RELKIND_RELATION) ", "
+ 									  CppAsString2(RELKIND_MATVIEW) ", "
+ 									  CppAsString2(RELKIND_TOASTVALUE) ")",
+-									  (unsigned long long) old_cluster.controldata.chkpnt_nxtxid));
++									  frozen_xid));
+ 
+-		/* set pg_class.relminmxid */
+-		PQclear(executeQueryOrDie(conn,
++		/* Preserve restored per-relation horizons. */
++		if (!preserve_multixact_horizons)
++			PQclear(executeQueryOrDie(conn,
+ 								  "UPDATE	pg_catalog.pg_class "
+-								  "SET	relminmxid = '%llu' "
++								  "SET	relminmxid = '%" PRIu64 "' "
+ 		/* only heap, materialized view, and TOAST are vacuumed */
+ 								  "WHERE	relkind IN ("
+ 								  CppAsString2(RELKIND_RELATION) ", "
+ 								  CppAsString2(RELKIND_MATVIEW) ", "
+ 								  CppAsString2(RELKIND_TOASTVALUE) ")",
+-								  (unsigned long long) old_cluster.controldata.chkpnt_nxtmulti));
++								  new_cluster.controldata.chkpnt_nxtmulti));
+ 		PQfinish(conn);
+ 
+ 		/* Reset datallowconn flag */
+@@ -1025,6 +1034,59 @@ set_frozenxids(bool minmxid_only)
+ 	check_ok();
+ }
+ 
++/*
++ * Preserve each restored source horizon while mapping a wrapped MXID range
++ * to the same full IDs written by rewrite_multixacts().  Initdb horizons
++ * already contain destination IDs and are excluded by the range predicate.
++ */
++static void
++adjust_multixact_horizons(void)
++{
++	PGconn	   *template_conn;
++	PGresult   *databases;
++	uint64		oldest = old_cluster.controldata.chkpnt_oldstMulti;
++
++	if (new_cluster.controldata.chkpnt_nxtmulti <= PG_UINT32_MAX)
++		return;
++
++	prep_status("Expanding wrapped MultiXact horizons");
++	template_conn = connectToServer(&new_cluster, "template1");
++	PQclear(executeQueryOrDie(template_conn,
++							  "UPDATE pg_catalog.pg_database "
++							  "SET datminmxid = ((datminmxid::text::bigint + 4294967295)::text)::pg_catalog.xid "
++							  "WHERE datminmxid::text::bigint > 0 "
++							  "AND datminmxid::text::bigint < %" PRIu64,
++							  oldest));
++	databases = executeQueryOrDie(template_conn,
++								 "SELECT datname, datallowconn FROM pg_catalog.pg_database");
++	for (int i = 0; i < PQntuples(databases); i++)
++	{
++		char	   *name = PQgetvalue(databases, i, 0);
++		bool		allow = strcmp(PQgetvalue(databases, i, 1), "t") == 0;
++		PGconn	   *conn;
++
++		if (!allow)
++			PQclear(executeQueryOrDie(template_conn,
++									  "ALTER DATABASE %s ALLOW_CONNECTIONS = true",
++									  quote_identifier(name)));
++		conn = connectToServer(&new_cluster, name);
++		PQclear(executeQueryOrDie(conn,
++								  "UPDATE pg_catalog.pg_class "
++								  "SET relminmxid = ((relminmxid::text::bigint + 4294967295)::text)::pg_catalog.xid "
++								  "WHERE relminmxid::text::bigint > 0 "
++								  "AND relminmxid::text::bigint < %" PRIu64,
++								  oldest));
++		PQfinish(conn);
++		if (!allow)
++			PQclear(executeQueryOrDie(template_conn,
++									  "ALTER DATABASE %s ALLOW_CONNECTIONS = false",
++									  quote_identifier(name)));
++	}
++	PQclear(databases);
++	PQfinish(template_conn);
++	check_ok();
++}
++
+ /*
+  * create_logical_replication_slots()
+  *
+diff --git a/src/bin/pg_upgrade/pg_upgrade.h b/src/bin/pg_upgrade/pg_upgrade.h
+index f76679bf10a..6cc9c4fbef3 100644
+--- a/src/bin/pg_upgrade/pg_upgrade.h
++++ b/src/bin/pg_upgrade/pg_upgrade.h
+@@ -12,6 +12,7 @@
+ 
+ #include "common/relpath.h"
+ #include "libpq-fe.h"
++#include "storage/block.h"
+ 
+ /* For now, pg_upgrade does not use common/logging.c; use our own pg_fatal */
+ #undef pg_fatal
+@@ -239,7 +240,7 @@ typedef struct
+ 	uint32		cat_ver;
+ 	char		nextxlogfile[25];
+ 	uint64		chkpnt_nxtxid;
+-	uint32		chkpnt_nxtepoch;
++	uint32		chkpnt_nxtepoch;	/* for 32-bit XIDs only */
+ 	uint32		chkpnt_nxtoid;
+ 	uint64		chkpnt_nxtmulti;
+ 	uint64		chkpnt_nxtmxoff;
+@@ -311,6 +312,7 @@ typedef struct
+ 	int			num_tablespaces;
+ 	const char *tablespace_suffix;	/* directory specification */
+ 	int			nsubs;			/* number of subscriptions */
++	int			xid_sz;			/* pg_catalog.xid storage size */
+ 	bool		sub_retain_dead_tuples; /* whether a subscription enables
+ 										 * retain_dead_tuples. */
+ } ClusterInfo;
+@@ -387,7 +389,7 @@ extern OSInfo os_info;
+ /* check.c */
+ 
+ void		output_check_banner(void);
+-void		check_and_dump_old_cluster(void);
++void		check_and_dump_old_cluster(bool *is_wraparound);
+ void		check_new_cluster(void);
+ void		report_clusters_compatible(void);
+ void		issue_warnings_and_set_wal_level(void);
+@@ -430,7 +432,11 @@ void		copyFileByRange(const char *src, const char *dst,
+ void		linkFile(const char *src, const char *dst,
+ 					 const char *schemaName, const char *relName);
+ void		rewriteVisibilityMap(const char *fromfile, const char *tofile,
+-								 const char *schemaName, const char *relName);
++								 const char *schemaName, const char *relName,
++								 bool update_version);
++void		updateSegmentPagesVersion(const char *fromfile, const char *tofile,
++									  const char *schemaName, const char *relName,
++									  BlockNumber first_block);
+ void		check_file_clone(void);
+ void		check_copy_file_range(void);
+ void		check_hard_link(transferMode transfer_mode);
+@@ -500,6 +506,10 @@ unsigned int str2uint(const char *str);
+ 
+ /* version.c */
+ 
++bool		cluster_is_xid64(const ClusterInfo *cluster);
++bool		cluster_is_xid32(const ClusterInfo *cluster);
++bool		cluster_has_64bit_multixact_offsets(const ClusterInfo *cluster);
++bool		xid_check_applicable(ClusterInfo *cluster);
+ bool		jsonb_9_4_check_applicable(ClusterInfo *cluster);
+ bool		protocol_negotiation_supported(const ClusterInfo *cluster);
+ void		old_9_6_invalidate_hash_indexes(ClusterInfo *cluster,
+@@ -507,8 +517,13 @@ void		old_9_6_invalidate_hash_indexes(ClusterInfo *cluster,
+ 
+ void		report_extension_updates(ClusterInfo *cluster);
+ 
++void		invalidate_spgist_indexes(ClusterInfo *cluster, bool check_mode);
++void		invalidate_gin_indexes(ClusterInfo *cluster, bool check_mode);
++void		invalidate_external_indexes(ClusterInfo *cluster, bool check_mode);
++
+ /* multixact_rewrite.c */
+-MultiXactOffset rewrite_multixacts(MultiXactId from_multi, MultiXactId to_multi);
++MultiXactOffset rewrite_multixacts(uint32 from_multi, uint32 to_multi,
++									 MultiXactId *next_multi);
+ 
+ /* parallel.c */
+ void		parallel_exec_prog(const char *log_file, const char *opt_log_file,
+@@ -538,3 +553,6 @@ typedef struct
+ 	FILE	   *file;
+ 	char		path[MAXPGPATH];
+ } UpgradeTaskReport;
++
++/* segresize.c */
++void		convert_xact(const char *olddir, const char *newdir);
+diff --git a/src/bin/pg_upgrade/relfilenumber.c b/src/bin/pg_upgrade/relfilenumber.c
+index d5088447e0d..b35ac9cd759 100644
+--- a/src/bin/pg_upgrade/relfilenumber.c
++++ b/src/bin/pg_upgrade/relfilenumber.c
+@@ -18,7 +18,7 @@
+ #include "pg_upgrade.h"
+ 
+ static void transfer_single_new_db(FileNameMap *maps, int size, char *old_tablespace, char *new_tablespace);
+-static void transfer_relfile(FileNameMap *map, const char *type_suffix, bool vm_must_add_frozenbit);
++static void transfer_relfile(FileNameMap *map, const char *type_suffix, bool vm_must_add_frozenbit, bool update_version);
+ 
+ /*
+  * The following set of sync_queue_* functions are used for --swap to reduce
+@@ -337,6 +337,68 @@ parse_relfilenumber(const char *filename)
+ 	return (RelFileNumber) n;
+ }
+ 
++/*
++ * Rewrite a moved auxiliary fork without modifying its original file until
++ * the replacement is complete.  The caller synchronizes the directory after
++ * all replacements; newly written files must be synchronized before rename.
++ */
++static void
++rewrite_swap_fork(FileNameMap *map, const char *new_db_dir, const char *fork)
++{
++	for (int segno = 0;; segno++)
++	{
++		char	   *path,
++				   *temporary;
++		struct stat st;
++
++		if (segno == 0)
++			path = psprintf("%s/%u%s", new_db_dir, map->relfilenumber, fork);
++		else
++			path = psprintf("%s/%u%s.%d", new_db_dir, map->relfilenumber, fork, segno);
++		if (stat(path, &st) != 0)
++		{
++			if (errno != ENOENT)
++				pg_fatal("could not stat file \"%s\": %m", path);
++			pg_free(path);
++			break;
++		}
++		if (st.st_size == 0)
++		{
++			pg_free(path);
++			continue;
++		}
++
++		temporary = psprintf("%s.pg_upgrade", path);
++		updateSegmentPagesVersion(path, temporary, map->nspname, map->relname,
++								  (BlockNumber) segno * new_cluster.controldata.largesz);
++		if (user_opts.do_sync && fsync_fname(temporary, false) != 0)
++			pg_fatal("could not synchronize file \"%s\": %m", temporary);
++		if (rename(temporary, path) != 0)
++			pg_fatal("could not rename file \"%s\" to \"%s\": %m", temporary, path);
++		pg_free(temporary);
++		pg_free(path);
++	}
++}
++
++/* Process only mapped user relations in the database/tablespace just moved. */
++static void
++rewrite_swap_auxiliary_files(FileNameMap *maps, int size, const char *new_db_dir)
++{
++	for (int i = 0; i < size; i++)
++	{
++		FileNameMap *map = &maps[i];
++		char	   *mapped_dir = psprintf("%s%s/%u", map->new_tablespace,
++										  map->new_tablespace_suffix, map->db_oid);
++
++		if (strcmp(mapped_dir, new_db_dir) == 0)
++		{
++			rewrite_swap_fork(map, new_db_dir, "_fsm");
++			rewrite_swap_fork(map, new_db_dir, "_vm");
++		}
++		pg_free(mapped_dir);
++	}
++}
++
+ /*
+  * swap_catalog_files()
+  *
+@@ -426,7 +488,11 @@ swap_catalog_files(FileNameMap *maps, int size, const char *old_catalog_dir,
+ 		pg_fatal("could not read directory \"%s\": %m", moved_db_dir);
+ 	(void) closedir(dir);
+ 
+-	/* Ensure the directory entries are persisted to disk. */
++	/* Auxiliary pages have no tuple XIDs, but need the target page version. */
++	if (cluster_is_xid32(&old_cluster) && cluster_is_xid64(&new_cluster))
++		rewrite_swap_auxiliary_files(maps, size, new_db_dir);
++
++	/* Ensure catalog and rewritten auxiliary directory entries are persisted. */
+ 	if (fsync_fname(new_db_dir, true) != 0)
+ 		pg_fatal("could not synchronize directory \"%s\": %m", new_db_dir);
+ 	if (fsync_parent_path(new_db_dir) != 0)
+@@ -497,6 +563,7 @@ transfer_single_new_db(FileNameMap *maps, int size,
+ {
+ 	int			mapnum;
+ 	bool		vm_must_add_frozenbit = false;
++	bool		update_version = false;
+ 
+ 	/*
+ 	 * Do we need to rewrite visibilitymap?
+@@ -519,19 +586,28 @@ transfer_single_new_db(FileNameMap *maps, int size,
+ 		return;
+ 	}
+ 
++	/*
++	 * Need to update FSM and VM pages version to avoid lazy conversion.
++	 */
++	if (cluster_is_xid32(&old_cluster) && cluster_is_xid64(&new_cluster))
++		update_version = true;
++
+ 	for (mapnum = 0; mapnum < size; mapnum++)
+ 	{
+ 		if (old_tablespace == NULL ||
+ 			strcmp(maps[mapnum].old_tablespace, old_tablespace) == 0)
+ 		{
+ 			/* transfer primary file */
+-			transfer_relfile(&maps[mapnum], "", vm_must_add_frozenbit);
++			transfer_relfile(&maps[mapnum], "", vm_must_add_frozenbit,
++							 update_version);
+ 
+ 			/*
+ 			 * Copy/link any fsm and vm files, if they exist
+ 			 */
+-			transfer_relfile(&maps[mapnum], "_fsm", vm_must_add_frozenbit);
+-			transfer_relfile(&maps[mapnum], "_vm", vm_must_add_frozenbit);
++			transfer_relfile(&maps[mapnum], "_fsm", vm_must_add_frozenbit,
++							 update_version);
++			transfer_relfile(&maps[mapnum], "_vm", vm_must_add_frozenbit,
++							 update_version);
+ 		}
+ 	}
+ }
+@@ -545,7 +621,8 @@ transfer_single_new_db(FileNameMap *maps, int size,
+  * mode.
+  */
+ static void
+-transfer_relfile(FileNameMap *map, const char *type_suffix, bool vm_must_add_frozenbit)
++transfer_relfile(FileNameMap *map, const char *type_suffix,
++				 bool vm_must_add_frozenbit, bool update_version)
+ {
+ 	char		old_file[MAXPGPATH];
+ 	char		new_file[MAXPGPATH];
+@@ -609,7 +686,18 @@ transfer_relfile(FileNameMap *map, const char *type_suffix, bool vm_must_add_fro
+ 			/* Need to rewrite visibility map format */
+ 			pg_log(PG_VERBOSE, "rewriting \"%s\" to \"%s\"",
+ 				   old_file, new_file);
+-			rewriteVisibilityMap(old_file, new_file, map->nspname, map->relname);
++			rewriteVisibilityMap(old_file, new_file, map->nspname,
++								 map->relname, update_version);
++		}
++		else if ((update_version && strcmp(type_suffix, "_vm") == 0) ||
++				 (update_version && strcmp(type_suffix, "_fsm") == 0))
++		{
++			/* Need to update pages version */
++			pg_log(PG_VERBOSE, "rewriting \"%s\" to \"%s\"",
++				   old_file, new_file);
++			updateSegmentPagesVersion(old_file, new_file, map->nspname,
++									  map->relname,
++									  (BlockNumber) segno * new_cluster.controldata.largesz);
+ 		}
+ 		else
+ 			switch (user_opts.transfer_mode)
+diff --git a/src/bin/pg_upgrade/segresize.c b/src/bin/pg_upgrade/segresize.c
+new file mode 100644
+index 00000000000..51743a09339
+--- /dev/null
++++ b/src/bin/pg_upgrade/segresize.c
+@@ -0,0 +1,48 @@
++/*
++ * segresize.c
++ *
++ * Copy the retained 32-bit transaction-status range into long-named SLRUs.
++ * MultiXacts are converted by multixact_rewrite.c using the source layout.
++ */
++#include "postgres_fe.h"
++
++#include "pg_upgrade.h"
++#include "slru_io.h"
++
++#define OLD_CLOG_XACTS_PER_PAGE (BLCKSZ * 4)
++#define OLD_CLOG_PAGES ((UINT64CONST(1) << 32) / OLD_CLOG_XACTS_PER_PAGE)
++
++void
++convert_xact(const char *olddir, const char *newdir)
++{
++	SlruSegState *reader;
++	SlruSegState *writer;
++	uint32		oldest_xid;
++	uint32		next_xid;
++	uint64		page,
++				last_page;
++
++	if (old_cluster.controldata.chkpnt_oldstxid > PG_UINT32_MAX)
++		pg_fatal("oldest XID exceeds the source 32-bit XID range");
++	oldest_xid = (uint32) old_cluster.controldata.chkpnt_oldstxid;
++	/* pg_controldata's NextXID contains the epoch, not a CLOG address. */
++	next_xid = (uint32) old_cluster.controldata.chkpnt_nxtxid;
++	page = oldest_xid / OLD_CLOG_XACTS_PER_PAGE;
++	last_page = next_xid == oldest_xid ? page :
++		((uint32) (next_xid - 1)) / OLD_CLOG_XACTS_PER_PAGE;
++
++	reader = AllocSlruRead(olddir, false);
++	writer = AllocSlruWrite(newdir, true);
++	for (;;)
++	{
++		char	   *source = SlruReadSwitchPage(reader, page);
++		char	   *destination = SlruWriteSwitchPage(writer, page);
++
++		memcpy(destination, source, BLCKSZ);
++		if (page == last_page)
++			break;
++		page = (page + 1) % OLD_CLOG_PAGES;
++	}
++	FreeSlruRead(reader);
++	FreeSlruWrite(writer);
++}
+diff --git a/src/bin/pg_upgrade/t/002_pg_upgrade.pl b/src/bin/pg_upgrade/t/002_pg_upgrade.pl
+index 0a4121fdc4d..a0a84c260ca 100644
+--- a/src/bin/pg_upgrade/t/002_pg_upgrade.pl
++++ b/src/bin/pg_upgrade/t/002_pg_upgrade.pl
+@@ -356,6 +356,13 @@ if (defined($ENV{oldinstall}))
+ # old node.
+ $oldnode->append_conf('postgresql.conf', 'autovacuum = off');
+ $oldnode->restart;
++$oldnode->safe_psql('regression',
++	"CREATE TABLE public.xid64_upgrade_horizons (id SERIAL NOT NULL PRIMARY KEY, plt text, pln NUMERIC(8, 4));
++	 INSERT INTO public.xid64_upgrade_horizons (plt, pln) SELECT md5(random()::text), random() * 9999 FROM generate_series(1, 1000);");
++my $relfrozenxid = $oldnode->safe_psql('regression',
++	"SELECT relfrozenxid FROM pg_catalog.pg_class WHERE oid = 'public.xid64_upgrade_horizons'::pg_catalog.regclass;");
++my $relminmxid = $oldnode->safe_psql('regression',
++	"SELECT relminmxid FROM pg_catalog.pg_class WHERE oid = 'public.xid64_upgrade_horizons'::pg_catalog.regclass;");
+ 
+ # Test that dump/restore of the regression database roundtrips cleanly.  This
+ # doesn't work well when the nodes are different versions, so skip it in that
+@@ -581,6 +588,16 @@ ok( !-d $newnode->data_dir . "/pg_upgrade_output.d",
+ 
+ $newnode->start;
+ 
++my $relfrozenxid_new = $newnode->safe_psql('regression',
++	"SELECT relfrozenxid FROM pg_catalog.pg_class WHERE oid = 'public.xid64_upgrade_horizons'::pg_catalog.regclass;");
++
++is($relfrozenxid_new, $relfrozenxid, 'old and new relfrozenxid match after pg_upgrade');
++
++my $relminmxid_new = $newnode->safe_psql('regression',
++	"SELECT relminmxid FROM pg_catalog.pg_class WHERE oid = 'public.xid64_upgrade_horizons'::pg_catalog.regclass;");
++
++is($relminmxid_new, $relminmxid, 'old and new relminmxid match after pg_upgrade');
++
+ # Check if there are any logs coming from pg_upgrade, that would only be
+ # retained on failure.
+ my $log_path = $newnode->data_dir . "/pg_upgrade_output.d";
+diff --git a/src/bin/pg_upgrade/t/007_multixact_conversion.pl b/src/bin/pg_upgrade/t/007_multixact_conversion.pl
+index 867a0623153..356c182b05a 100644
+--- a/src/bin/pg_upgrade/t/007_multixact_conversion.pl
++++ b/src/bin/pg_upgrade/t/007_multixact_conversion.pl
+@@ -141,10 +141,15 @@ sub mxact_workload
+ # Return contents of the 'mxofftest' table, created by mxact_workload
+ sub get_test_table_contents
+ {
+-	my ($node, $filename) = @_;
++	my ($node, $filename, $source_xid32) = @_;
+ 
++	# Wrapped source MXIDs are expanded by 2^32-1 on an xid64 target.
++	# Normalize only that upgrade case for comparison with source SQL.
++	my $xmax = $source_xid32
++	  ? 'CASE WHEN xmax::text::numeric >= 4294967296 THEN xmax::text::numeric - 4294967295 ELSE xmax::text::numeric END'
++	  : 'xmax';
+ 	my $contents = $node->safe_psql('postgres',
+-		"SELECT ctid, xmin, xmax, * FROM mxofftest");
++		"SELECT ctid, xmin, $xmax, * FROM mxofftest");
+ 
+ 	my $path = $tempdir . '/' . $filename;
+ 	open(my $fh, '>', $path)
+@@ -187,11 +192,14 @@ sub get_updating_multixact_members
+ 			WHERE mode not in ('keysh', 'sh');
+ 		]);
+ 		print $fh $res;
++		my $xid_size = $node->safe_psql('postgres',
++			q{SELECT typlen FROM pg_type WHERE oid = 'xid'::regtype});
++		my $member_id = $xid_size == 8 ? '(multi + 4294967295)' : 'multi';
+ 		$res = $node->safe_psql(
+ 			'postgres', qq[
+ 			SELECT multi, mode, xid
+ 			FROM generate_series(1, $to - 1) as multi,
+-				 pg_get_multixact_members(multi::text::xid)
++				 pg_get_multixact_members(${member_id}::text::xid)
+ 			WHERE mode not in ('keysh', 'sh');
+ 		]);
+ 		print $fh $res;
+@@ -231,11 +239,12 @@ sub read_multixid_fields
+ # Note: This is used on the old installation, so the command arguments
+ # and the output parsing used here must work with all pre-v19
+ # PostgreSQL versions supported by the test.
+-sub reset_mxid_mxoffset_pre_v19
++sub reset_mxid_mxoffset_xid32
+ {
+ 	my $node = shift;
+ 	my $mxid = shift;
+ 	my $mxoffset = shift;
++	my $offsets64 = shift || 0;
+ 
+ 	my $pg_resetwal_path = $node->installed_command('pg_resetwal');
+ 	# Get block size
+@@ -278,7 +287,7 @@ sub reset_mxid_mxoffset_pre_v19
+ 	# with zeros
+ 	#
+ 	# sizeof(MultiXactOffset) == 4 in PostgreSQL versions before 19
+-	my $multixact_offsets_per_page = $blcksz / 4;
++	my $multixact_offsets_per_page = $blcksz / ($offsets64 ? 8 : 4);
+ 	my $segno =
+ 	  int($mxid / $multixact_offsets_per_page / $slru_pages_per_segment);
+ 	my $path =
+@@ -295,7 +304,8 @@ sub reset_mxid_mxoffset_pre_v19
+ 	my $multixact_members_per_page = int($blcksz / 20) * 4;
+ 	$segno =
+ 	  int($mxoffset / $multixact_members_per_page / $slru_pages_per_segment);
+-	$path = sprintf "%s/pg_multixact/members/%04X", $node->data_dir, $segno;
++	$path = sprintf($offsets64 ? "%s/pg_multixact/members/%015X" :
++		"%s/pg_multixact/members/%04X", $node->data_dir, $segno);
+ 	open $fh, ">", $path
+ 	  or die "could not open \"$path\": $!";
+ 	binmode $fh;
+@@ -335,6 +345,8 @@ sub upgrade_and_compare
+ 	my ($multixids_start, $multixids_end, undef) =
+ 	  read_multixid_fields($oldnode);
+ 	$oldnode->start;
++	my $source_xid32 = $oldnode->safe_psql('postgres',
++		q{SELECT typlen FROM pg_type WHERE oid = 'xid'::regtype}) == 4;
+ 	my $old_table_contents =
+ 	  get_test_table_contents($oldnode, "oldnode_${tag}_table_contents");
+ 	my $old_multixacts =
+@@ -345,7 +357,8 @@ sub upgrade_and_compare
+ 	# Compare them with the upgraded cluster
+ 	$newnode->start;
+ 	my $new_table_contents =
+-	  get_test_table_contents($newnode, "newnode_${tag}_table_contents");
++	  get_test_table_contents($newnode, "newnode_${tag}_table_contents",
++		$source_xid32);
+ 	my $new_multixacts =
+ 	  get_updating_multixact_members($newnode, $multixids_start,
+ 		$multixids_end, "newnode_${tag}_multixacts");
+@@ -363,6 +376,7 @@ sub upgrade_and_compare
+ chdir ${PostgreSQL::Test::Utils::tmp_check};
+ 
+ my $old_version;
++my $old_xid_size;
+ 
+ # Basic scenario: Create a cluster using old installation, run
+ # multixid-creating workload on it, then upgrade.
+@@ -378,6 +392,10 @@ my $old_version;
+ 	my $new = PostgreSQL::Test::Cluster->new("${tag}_newnode");
+ 
+ 	$old->init(extra => ['-k']);
++	$old->start;
++	$old_xid_size = $old->safe_psql('postgres',
++		q{SELECT typlen FROM pg_type WHERE oid = 'xid'::regtype});
++	$old->stop;
+ 
+ 	$old_version = $old->pg_version;
+ 	note "old installation is version $old_version\n";
+@@ -405,6 +423,10 @@ my $old_version;
+ # anyway.
+ SKIP:
+ {
++	# The reset helper below assumes four-byte offsets, four-byte members
++	# and short segment names.  An xid64 PG18 source does not have that layout.
++	skip '32-bit wraparound fixture is inapplicable to an xid64 source'
++	  if $old_xid_size == 8;
+ 	skip
+ 	  "skipping mxoffset conversion tests because upgrading from the old version does not require conversion"
+ 	  if ($old_version >= '19devel');
+@@ -419,7 +441,7 @@ SKIP:
+ 
+ 	# Reset the old cluster to just before multixid and 32-bit offset
+ 	# wraparound.
+-	reset_mxid_mxoffset_pre_v19($old, 0xFFFFFA00, 0xFFFFEC00);
++	reset_mxid_mxoffset_xid32($old, 0xFFFFFA00, 0xFFFFEC00);
+ 
+ 	# Run the workload.  This crosses multixid and offset wraparound.
+ 	my (undef, $start_mxid, $start_mxoff) = read_multixid_fields($old);
+@@ -440,4 +462,25 @@ SKIP:
+ 	upgrade_and_compare($tag, $old, $new);
+ }
+ 
++# Native PG19 retains 32-bit member XIDs, but has eight-byte offsets, short
++# offset filenames and long member filenames. Exercise a genuinely high offset.
++SKIP:
++{
++	skip 'high-offset scenario requires a native xid32 PG19 source'
++	  if $old_version < '19devel' || $old_xid_size != 4;
++	my $tag = 'wideoffset';
++	my $old = PostgreSQL::Test::Cluster->new("${tag}_oldnode",
++		install_path => $ENV{oldinstall});
++	my $new = PostgreSQL::Test::Cluster->new("${tag}_newnode");
++	$old->init(extra => ['-k']);
++	reset_mxid_mxoffset_xid32($old, 1, 4294968931, 1);
++	my (undef, undef, $start_offset) = read_multixid_fields($old);
++	mxact_workload($old, $new);
++	my (undef, undef, $finish_offset) = read_multixid_fields($old);
++	cmp_ok($start_offset, '>', 4294967295, 'native source offset starts above 32 bits');
++	cmp_ok($finish_offset, '>', $start_offset, 'native source allocates high member offsets');
++	$new->init;
++	upgrade_and_compare($tag, $old, $new);
++}
++
+ done_testing();
+diff --git a/src/bin/pg_upgrade/t/009_xid32_to_xid64_recovery.pl b/src/bin/pg_upgrade/t/009_xid32_to_xid64_recovery.pl
+new file mode 100644
+index 00000000000..74b44d7eafd
+--- /dev/null
++++ b/src/bin/pg_upgrade/t/009_xid32_to_xid64_recovery.pl
+@@ -0,0 +1,260 @@
++# Copyright (c) 2026, Tantor Labs
++# Recovery must restore converted pages before relcache-less incremental reads.
++use strict;
++use warnings FATAL => 'all';
++
++use PostgreSQL::Test::Cluster;
++use PostgreSQL::Test::Utils;
++use Test::More;
++
++plan skip_all => 'oldinstall is required for xid32 to xid64 recovery test'
++  unless defined $ENV{oldinstall};
++
++my $old = PostgreSQL::Test::Cluster->new('recovery_old',
++	install_path => $ENV{oldinstall});
++$old->init(force_initdb => 1, xid32 => 1);
++$old->append_conf('postgresql.conf', 'autovacuum = off');
++$old->start;
++plan skip_all => 'source cluster must use xid32'
++  unless $old->safe_psql('postgres',
++	q{SELECT typlen FROM pg_type WHERE oid = 'xid'::regtype}) eq '4';
++# Disable checksums in both clusters: visibility WAL normally omits the heap
++# image in this configuration. This is independent of full_page_writes.
++my $old_checksums = $old->safe_psql('postgres', 'SHOW data_checksums');
++$old->stop;
++$old->command_ok([$old->installed_command('pg_checksums'), '--disable',
++	'--no-sync', '--pgdata' => $old->data_dir], 'disable source checksums')
++  if $old_checksums eq 'on';
++$old->start;
++is($old->safe_psql('postgres', 'SHOW data_checksums'), 'off',
++	'source checksums are disabled');
++for my $table ('recovery_update', 'recovery_extend', 'recovery_visible',
++	'recovery_read_only')
++{
++	$old->safe_psql('postgres', "CREATE TABLE $table AS SELECT 1 AS n");
++	$old->safe_psql('postgres', "VACUUM FREEZE $table");
++}
++$old->safe_psql('postgres', q{
++	CREATE TABLE recovery_dense(n int, payload text);
++	ALTER TABLE recovery_dense ALTER COLUMN payload SET STORAGE PLAIN;
++	INSERT INTO recovery_dense SELECT n, repeat('x',4048) FROM generate_series(1,2) n;
++});
++$old->safe_psql('postgres', 'VACUUM FREEZE recovery_dense');
++$old->safe_psql('postgres', q{
++	CREATE TABLE recovery_dense_unfrozen(n int, payload text);
++	ALTER TABLE recovery_dense_unfrozen ALTER COLUMN payload SET STORAGE PLAIN;
++	INSERT INTO recovery_dense_unfrozen SELECT n, repeat('y',4048) FROM generate_series(1,2) n;
++	CREATE TABLE recovery_bad(n int);
++	INSERT INTO recovery_bad VALUES (1);
++	CREATE TABLE recovery_hint(n int);
++	INSERT INTO recovery_hint VALUES (1);
++	CREATE TABLE recovery_safe_row(value recovery_update);
++	INSERT INTO recovery_safe_row VALUES (ROW(1));
++	CREATE TYPE bad_xid_record AS (value xid);
++	CREATE TABLE bad_xid_storage(direct xid, elements xid[], nested bad_xid_record);
++});
++$old->stop;
++# The epoch belongs to control data, not to source 32-bit CLOG addresses.
++$old->command_ok([$old->installed_command('pg_resetwal'), '-e', '1',
++	'--pgdata' => $old->data_dir], 'set a nonzero source XID epoch');
++
++my $primary = PostgreSQL::Test::Cluster->new('recovery_primary');
++$primary->init(allows_streaming => 1, extra => ['--no-data-checksums']);
++$primary->append_conf('postgresql.conf', qq{
++autovacuum = off
++autovacuum_freeze_max_age = 1000000000000
++autovacuum_multixact_freeze_max_age = 1000000000000
++full_page_writes = off
++wal_log_hints = off
++io_method = worker
++checkpoint_timeout = '1h'
++});
++$primary->start;
++my $xid_size = $primary->safe_psql('postgres',
++	q{SELECT typlen FROM pg_type WHERE oid = 'xid'::regtype});
++$primary->stop;
++plan skip_all => 'target cluster must use xid64' unless $xid_size eq '8';
++
++my @upgrade_command = (
++	$primary->installed_command('pg_upgrade'), '--no-sync', '--copy',
++	'--old-datadir' => $old->data_dir,
++	'--new-datadir' => $primary->data_dir,
++	'--old-bindir' => $old->config_data('--bindir'),
++	'--new-bindir' => $primary->config_data('--bindir'),
++	'--socketdir' => $primary->host,
++	'--old-port' => $old->port,
++	'--new-port' => $primary->port);
++ok(!run_log([@upgrade_command, '--check']), 'reject explicit user xid storage');
++my @reports = glob($primary->data_dir . '/pg_upgrade_output.d/*/tables_using_xid.txt');
++BAIL_OUT('missing xid usage report') unless @reports;
++my $report = slurp_file($reports[-1]);
++like($report, qr/bad_xid_storage\.direct/, 'report direct user xid column');
++like($report, qr/bad_xid_storage\.elements/, 'report array of xid');
++like($report, qr/bad_xid_storage\.nested/, 'report composite containing xid');
++unlike($report, qr/\.(?:xmin|xmax)\b|recovery_safe_row/,
++	'ignore system XIDs and safe row types during recursive type checks');
++$old->start;
++$old->safe_psql('postgres', 'DROP TABLE bad_xid_storage; DROP TYPE bad_xid_record');
++$old->stop;
++my $upgraded = run_log([@upgrade_command]);
++ok($upgraded, 'upgrade source cluster for recovery tests');
++BAIL_OUT('upgrade failed') unless $upgraded;
++
++$primary->start;
++$primary->safe_psql('postgres', 'CREATE EXTENSION pg_visibility');
++$primary->safe_psql('postgres', 'CREATE EXTENSION pg_walinspect');
++my $regresslib = $ENV{REGRESS_SHLIB};
++BAIL_OUT('REGRESS_SHLIB is required') unless defined $regresslib;
++$regresslib =~ s/'/''/g;
++$primary->safe_psql('postgres', qq{
++	CREATE FUNCTION test_xid64_extension_fallback(regclass) RETURNS int4
++	AS '$regresslib' LANGUAGE C STRICT;
++});
++# A supported way to invalidate the VM without reading/converting heap pages.
++# Tuples are already frozen, so the next VACUUM only needs visibility WAL.
++$primary->safe_psql('postgres',
++	q{SELECT pg_truncate_visibility_map('recovery_visible')});
++my %paths;
++for my $table ('recovery_update', 'recovery_extend', 'recovery_visible',
++	'recovery_dense', 'recovery_dense_unfrozen', 'recovery_hint', 'recovery_bad',
++	'recovery_read_only')
++{
++	$paths{$table} = $primary->safe_psql('postgres',
++		"SELECT pg_relation_filepath('$table')");
++}
++$primary->stop;
++
++sub page_version
++{
++	my ($path) = @_;
++	open(my $fh, '<:raw', $path) or die "open $path: $!";
++	seek($fh, 18, 0) or die "seek $path: $!";
++	read($fh, my $bytes, 2) == 2 or die "read page version from $path: $!";
++	close($fh);
++	return unpack('S', $bytes) & 0xff;
++}
++for my $table (sort keys %paths)
++{
++	is(page_version($primary->data_dir . '/' . $paths{$table}), 4,
++		"$table still has an old-format page before replay");
++}
++
++# AIO completion must not PANIC on a conversion error.  Corrupt only t_hoff;
++# the physical page header remains valid, so this reaches legacy conversion.
++my $bad_path = $primary->data_dir . '/' . $paths{recovery_bad};
++my $bad_bytes = slurp_file($bad_path);
++my $tuple_offset = unpack('S', substr($bad_bytes, 14, 2));
++my $header_offset = $tuple_offset + 22; # offsetof(HeapTupleHeaderData, t_hoff)
++open(my $bad_fh, '+<:raw', $bad_path) or die "open $bad_path: $!";
++seek($bad_fh, $header_offset, 0) or die "seek $bad_path: $!";
++print $bad_fh "\0";
++close($bad_fh);
++$primary->start;
++for my $attempt (1 .. 2)
++{
++	my ($ret, $out, $err) = $primary->psql('postgres',
++		'SELECT n FROM recovery_bad');
++	is($ret, 3, "conversion error is a normal SQL failure (attempt $attempt)");
++	like($err, qr/invalid legacy tuple header/,
++		"conversion retries the unchanged legacy page (attempt $attempt)");
++}
++is($primary->safe_psql('postgres', 'SELECT 1'), '1',
++	'server remains available after legacy conversion errors');
++$primary->stop;
++open($bad_fh, '+<:raw', $bad_path) or die "open $bad_path: $!";
++seek($bad_fh, $header_offset, 0) or die "seek $bad_path: $!";
++print $bad_fh substr($bad_bytes, $header_offset, 1);
++close($bad_fh);
++$primary->start;
++is($primary->safe_psql('postgres', 'SELECT n FROM recovery_bad'), '1',
++	'repaired legacy page converts successfully after restart');
++$primary->stop;
++
++$primary->backup_fs_cold('upgraded');
++my $standby = PostgreSQL::Test::Cluster->new('recovery_standby');
++$standby->init_from_backup($primary, 'upgraded', has_streaming => 1);
++# Exercise XLogReadBufferExtended's missing-block extension branch when the
++# update's full-page image arrives. No old heap contents are needed here.
++my $extend_path = $standby->data_dir . '/' . $paths{recovery_extend};
++truncate($extend_path, 0) or die "truncate $extend_path: $!";
++$primary->start;
++$standby->start;
++
++# Frozen tuples already have their visibility hints.  The read itself must
++# emit exactly one conversion FPI, before any UPDATE, hint write or VACUUM.
++my $read_start = $primary->safe_psql('postgres', 'SELECT pg_current_wal_insert_lsn()');
++is($primary->safe_psql('postgres', 'SELECT n FROM recovery_read_only'), '1',
++	'read a frozen legacy page without modifying tuple hints');
++my $read_end = $primary->safe_psql('postgres', 'SELECT pg_current_wal_insert_lsn()');
++# Flush the inspected interval; this does not modify the test relation.
++$primary->safe_psql('postgres', 'SELECT pg_switch_wal()');
++is($primary->safe_psql('postgres', qq{
++	SELECT count(*) FROM pg_get_wal_block_info('$read_start', '$read_end', false)
++	WHERE relfilenode = pg_relation_filenode('recovery_read_only')
++	  AND reldatabase = (SELECT oid FROM pg_database WHERE datname = current_database())
++	  AND relforknumber = 0 AND relblocknumber = 0
++	  AND resource_manager = 'XLOG' AND record_type = 'FPI'
++	  AND block_fpi_length > 0
++}), '1', 'read-only conversion immediately emits one full-page WAL image');
++$primary->wait_for_catchup($standby);
++is($standby->safe_psql('postgres', 'SELECT n FROM recovery_read_only'), '1',
++	'conversion image alone makes the legacy page readable on the standby');
++
++# A hint-only read must WAL-log conversion even without checksums/hint WAL.
++# Restart loses the in-memory conversion marker; a subsequent incremental
++# update must therefore find an already converted page on the standby.
++is($primary->safe_psql('postgres', 'SELECT n FROM recovery_hint'), '1',
++	'hint-only read of a legacy page succeeds');
++$primary->safe_psql('postgres', 'CHECKPOINT');
++$primary->stop;
++is(page_version($primary->data_dir . '/' . $paths{recovery_hint}), 5,
++	'hint dirtied the converted page before restart');
++$primary->start;
++$primary->safe_psql('postgres', 'UPDATE recovery_hint SET n = 2');
++$primary->wait_for_catchup($standby);
++is($standby->safe_psql('postgres', 'SELECT n FROM recovery_hint'), '2',
++	'incremental update after hint/checkpoint/restart replays on legacy standby');
++
++$primary->safe_psql('postgres', q{
++	UPDATE recovery_update SET n = 2;
++	UPDATE recovery_extend SET n = 2;
++	UPDATE recovery_dense SET n = n + 1;
++	UPDATE recovery_dense_unfrozen SET n = n + 1;
++});
++$primary->wait_for_catchup($standby);
++is($standby->safe_psql('postgres', 'SELECT n FROM recovery_update'), '2',
++	'replay restores converted heap despite full_page_writes=off');
++is($standby->safe_psql('postgres', 'SELECT n FROM recovery_extend'), '2',
++	'replay extends missing heap and restores converted page');
++is($standby->safe_psql('postgres', 'SELECT sum(n) FROM recovery_dense'), '5',
++	'dense legacy conversion and double-xmax update replay correctly');
++is($standby->safe_psql('postgres', 'SELECT sum(n) FROM recovery_dense_unfrozen'), '5',
++	'dense legacy conversion can check commit status in the reading backend');
++# Subsequent records use the normal relcache-less read path on current pages.
++$standby->stop;
++$primary->safe_psql('postgres', q{
++	UPDATE recovery_update SET n = 3;
++	UPDATE recovery_extend SET n = 3;
++});
++$standby->start;
++$primary->wait_for_catchup($standby);
++is($standby->safe_psql('postgres', 'SELECT n FROM recovery_update'), '3',
++	'incremental redo reads converted page without relcache after restart');
++
++# Force the generic extension fallback on an already existing replayed block.
++# Recovery itself is the only writer and normally extends missing blocks
++# directly; this helper explicitly selects BMR_SMGR and the no-extension path.
++$standby->stop;
++$standby->start;
++is($standby->safe_psql('postgres',
++	q{SELECT test_xid64_extension_fallback('recovery_extend')}), '5',
++	'relcache-less extension fallback reads a replayed page after restart');
++
++$primary->safe_psql('postgres',
++	'VACUUM (DISABLE_PAGE_SKIPPING) recovery_visible');
++$primary->wait_for_catchup($standby);
++is($standby->safe_psql('postgres', 'SELECT n FROM recovery_visible'), '1',
++	'visibility WAL restores converted heap with checksums and hints disabled');
++$standby->stop;
++$primary->stop;
++done_testing();
+diff --git a/src/bin/pg_upgrade/t/010_xid32_to_xid64_createdb.pl b/src/bin/pg_upgrade/t/010_xid32_to_xid64_createdb.pl
+new file mode 100644
+index 00000000000..60229a5f398
+--- /dev/null
++++ b/src/bin/pg_upgrade/t/010_xid32_to_xid64_createdb.pl
+@@ -0,0 +1,135 @@
++# Copyright (c) 2026, Tantor Labs
++# CREATE DATABASE must pass source pg_class metadata to backend conversion.
++use strict;
++use warnings FATAL => 'all';
++
++use PostgreSQL::Test::Cluster;
++use PostgreSQL::Test::Utils;
++use Test::More;
++
++plan skip_all => 'oldinstall is required for xid32 to xid64 test'
++  unless defined $ENV{oldinstall};
++
++my $oldnode = PostgreSQL::Test::Cluster->new(
++	'createdb_old', install_path => $ENV{oldinstall});
++$oldnode->init(force_initdb => 1, xid32 => 1);
++$oldnode->append_conf('postgresql.conf', 'autovacuum = off');
++$oldnode->start;
++plan skip_all => 'source cluster must use xid32'
++  unless $oldnode->safe_psql('postgres',
++	q{SELECT typlen FROM pg_type WHERE oid = 'xid'::regtype}) eq '4';
++
++# PG18 enables checksums by default; older sources may need enabling.
++if ($oldnode->safe_psql('postgres', 'SHOW data_checksums') eq 'off')
++{
++	$oldnode->stop;
++	$oldnode->command_ok([
++		$oldnode->installed_command('pg_checksums'), '--enable', '--no-sync',
++		'--pgdata' => $oldnode->data_dir
++	], 'enable source checksums to match the target cluster');
++	$oldnode->start;
++}
++
++my $newnode = PostgreSQL::Test::Cluster->new('createdb_new');
++$newnode->init;
++$newnode->append_conf('postgresql.conf', qq{
++autovacuum = off
++autovacuum_freeze_max_age = 1000000000000
++autovacuum_multixact_freeze_max_age = 1000000000000
++});
++$newnode->start;
++my $target_size = $newnode->safe_psql('postgres',
++	q{SELECT typlen FROM pg_type WHERE oid = 'xid'::regtype});
++$newnode->stop;
++plan skip_all => 'target cluster must use xid64' unless $target_size eq '8';
++
++# Each case gets an independent source database, keeping its old-format
++# physical pages untouched by reads performed in the preceding case.
++my @cases;
++for my $method ('sync', 'worker')
++{
++	for my $strategy ('WAL_LOG', 'FILE_COPY')
++	{
++		my $source = 'source_' . $method . '_' . lc($strategy);
++		push @cases, [$method, $strategy, $source];
++		$oldnode->safe_psql('postgres', "CREATE DATABASE $source");
++		$oldnode->safe_psql($source, q{
++			CREATE TABLE payload (id int PRIMARY KEY, body text);
++			ALTER TABLE payload ALTER COLUMN body SET STORAGE EXTERNAL;
++			INSERT INTO payload
++				SELECT g, repeat(md5(g::text), 400) FROM generate_series(1, 30) g;
++			CREATE MATERIALIZED VIEW summary AS SELECT count(*) AS n FROM payload;
++			CREATE SEQUENCE seq;
++			CREATE UNLOGGED TABLE unlogged_payload AS SELECT 42 AS n;
++			SELECT lo_from_bytea(90001, decode(repeat('ab', 16000), 'hex'));
++			CHECKPOINT;
++		});
++	}
++}
++
++# Prepare template1 for the default CREATE DATABASE command below.
++# Store a large object and flush its pg_largeobject pages to disk before
++# upgrade. pg_upgrade physically transfers those old-format pages, while
++# reconstructing pg_class in the new format. Later, CREATE DATABASE default_copy
++# uses template1 by default and reads these pages through the WAL_LOG copy path,
++# triggering conversion without relcache.
++$oldnode->safe_psql('template1', q{
++	SELECT lo_from_bytea(90002, decode(repeat('cd', 8000), 'hex'));
++	CHECKPOINT;
++});
++$oldnode->stop;
++
++command_ok([
++	$newnode->installed_command('pg_upgrade'), '--no-sync',
++	'--old-datadir' => $oldnode->data_dir,
++	'--new-datadir' => $newnode->data_dir,
++	'--old-bindir' => $oldnode->config_data('--bindir'),
++	'--new-bindir' => $newnode->config_data('--bindir'),
++	'--socketdir' => $newnode->host,
++	'--old-port' => $oldnode->port,
++	'--new-port' => $newnode->port,
++	$ENV{PG_TEST_PG_UPGRADE_MODE} || '--copy'
++], 'upgrade cluster with large objects in template1 and custom templates');
++
++$newnode->append_conf('postgresql.conf', 'io_method = worker');
++$newnode->start;
++my ($ret, $stdout, $stderr) = $newnode->psql('postgres',
++	'CREATE DATABASE default_copy');
++is($ret, 0, 'default CREATE DATABASE converts upgraded template1 large objects')
++  or diag("stdout:\n$stdout\nstderr:\n$stderr");
++if ($ret == 0)
++{
++	is($newnode->safe_psql('default_copy',
++		q{SELECT lo_get(90002) = decode(repeat('cd', 8000), 'hex')}),
++		't', 'default database preserves template1 large object');
++}
++
++for my $case (@cases)
++{
++	my ($method, $strategy, $source) = @$case;
++	my $destination = $source . '_copy';
++	# Clear shared_buffers so a prior cache hit cannot mask missing context.
++	$newnode->stop;
++	$newnode->append_conf('postgresql.conf', "io_method = $method");
++	$newnode->start;
++	($ret, $stdout, $stderr) = $newnode->psql('postgres',
++		"CREATE DATABASE $destination TEMPLATE $source STRATEGY $strategy");
++	is($ret, 0, "CREATE DATABASE $strategy with io_method=$method")
++	  or diag("stdout:\n$stdout\nstderr:\n$stderr");
++	next if $ret != 0;
++	is($newnode->safe_psql($destination, q{
++		SELECT count(*), bool_and(body = repeat(md5(id::text), 400)) FROM payload;
++		SELECT lo_get(90001) = decode(repeat('ab', 16000), 'hex');
++		SELECT n FROM summary;
++		SELECT nextval('seq');
++		SELECT n FROM unlogged_payload;
++	}), "30|t\nt\n30\n1\n42", 'heap, TOAST, large object, matview, sequence and unlogged data survive');
++	# Check persistence, rather than just the newly populated buffer cache.
++	$newnode->stop;
++	$newnode->start;
++	is($newnode->safe_psql($destination,
++		q{SELECT lo_get(90001) = decode(repeat('ab', 16000), 'hex')}),
++		't', 'copied large object remains readable after restart');
++}
++$newnode->stop;
++done_testing();
+diff --git a/src/bin/pg_upgrade/t/011_xid32_to_xid64_double_xmax.pl b/src/bin/pg_upgrade/t/011_xid32_to_xid64_double_xmax.pl
+new file mode 100644
+index 00000000000..aad41b1fdf8
+--- /dev/null
++++ b/src/bin/pg_upgrade/t/011_xid32_to_xid64_double_xmax.pl
+@@ -0,0 +1,216 @@
++# Copyright (c) 2026, Tantor Labs
++#
++# TTDB-2707: 32-bit -> 64-bit XID upgrade leaves duplicate PRIMARY KEY rows
++# after UPDATE + VACUUM.
++#
++# When a 32-bit XID cluster is converted to the 64-bit XID format, a heap page
++# that has less than MAXALIGN(sizeof(HeapPageSpecialData)) bytes of free space
++# cannot hold the page special area, so it is converted to the "double xmax"
++# layout instead.  A double xmax page reports pd_special == BLCKSZ; its tuples
++# no longer store a short xmin at all -- t_xmin and t_xmax are reused to keep
++# the full 64-bit xmax and the xmin is implicitly frozen.
++#
++# HeapTupleSatisfiesVacuumHorizon() guarded HeapTupleCopyXidsFromPage() with
++# "if (PageGetSpecialSize(page))", intending to skip only unconverted 32-bit
++# pages.  A double xmax page reports PageGetSpecialSize() == 0 as well, so its
++# tuple XIDs were never decoded: t_xmin/t_xmax were left at whatever the caller
++# had.  VACUUM therefore resolved the updating XID from a bogus value, decided
++# the (committed) update had aborted, set HEAP_XMAX_INVALID and kept the
++# superseded tuple as HEAPTUPLE_LIVE.  Both row versions stay visible, which
++# shows up as duplicated PRIMARY KEY values.
++#
++# A SELECT between UPDATE and VACUUM hides the bug: the MVCC path does decode
++# double xmax pages, so it records HEAP_XMAX_COMMITTED and VACUUM no longer
++# has to resolve the status itself.
++
++use strict;
++use warnings FATAL => 'all';
++
++use PostgreSQL::Test::Cluster;
++use PostgreSQL::Test::Utils;
++use Test::More;
++
++plan skip_all => 'oldinstall is required for xid32 to xid64 test'
++  unless defined $ENV{oldinstall};
++
++my $mode = $ENV{PG_TEST_PG_UPGRADE_MODE} || '--copy';
++
++my $oldnode = PostgreSQL::Test::Cluster->new(
++	'dxmax_old',
++	install_path => $ENV{oldinstall});
++
++$oldnode->init(
++	force_initdb => 1,
++	xid32 => 1);
++$oldnode->append_conf('postgresql.conf', "autovacuum = off\n");
++
++$oldnode->start;
++
++my $old_xid_size = $oldnode->safe_psql(
++	'postgres',
++	q{
++        SELECT typlen
++        FROM pg_type
++        WHERE typname = 'xid'
++          AND typnamespace = 'pg_catalog'::regnamespace
++    });
++
++plan skip_all => "source cluster is not xid32 (xid size $old_xid_size)"
++  unless $old_xid_size eq '4';
++
++# PG18 enables checksums by default; older sources may need enabling.
++if ($oldnode->safe_psql('postgres', 'SHOW data_checksums') eq 'off')
++{
++	$oldnode->stop;
++	$oldnode->command_ok(
++		[
++			$oldnode->installed_command('pg_checksums'),
++			'--enable',
++			'--no-sync',
++			'--pgdata' => $oldnode->data_dir
++		],
++		'data checksums enabled in old cluster');
++	$oldnode->start;
++}
++
++my $newnode = PostgreSQL::Test::Cluster->new('dxmax_new');
++$newnode->init;
++$newnode->append_conf('postgresql.conf', qq{
++autovacuum = off
++autovacuum_freeze_max_age = 1000000000000
++autovacuum_multixact_freeze_max_age = 1000000000000
++});
++$newnode->start;
++
++my $new_xid_size = $newnode->safe_psql(
++	'postgres',
++	q{
++        SELECT typlen
++        FROM pg_type
++        WHERE typname = 'xid'
++          AND typnamespace = 'pg_catalog'::regnamespace
++    });
++
++$newnode->stop;
++
++plan skip_all => "target cluster is not xid64 (xid size $new_xid_size)"
++  unless $new_xid_size eq '8';
++
++# Reproduce the source table from the report.  Variable-width rows pack pages
++# almost exactly, so a good fraction of them end up with less than 16 bytes of
++# free space and are converted to the double xmax layout.
++$oldnode->safe_psql(
++	'postgres',
++	q{
++        CREATE TABLE t (
++            id uuid PRIMARY KEY,
++            code varchar(25),
++            value numeric(16,8),
++            min_amount numeric(17,2),
++            max_amount numeric(17,2),
++            start_date date,
++            end_date date,
++            effective_date timestamptz,
++            is_actual boolean,
++            entity_version int DEFAULT 1,
++            id_in_2230 uuid,
++            update_time timestamp
++        );
++
++        INSERT INTO t
++        SELECT md5('id' || g)::uuid,
++               left(md5(g::text), 1 + (g * 7) % 25),
++               round((g % 1000) + (g % 97) / 97.0, g % 8),
++               CASE WHEN g % 3 = 0 THEN NULL ELSE 100 END,
++               CASE WHEN g % 5 = 0 THEN NULL ELSE 999999.99 END,
++               date '2025-11-25', date '2026-05-24',
++               timestamptz '2025-11-25 04:56:16+03', true, 1,
++               CASE WHEN g % 2 = 0 THEN md5('ext' || g)::uuid END,
++               CASE WHEN g % 4 = 0 THEN NULL ELSE timestamp '2025-11-25 01:56:16' END
++        FROM generate_series(1, 50000) g;
++
++        VACUUM FREEZE t;
++    });
++
++is(
++	$oldnode->safe_psql('postgres', 'SELECT count(*) FROM t'),
++	'50000',
++	'source table populated');
++
++$oldnode->stop;
++
++my $oldbindir = $oldnode->config_data('--bindir');
++my $newbindir = $newnode->config_data('--bindir');
++
++command_ok(
++	[
++		$newnode->installed_command('pg_upgrade'),
++		'--no-sync',
++		'--old-datadir' => $oldnode->data_dir,
++		'--new-datadir' => $newnode->data_dir,
++		'--old-bindir' => $oldbindir,
++		'--new-bindir' => $newbindir,
++		'--socketdir' => $newnode->host,
++		'--old-port' => $oldnode->port,
++		'--new-port' => $newnode->port,
++		$mode,
++	],
++	'upgrade xid32 cluster with nearly-full heap pages');
++
++$newnode->start;
++
++# The reproducer from the report: update a few rows that live on the heap pages
++# the converter places in the double xmax layout, then VACUUM.
++#
++# Only a part of each such page is superseded on purpose.  Updating every row
++# of the table hides the bug, because the whole page then becomes dead and
++# pruning can throw the line pointers away without having to classify each
++# tuple.  Taking the first tuple of each early page keeps those pages partially
++# dead and does not depend on one particular page number.
++$newnode->safe_psql(
++	'postgres',
++	q{
++        UPDATE t SET entity_version = entity_version + 1
++            WHERE (ctid::text::point)[0]::int BETWEEN 2 AND 200
++              AND (ctid::text::point)[1]::int = 1;
++    });
++
++# Verify that this run exercises genuine double-xmax pages, without a heap
++# SELECT that could set commit hints and hide the original VACUUM defect.
++$newnode->safe_psql('postgres', 'CHECKPOINT');
++my $path = $newnode->safe_psql('postgres',
++	q{SELECT pg_relation_filepath('t')});
++my $blcksz = $newnode->safe_psql('postgres', 'SHOW block_size');
++open(my $fh, '<:raw', $newnode->data_dir . '/' . $path) or die "open $path: $!";
++my $double_pages = 0;
++while (read($fh, my $page, $blcksz) == $blcksz)
++{
++	my ($special, $size_version) = unpack('SS', substr($page, 16, 4));
++	$double_pages++ if $special == $blcksz && ($size_version & 0xff) == 5;
++}
++close($fh);
++ok($double_pages > 0, 'updated table contains converted double-xmax pages');
++
++$newnode->safe_psql('postgres', 'VACUUM t');
++
++is(
++	$newnode->safe_psql('postgres', 'SELECT count(*) FROM t'),
++	'50000',
++	'VACUUM removed the superseded row versions');
++
++# Principal regression assertion: without the bug this is 0.  The buggy code
++# reports one duplicate per row that lived on a converted double xmax page.
++is(
++	$newnode->safe_psql(
++		'postgres',
++		q{
++        SELECT count(*) FROM (
++            SELECT id FROM t GROUP BY id HAVING count(*) > 1
++        ) d
++    }),
++	'0',
++	'no duplicate PRIMARY KEY values after UPDATE + VACUUM');
++
++$newnode->stop;
++
++done_testing();
+diff --git a/src/bin/pg_upgrade/t/012_xid32_to_xid64_hot.pl b/src/bin/pg_upgrade/t/012_xid32_to_xid64_hot.pl
+new file mode 100644
+index 00000000000..2ae32924dc4
+--- /dev/null
++++ b/src/bin/pg_upgrade/t/012_xid32_to_xid64_hot.pl
+@@ -0,0 +1,156 @@
++# Copyright (c) 2026, Tantor Labs
++# Legacy conversion must preserve index roots while pruning source HOT chains.
++use strict;
++use warnings FATAL => 'all';
++use PostgreSQL::Test::Cluster;
++use PostgreSQL::Test::Utils;
++use Test::More;
++
++plan skip_all => 'oldinstall is required for legacy HOT conversion test'
++  unless defined $ENV{oldinstall};
++my $old = PostgreSQL::Test::Cluster->new('hot_old',
++	install_path => $ENV{oldinstall});
++$old->init(force_initdb => 1, xid32 => 1);
++$old->append_conf('postgresql.conf', 'autovacuum = off');
++$old->start;
++plan skip_all => 'source must use xid32'
++  unless $old->safe_psql('postgres',
++	q{SELECT typlen FROM pg_type WHERE oid = 'xid'::regtype}) == 4;
++if ($old->safe_psql('postgres', 'SHOW data_checksums') eq 'on')
++{
++	$old->stop;
++	$old->command_ok([$old->installed_command('pg_checksums'), '--disable',
++		'--no-sync', '--pgdata' => $old->data_dir], 'disable source checksums');
++	$old->start;
++}
++my @cases = (
++	['hot_live', 'c'], ['hot_redirect', 'd'], ['hot_deleted', ''],
++	['hot_abort_update', 'a'], ['hot_abort_insert', '']);
++my %paths;
++for my $case (@cases)
++{
++	my ($table, $value) = @$case;
++	$old->safe_psql('postgres', qq{
++		CREATE TABLE $table(id int PRIMARY KEY, payload text);
++		ALTER TABLE $table ALTER COLUMN payload SET STORAGE PLAIN;
++	});
++	$old->safe_psql('postgres', "INSERT INTO $table VALUES (1, 'a')")
++	  unless $table eq 'hot_abort_insert';
++	if ($table eq 'hot_redirect')
++	{
++		$old->safe_psql('postgres', "UPDATE $table SET payload = 'b' WHERE id = 1");
++		$old->safe_psql('postgres', "VACUUM $table");
++	}
++	# Retain old versions while the source page is filled. No heap SELECT may
++	# run after this snapshot ends: on-access pruning would hide the defect.
++	my $hold = $old->background_psql('postgres');
++	$hold->query_safe("BEGIN ISOLATION LEVEL REPEATABLE READ; SELECT count(*) FROM $table");
++	if ($table eq 'hot_abort_insert')
++	{
++		$old->safe_psql('postgres', qq{
++			BEGIN; INSERT INTO $table VALUES (1, 'a');
++			UPDATE $table SET payload = 'b' WHERE id = 1;
++			UPDATE $table SET payload = 'c' WHERE id = 1; ROLLBACK;
++		});
++	}
++	elsif ($table eq 'hot_abort_update')
++	{
++		$old->safe_psql('postgres', qq{
++			BEGIN; UPDATE $table SET payload = 'b' WHERE id = 1;
++			UPDATE $table SET payload = 'c' WHERE id = 1; ROLLBACK;
++		});
++	}
++	else
++	{
++		my ($first, $second) = $table eq 'hot_redirect' ? ('c', 'd') : ('b', 'c');
++		$old->safe_psql('postgres', "UPDATE $table SET payload = '$first' WHERE id = 1");
++		$old->safe_psql('postgres', "UPDATE $table SET payload = '$second' WHERE id = 1");
++		$old->safe_psql('postgres', "DELETE FROM $table WHERE id = 1")
++		  if $table eq 'hot_deleted';
++	}
++	# PLAIN text retains its four-byte varlena header, including for 'a'.
++	my $filler = $table eq 'hot_redirect' ? 7984 : 8000;
++	my $slot = $table eq 'hot_redirect' ? 5 : 4;
++	$old->safe_psql('postgres', "INSERT INTO $table VALUES (2, repeat('z', $filler))");
++	is($old->safe_psql('postgres', "SELECT ctid FROM $table WHERE id = 2"),
++		"(0,$slot)", "$table filler shares the original HOT page");
++	$paths{$table} = $old->safe_psql('postgres',
++		"SELECT pg_relation_filepath('$table')");
++	$hold->quit;
++}
++$old->stop;
++for my $case (@cases)
++{
++	my $table = $case->[0];
++	open(my $fh, '<:raw', $old->data_dir . '/' . $paths{$table}) or die $!;
++	read($fh, my $header, 24) == 24 or die 'short page header';
++	close($fh);
++	my ($lower, $upper) = unpack('SS', substr($header, 12, 4));
++	cmp_ok($upper - $lower, '<', 16, "$table must enter conversion's dense-page path");
++}
++
++my $new = PostgreSQL::Test::Cluster->new('hot_primary');
++$new->init(allows_streaming => 1, extra => ['--no-data-checksums']);
++$new->append_conf('postgresql.conf', qq{
++autovacuum = off
++autovacuum_freeze_max_age = 1000000000000
++autovacuum_multixact_freeze_max_age = 1000000000000
++io_method = worker
++full_page_writes = off
++wal_log_hints = off
++wal_consistency_checking = all
++});
++command_ok([
++	$new->installed_command('pg_upgrade'), '--no-sync', '--copy',
++	'--old-datadir' => $old->data_dir, '--new-datadir' => $new->data_dir,
++	'--old-bindir' => $old->config_data('--bindir'),
++	'--new-bindir' => $new->config_data('--bindir'),
++	'--socketdir' => $new->host, '--old-port' => $old->port,
++	'--new-port' => $new->port], 'upgrade source HOT chains');
++$new->backup_fs_cold('before_conversion');
++my $standby = PostgreSQL::Test::Cluster->new('hot_standby');
++$standby->init_from_backup($new, 'before_conversion', has_streaming => 1);
++$new->start;
++$standby->start;
++for my $case (@cases)
++{
++	my ($table, $value) = @$case;
++	like($new->safe_psql('postgres', qq{
++		SET enable_seqscan = off;
++		EXPLAIN SELECT payload FROM $table WHERE id = 1;
++	}), qr/Index Scan/, "$table actually uses the preserved primary-key index");
++	is($new->safe_psql('postgres', qq{
++		SET enable_seqscan = off;
++		SELECT payload FROM $table WHERE id = 1;
++	}), $value, "$table index reaches the surviving row after conversion");
++	is($new->safe_psql('postgres', qq{
++		SET enable_indexscan = off; SET enable_bitmapscan = off;
++		SELECT payload FROM $table WHERE id = 1;
++	}), $value, "$table sequential scan agrees");
++	# Exercise incremental WAL after conversion already logged the rewritten root.
++	$new->safe_psql('postgres', "UPDATE $table SET payload = repeat('q', length(payload)) WHERE id = 2");
++	$new->safe_psql('postgres', "UPDATE $table SET payload = 'new' WHERE id = 1")
++	  if length $value;
++}
++$new->wait_for_catchup($standby);
++for my $case (@cases)
++{
++	my ($table, $value) = @$case;
++	is($standby->safe_psql('postgres', qq{
++		SET enable_seqscan = off;
++		SELECT payload FROM $table WHERE id = 1;
++	}), length($value) ? 'new' : '', "$table index and HOT updates survive standby replay");
++}
++$standby->stop;
++$new->stop('immediate');
++$new->start;
++for my $case (@cases)
++{
++	my ($table, $value) = @$case;
++	is($new->safe_psql('postgres', qq{
++		SET enable_seqscan = off;
++		SELECT payload FROM $table WHERE id = 1;
++	}), length($value) ? 'new' : '', "$table index survives primary crash recovery");
++}
++$new->stop;
++done_testing();
+diff --git a/src/bin/pg_upgrade/version.c b/src/bin/pg_upgrade/version.c
+index 047670d4acb..70bdf3b2dbb 100644
+--- a/src/bin/pg_upgrade/version.c
++++ b/src/bin/pg_upgrade/version.c
+@@ -9,6 +9,7 @@
+ 
+ #include "postgres_fe.h"
+ 
++#include "access/transam.h"
+ #include "fe_utils/string_utils.h"
+ #include "pg_upgrade.h"
+ 
+@@ -226,3 +227,235 @@ report_extension_updates(ClusterInfo *cluster)
+ 	else
+ 		check_ok();
+ }
++
++/*
++ * invalidate_indexes()
++ *	Invalidates all indexes satisfying given predicate.
++ */
++static void
++invalidate_indexes(ClusterInfo *cluster, bool check_mode,
++				   const char *name, const char *pred)
++{
++	int			dbnum;
++	FILE	   *script = NULL;
++	bool		found = false;
++	char		output_path[MAXPGPATH];
++
++	snprintf(output_path, sizeof(output_path), "reindex_%s.sql", name);
++
++	prep_status("Checking for %s indexes", name);
++
++	for (dbnum = 0; dbnum < cluster->dbarr.ndbs; dbnum++)
++	{
++		PGresult   *res;
++		bool		db_used = false;
++		int			ntups;
++		int			rowno;
++		int			i_nspname,
++					i_relname;
++		DbInfo	   *active_db = &cluster->dbarr.dbs[dbnum];
++		PGconn	   *conn = connectToServer(cluster, active_db->db_name);
++
++
++		/*
++		 * Find indexes satisfying predicate.
++		 *
++		 * System indexes (with oids < FirstNormalObjectId) are excluded from
++		 * the search as they are recreated in the new cluster during initdb.
++		 */
++		res = executeQueryOrDie(
++								conn,
++								"SELECT n.nspname, c.relname, i.indexrelid "
++								"FROM	pg_catalog.pg_class c, "
++								"		pg_catalog.pg_index i, "
++								"		pg_catalog.pg_am a, "
++								"		pg_catalog.pg_namespace n "
++								"WHERE	i.indexrelid = c.oid AND "
++								"		c.relam = a.oid AND "
++								"		c.relnamespace = n.oid AND "
++								"		i.indexrelid >= '%u'::pg_catalog.oid AND "
++								"		%s "
++								"ORDER BY i.indexrelid ASC",
++								FirstNormalObjectId,
++								pred);
++
++		ntups = PQntuples(res);
++		i_nspname = PQfnumber(res, "nspname");
++		i_relname = PQfnumber(res, "relname");
++		for (rowno = 0; rowno < ntups; rowno++)
++		{
++			found = true;
++			if (!check_mode)
++			{
++				if (script == NULL && (script = fopen_priv(output_path, "w")) == NULL)
++					pg_fatal("could not open file \"%s\": %m", output_path);
++				if (!db_used)
++				{
++					PQExpBufferData connectbuf;
++
++					initPQExpBuffer(&connectbuf);
++					appendPsqlMetaConnect(&connectbuf, active_db->db_name);
++					fputs(connectbuf.data, script);
++					termPQExpBuffer(&connectbuf);
++					db_used = true;
++				}
++				fprintf(script, "REINDEX INDEX %s.%s;\n",
++						quote_identifier(PQgetvalue(res, rowno, i_nspname)),
++						quote_identifier(PQgetvalue(res, rowno, i_relname)));
++			}
++		}
++
++		PQclear(res);
++
++		if (!check_mode && db_used)
++		{
++			/*
++			 * Mark indexes satisfying predicate as invalid.
++			 *
++			 * System indexes (with oids < FirstNormalObjectId) are excluded
++			 * from the search (see above).
++			 */
++			PQclear(executeQueryOrDie(
++									  conn,
++									  "UPDATE pg_catalog.pg_index i "
++									  "SET	indisvalid = false "
++									  "FROM	pg_catalog.pg_class c, "
++									  "		pg_catalog.pg_am a, "
++									  "		pg_catalog.pg_namespace n "
++									  "WHERE	i.indexrelid = c.oid AND "
++									  "		c.relam = a.oid AND "
++									  "		c.relnamespace = n.oid AND "
++									  "		i.indexrelid >= '%u'::pg_catalog.oid AND "
++									  "		%s",
++									  FirstNormalObjectId,
++									  pred));
++		}
++
++		PQfinish(conn);
++	}
++
++	if (script)
++		fclose(script);
++
++	if (found)
++	{
++		report_status(PG_WARNING, "warning");
++		if (check_mode)
++			pg_log(PG_WARNING, "\n"
++				   "Your installation contains %s indexes.  These indexes have different\n"
++				   "internal formats between your old and new clusters, so they must be\n"
++				   "reindexed with the REINDEX command.  After upgrading, you will be given\n"
++				   "REINDEX instructions.",
++				   name);
++		else
++			pg_log(PG_WARNING, "\n"
++				   "Your installation contains %s indexes.  These indexes have different\n"
++				   "internal formats between your old and new clusters, so they must be\n"
++				   "reindexed with the REINDEX command.  The file\n"
++				   "    %s\n"
++				   "when executed by psql by the database superuser will recreate all invalid\n"
++				   "indexes; until then, none of these indexes will be used.",
++				   name,
++				   output_path);
++	}
++	else
++		check_ok();
++}
++
++/*
++ * invalidate_spgist_indexes()
++ *	32bit -> 64bit
++ *	SP-GIST contains xids.
++ */
++void
++invalidate_spgist_indexes(ClusterInfo *cluster, bool check_mode)
++{
++	invalidate_indexes(cluster, check_mode, "spgist", "a.amname = 'spgist'");
++}
++
++/*
++ * invalidate_gin_indexes()
++ *	32bit -> 64bit
++ *	Gin indexes contains xids in deleted pages.
++ */
++void
++invalidate_gin_indexes(ClusterInfo *cluster, bool check_mode)
++{
++	invalidate_indexes(cluster, check_mode, "gin", "a.amname = 'gin'");
++}
++
++/*
++ * invalidate_external_indexes()
++ *	Generate script to REINDEX non standard external indexes (like RUM etc)
++ */
++void
++invalidate_external_indexes(ClusterInfo *cluster, bool check_mode)
++{
++	invalidate_indexes(cluster, check_mode, "external",
++					   "NOT a.amname IN ('btree', 'hash', 'gist', 'gin', 'spgist', 'brin')");
++}
++
++/*
++ * Identify XID storage using the supplied PG18 detection rules, extended to
++ * PG19.  A PostgreSQL major version alone cannot identify an xid64 build.
++ */
++bool
++cluster_is_xid64(const ClusterInfo *cluster)
++{
++	uint32		major_version = GET_MAJOR_VERSION(cluster->major_version);
++
++	/* XID64 first appeared in Tantor 15. */
++	if (major_version < 1500)
++		return false;
++
++	switch (major_version)
++	{
++		case 1500:
++		case 1600:
++		case 1700:
++		case 1900:
++			if (cluster->xid_sz != 4 && cluster->xid_sz != 8)
++				pg_fatal("unsupported xid type size: %d", cluster->xid_sz);
++			return cluster->xid_sz == 8;
++		case 1800:
++		{
++			uint32		prefix = cluster->controldata.cat_ver / 10000000;
++
++			/* Tantor 18 uses the 64 prefix for its xid64 catalog. */
++			if (prefix != 20 && prefix != 64)
++				pg_fatal("transaction ID format is not defined for catalog version %u",
++						 cluster->controldata.cat_ver);
++			return prefix == 64;
++		}
++		default:
++			pg_fatal("transaction ID format is not defined for major version %u",
++					 major_version);
++	}
++}
++
++bool
++cluster_is_xid32(const ClusterInfo *cluster)
++{
++	return !cluster_is_xid64(cluster);
++}
++
++/*
++ * XID and MultiXactOffset widths must be identified independently.  Vanilla
++ * PostgreSQL widened offsets in v19 without widening XIDs.  The supported
++ * xid64 builds already have eight-byte offsets, including pre-v19 builds.
++ */
++bool
++cluster_has_64bit_multixact_offsets(const ClusterInfo *cluster)
++{
++	if (cluster_is_xid64(cluster))
++		return true;
++
++	return cluster->controldata.cat_ver >= MULTIXACTOFFSET_FORMATCHANGE_CAT_VER;
++}
++
++/* User xid columns cannot be copied across a change in their storage size. */
++bool
++xid_check_applicable(ClusterInfo *cluster)
++{
++	return cluster_is_xid32(cluster);
++}
+diff --git a/src/include/access/xloginsert.h b/src/include/access/xloginsert.h
+index 91dfbd5627f..e7f0aa54d8a 100644
+--- a/src/include/access/xloginsert.h
++++ b/src/include/access/xloginsert.h
+@@ -39,6 +39,7 @@
+ #define REGBUF_KEEP_DATA	0x10	/* include data even if a full-page image
+ 									 * is taken */
+ #define REGBUF_NO_CHANGE	0x20	/* intentionally register clean buffer */
++#define REGBUF_CONVERTED	0x40	/* buffer had format convertion */
+ 
+ /* prototypes for public functions in xloginsert.c: */
+ extern void XLogBeginInsert(void);
+diff --git a/src/include/storage/aio_types.h b/src/include/storage/aio_types.h
+index 17b59aeed7c..bf6dfd82df7 100644
+--- a/src/include/storage/aio_types.h
++++ b/src/include/storage/aio_types.h
+@@ -16,6 +16,7 @@
+ #define AIO_TYPES_H
+ 
+ #include "storage/block.h"
++#include "storage/relation_extra_data.h"
+ #include "storage/relfilelocator.h"
+ 
+ 
+@@ -65,6 +66,7 @@ typedef union PgAioTargetData
+ 		RelFileLocator rlocator;	/* physical relation identifier */
+ 		BlockNumber blockNum;	/* blknum relative to begin of reln */
+ 		BlockNumber nblocks;
++		RelationExtraData relextradata;
+ 		ForkNumber	forkNum:8;	/* don't waste 4 byte for four values */
+ 		bool		is_temp:1;	/* proc can be inferred by owning AIO */
+ 		bool		skip_fsync:1;
+diff --git a/src/include/storage/buf_internals.h b/src/include/storage/buf_internals.h
+index a23abf14f8f..77aee0adacf 100644
+--- a/src/include/storage/buf_internals.h
++++ b/src/include/storage/buf_internals.h
+@@ -36,7 +36,7 @@
+  * State of the buffer itself (in order):
+  * - 18 bits refcount
+  * - 4 bits usage count
+- * - 12 bits of flags
++ * - 13 bits of flags
+  * - 18 bits share-lock count
+  * - 1 bit share-exclusive locked
+  * - 1 bit exclusive locked
+@@ -48,7 +48,7 @@
+  */
+ #define BUF_REFCOUNT_BITS 18
+ #define BUF_USAGECOUNT_BITS 4
+-#define BUF_FLAG_BITS 12
++#define BUF_FLAG_BITS 13
+ #define BUF_LOCK_BITS (18+2)
+ 
+ StaticAssertDecl(BUF_REFCOUNT_BITS + BUF_USAGECOUNT_BITS + BUF_FLAG_BITS + BUF_LOCK_BITS <= 64,
+@@ -114,7 +114,8 @@ StaticAssertDecl(BUF_REFCOUNT_BITS + BUF_USAGECOUNT_BITS + BUF_FLAG_BITS + BUF_L
+ #define BM_IO_IN_PROGRESS			BUF_DEFINE_FLAG( 4)
+ /* previous I/O failed */
+ #define BM_IO_ERROR					BUF_DEFINE_FLAG( 5)
+-/* flag bit 6 is not used anymore */
++/* format conversion still requires a WAL image before becoming durable */
++#define BM_CONVERSION_NEEDS_WAL		BUF_DEFINE_FLAG( 6)
+ /* have waiter for sole pin */
+ #define BM_PIN_COUNT_WAITER			BUF_DEFINE_FLAG( 7)
+ /* must write for checkpoint */
+@@ -125,6 +126,8 @@ StaticAssertDecl(BUF_REFCOUNT_BITS + BUF_USAGECOUNT_BITS + BUF_FLAG_BITS + BUF_L
+ #define BM_LOCK_HAS_WAITERS			BUF_DEFINE_FLAG(10)
+ /* waiter for content lock has been signalled but not yet run */
+ #define BM_LOCK_WAKE_IN_PROGRESS	BUF_DEFINE_FLAG(11)
++/* physical read is complete, but normal readers must finish conversion */
++#define BM_CONVERSION_PENDING		BUF_DEFINE_FLAG(12)
+ 
+ 
+ StaticAssertDecl(MAX_BACKENDS_BITS <= BUF_REFCOUNT_BITS,
+diff --git a/src/include/storage/bufmgr.h b/src/include/storage/bufmgr.h
+index 55b59839b3e..25262feaf3b 100644
+--- a/src/include/storage/bufmgr.h
++++ b/src/include/storage/bufmgr.h
+@@ -19,6 +19,7 @@
+ #include "storage/block.h"
+ #include "storage/buf.h"
+ #include "storage/bufpage.h"
++#include "storage/relation_extra_data.h"
+ #include "storage/relfilelocator.h"
+ #include "utils/relcache.h"
+ #include "utils/snapmgr.h"
+@@ -132,6 +133,7 @@ struct ReadBuffersOperation
+ {
+ 	/* The following members should be set by the caller. */
+ 	Relation	rel;			/* optional */
++	RelationExtraData rel_extra; /* conversion context when rel is NULL */
+ 	SMgrRelation smgr;
+ 	char		persistence;
+ 	ForkNumber	forknum;
+@@ -297,7 +299,8 @@ extern void FlushRelationBuffers(Relation rel);
+ extern void FlushRelationsAllBuffers(SMgrRelation *smgrs, int nrels);
+ extern void CreateAndCopyRelationData(RelFileLocator src_rlocator,
+ 									  RelFileLocator dst_rlocator,
+-									  bool permanent);
++									  bool permanent,
++									  const RelationExtraData *rel_extra);
+ extern void FlushDatabaseBuffers(Oid dbid);
+ extern void DropRelationBuffers(SMgrRelation smgr_reln,
+ 								ForkNumber *forkNum,
+@@ -315,9 +318,15 @@ extern void BufferGetTag(Buffer buffer, RelFileLocator *rlocator,
+ 						 ForkNumber *forknum, BlockNumber *blknum);
+ 
+ extern void MarkBufferDirtyHint(Buffer buffer, bool buffer_std);
++extern void MarkBufferConversionNeedsWAL(Buffer buffer, bool needs_wal);
++extern bool BufferConversionNeedsWAL(Buffer buffer);
+ extern bool IsBufferLocked(Buffer buffer);
+ extern bool IsBufferLockedExclusive(Buffer buffer);
+ 
++extern void convert_page(RelationExtraData *rel_extra,
++						 RelFileLocator *rlocator, ForkNumber forknum,
++						 Page page, Buffer buffer, BlockNumber blocknum);
++
+ extern bool BufferSetHintBits16(uint16 *ptr, uint16 val, Buffer buffer);
+ extern bool BufferBeginSetHintBits(Buffer buffer);
+ extern void BufferFinishSetHintBits(Buffer buffer, bool mark_dirty, bool buffer_std);
+diff --git a/src/include/storage/read_stream.h b/src/include/storage/read_stream.h
+index e2dcf1be50a..9fc8a9ebe26 100644
+--- a/src/include/storage/read_stream.h
++++ b/src/include/storage/read_stream.h
+@@ -99,7 +99,8 @@ extern ReadStream *read_stream_begin_smgr_relation(int flags,
+ 												   ForkNumber forknum,
+ 												   ReadStreamBlockNumberCB callback,
+ 												   void *callback_private_data,
+-												   size_t per_buffer_data_size);
++												   size_t per_buffer_data_size,
++												   const RelationExtraData *rel_extra);
+ extern BlockNumber read_stream_pause(ReadStream *stream);
+ extern void read_stream_resume(ReadStream *stream);
+ extern void read_stream_clear_strategy(ReadStream *stream);
+diff --git a/src/include/storage/relation_extra_data.h b/src/include/storage/relation_extra_data.h
+new file mode 100644
+index 00000000000..365f61a7c45
+--- /dev/null
++++ b/src/include/storage/relation_extra_data.h
+@@ -0,0 +1,31 @@
++/*-------------------------------------------------------------------------
++ *
++ * relation_extra_data.h
++ *    data type for extra information which is needed for
++ *    conversion from Heap v4 to Heap v5
++ *
++ *
++ * Portions Copyright (c) 1996-2026, PostgreSQL Global
++ * Development Group Portions Copyright (c) 1994, Regents of
++ * the University of California
++ *
++ * src/include/storage/relation_extra_data.h
++ *
++ *-------------------------------------------------------------------------
++ */
++
++#ifndef RELATION_EXTRA_DATA_H
++#define RELATION_EXTRA_DATA_H
++
++/*
++ * Relation extra data needed for conversion
++ */
++
++typedef struct RelationExtraData
++{
++	TransactionId relfrozenxid;
++	MultiXactId	relminmxid;
++	char		relkind;
++} RelationExtraData;
++
++#endif /* RELATION_EXTRA_DATA_H */
+diff --git a/src/test/perl/PostgreSQL/Test/AdjustUpgrade.pm b/src/test/perl/PostgreSQL/Test/AdjustUpgrade.pm
+index dbddd41bfca..ac7a51c49ac 100644
+--- a/src/test/perl/PostgreSQL/Test/AdjustUpgrade.pm
++++ b/src/test/perl/PostgreSQL/Test/AdjustUpgrade.pm
+@@ -171,6 +171,10 @@ sub adjust_database_contents
+ 			'drop table public.gtest_normal_child2');
+ 	}
+ 
++	# Can't upgrade xid type
++	_add_st($result, 'regression',
++		'alter table if exists public.tab_core_types drop column if exists xid');
++
+ 	# stuff not supported from release 14
+ 	if ($old_version < 14)
+ 	{
+diff --git a/src/test/regress/expected/xid64.out b/src/test/regress/expected/xid64.out
+new file mode 100644
+index 00000000000..c30c5b57399
+--- /dev/null
++++ b/src/test/regress/expected/xid64.out
+@@ -0,0 +1,92 @@
++---
++--- Unit test for xid64 functions
++---
++-- directory paths and dlsuffix are passed to us in environment variables
++\getenv libdir PG_LIBDIR
++\getenv dlsuffix PG_DLSUFFIX
++\set regresslib :libdir '/regress' :dlsuffix
++CREATE FUNCTION xid64_test_1(rel regclass) RETURNS VOID
++    AS :'regresslib', 'xid64_test_1' LANGUAGE C STRICT;
++CREATE FUNCTION xid64_test_2(rel regclass) RETURNS VOID
++    AS :'regresslib', 'xid64_test_2' LANGUAGE C STRICT;
++CREATE FUNCTION xid64_test_double_xmax(rel regclass) RETURNS VOID
++    AS :'regresslib', 'xid64_test_double_xmax' LANGUAGE C STRICT;
++---
++--- Check page consistency after conversion
++---
++CREATE UNLOGGED TABLE test_xid64_table(a int);
++ALTER TABLE test_xid64_table SET (autovacuum_enabled = false);
++INSERT INTO test_xid64_table(a) SELECT a FROM generate_series(1, 1000) AS a;
++SELECT xid64_test_1('test_xid64_table');
++INFO:  test 1: page is converted to xid64 format
++ xid64_test_1 
++--------------
++ 
++(1 row)
++
++DROP TABLE test_xid64_table;
++---
++--- Check tuples consistency after conversion
++---
++CREATE UNLOGGED TABLE test_xid64_table(s serial, i int, t text);
++ALTER TABLE test_xid64_table SET (autovacuum_enabled = false);
++DO $$
++BEGIN
++  FOR j IN 1..20 LOOP
++    INSERT INTO test_xid64_table(i, t) VALUES (random()::int, md5(random()::text));
++    COMMIT;
++  END LOOP;
++END $$;
++DO $$
++BEGIN
++  FOR j IN 1..10 LOOP
++    DELETE FROM test_xid64_table WHERE ctid IN (SELECT ctid FROM test_xid64_table TABLESAMPLE BERNOULLI (5));
++    COMMIT;
++  END LOOP;
++END $$;
++SELECT xid64_test_2('test_xid64_table');
++ xid64_test_2 
++--------------
++ 
++(1 row)
++
++DROP TABLE test_xid64_table;
++---
++--- Check tuples consistency after conversion to double xmax (on full page)
++---
++CREATE UNLOGGED TABLE test_xid64_table(i int);
++DO $$
++BEGIN
++  FOR j IN 1..40 LOOP
++    INSERT INTO test_xid64_table SELECT i FROM generate_series(1, 100) AS i;
++    COMMIT;
++  END LOOP;
++END $$;
++SELECT xid64_test_2('test_xid64_table');
++ xid64_test_2 
++--------------
++ 
++(1 row)
++
++DROP TABLE test_xid64_table;
++CREATE UNLOGGED TABLE test_xid64_table(i text);
++INSERT INTO test_xid64_table(i) VALUES ('NNBABCDSDFGHJKLP');
++DO $$
++BEGIN
++  FOR j IN 1..40 LOOP
++    INSERT INTO test_xid64_table(i) SELECT 'A' FROM generate_series(1, 100) AS i;
++    COMMIT;
++  END LOOP;
++END $$;
++SELECT xid64_test_double_xmax('test_xid64_table');
++INFO:  test double xmax: page 0 is converted into double xmax format
++INFO:  test double xmax: end
++ xid64_test_double_xmax 
++------------------------
++ 
++(1 row)
++
++DROP TABLE test_xid64_table;
++DROP FUNCTION xid64_test_1(rel regclass);
++DROP FUNCTION xid64_test_2(rel regclass);
++DROP FUNCTION xid64_test_double_xmax(rel regclass);
+diff --git a/src/test/regress/parallel_schedule b/src/test/regress/parallel_schedule
+index 8fa0a6c47fb..105e7a2467b 100644
+--- a/src/test/regress/parallel_schedule
++++ b/src/test/regress/parallel_schedule
+@@ -28,7 +28,7 @@ test: strings md5 numerology point lseg line box path polygon circle date time t
+ # geometry depends on point, lseg, line, box, path, polygon, circle
+ # horology depends on date, time, timetz, timestamp, timestamptz, interval
+ # ----------
+-test: geometry horology tstypes regex type_sanity opr_sanity misc_sanity comments expressions unicode xid mvcc database stats_import pg_ndistinct pg_dependencies oid8 encoding euc_kr
++test: geometry horology tstypes regex type_sanity opr_sanity misc_sanity comments expressions unicode xid xid64 mvcc database stats_import pg_ndistinct pg_dependencies oid8 encoding euc_kr
+ 
+ # ----------
+ # Load huge amounts of data
+diff --git a/src/test/regress/regress.c b/src/test/regress/regress.c
+index f985615d6eb..9bf6b25b30f 100644
+--- a/src/test/regress/regress.c
++++ b/src/test/regress/regress.c
+@@ -20,6 +20,8 @@
+ #include <signal.h>
+ 
+ #include "access/detoast.h"
++#include "access/hio.h"
++#include "access/relation.h"
+ #include "access/htup_details.h"
+ #include "catalog/catalog.h"
+ #include "catalog/namespace.h"
+@@ -42,13 +44,16 @@
+ #include "port/atomics.h"
+ #include "portability/instr_time.h"
+ #include "postmaster/postmaster.h"	/* for MAX_BACKENDS */
++#include "storage/checksum.h"
++#include "storage/bufmgr.h"
+ #include "storage/spin.h"
++#include "storage/smgr.h"
+ #include "tcop/tcopprot.h"
+ #include "utils/array.h"
+ #include "utils/builtins.h"
++#include "utils/rel.h"
+ #include "utils/geo_decls.h"
+ #include "utils/memutils.h"
+-#include "utils/rel.h"
+ #include "utils/typcache.h"
+ 
+ /* define our text domain for translations */
+@@ -94,6 +99,30 @@ PG_MODULE_MAGIC_EXT(
+ 					.version = PG_VERSION
+ );
+ 
++/* Exercise an existing-block extension fallback without a Relation pointer. */
++PG_FUNCTION_INFO_V1(test_xid64_extension_fallback);
++Datum
++test_xid64_extension_fallback(PG_FUNCTION_ARGS)
++{
++	Relation	rel = relation_open(PG_GETARG_OID(0), AccessShareLock);
++	SMgrRelation smgr = RelationGetSmgr(rel);
++	char		persistence = rel->rd_rel->relpersistence;
++	Buffer		buffer;
++	int			version;
++
++	if (persistence != RELPERSISTENCE_PERMANENT ||
++		smgrnblocks(smgr, MAIN_FORKNUM) == 0)
++		elog(ERROR, "test requires a nonempty permanent relation");
++
++	relation_close(rel, NoLock);
++	buffer = ExtendBufferedRelTo(BMR_SMGR(smgr, persistence), MAIN_FORKNUM,
++								 NULL, 0, 1, RBM_NORMAL);
++	LockBuffer(buffer, BUFFER_LOCK_SHARE);
++	version = PageGetPageLayoutVersion(BufferGetPage(buffer));
++	UnlockReleaseBuffer(buffer);
++	PG_RETURN_INT32(version);
++}
++
+ 
+ /* return the point where two paths intersect, or NULL if no intersection. */
+ PG_FUNCTION_INFO_V1(interpt_pp);
+@@ -1499,3 +1528,308 @@ test_pglz_decompress(PG_FUNCTION_ARGS)
+ 	SET_VARSIZE(result, dlen + VARHDRSZ);
+ 	PG_RETURN_BYTEA_P(result);
+ }
++
++/* Supply the same by-value metadata used by AIO conversion. */
++static void
++ConvertTestPage(Relation rel, Page page, Buffer buffer, BlockNumber blocknum)
++{
++	RelationExtraData rel_extra;
++
++	rel_extra.relfrozenxid = rel->rd_rel->relfrozenxid;
++	rel_extra.relminmxid = rel->rd_rel->relminmxid;
++	rel_extra.relkind = rel->rd_rel->relkind;
++	convert_page(&rel_extra, &rel->rd_locator, MAIN_FORKNUM,
++				 page, buffer, blocknum);
++}
++
++
++static void
++CheckNewPage(char *msg, Page page)
++{
++	uint16			size;
++
++	if (PageGetPageLayoutVersion(page) != PG_PAGE_LAYOUT_VERSION)
++		elog(ERROR, "%s: page version is %d, expected %d ",
++			 msg, PageGetPageLayoutVersion(page), PG_PAGE_LAYOUT_VERSION);
++
++	size = PageGetSpecialSize(page);
++	if (size == MAXALIGN(sizeof(HeapPageSpecialData)))
++		elog(INFO, "%s: page is converted to xid64 format", msg);
++	else if (HeapPageIsDoubleXmax(page))
++		elog(INFO, "%s: page is converted into double xmax format", msg);
++	else
++		elog(ERROR, "%s: converted page has pageSpecial size %u, expected %zu",
++			 msg, size, MAXALIGN(sizeof(HeapPageSpecialData)));
++}
++
++/*
++ * Get page from relation.
++ * Make this page look like in 32-bit xid format.
++ * Convert it to 64-bit xid format.
++ * Run basic checks.
++ */
++PG_FUNCTION_INFO_V1(xid64_test_1);
++Datum
++xid64_test_1(PG_FUNCTION_ARGS)
++{
++	Oid					relid;
++	Relation			rel;
++	Buffer				buf;
++	Page				page;
++	PageHeader			hdr;
++
++	relid = PG_GETARG_OID(0);
++	rel = relation_open(relid, AccessExclusiveLock);
++	buf = ReadBuffer(rel, 0);
++	LockBuffer(buf, BUFFER_LOCK_EXCLUSIVE);
++
++	page = BufferGetPage(buf);
++	hdr = (PageHeader) page;
++
++	if (PageGetSpecialSize(page) != MAXALIGN(sizeof(HeapPageSpecialData)))
++		elog(ERROR, "page expected in new format");
++
++	if (PageGetPageLayoutVersion(page) != PG_PAGE_LAYOUT_VERSION)
++		elog(ERROR, "unknown page version (%u)",
++			 PageGetPageLayoutVersion(page));
++
++	hdr->pd_special = BLCKSZ;
++	PageSetPageSizeAndVersion(page, BLCKSZ, PG_PAGE_LAYOUT_VERSION - 1);
++	hdr->pd_checksum = pg_checksum_page((char *) page, 0);
++
++	ConvertTestPage(rel, page, buf, 0);
++	CheckNewPage("test 1", page);
++
++	UnlockReleaseBuffer(buf);
++	relation_close(rel, AccessExclusiveLock);
++
++	PG_RETURN_VOID();
++}
++
++typedef struct TupleCheckValues
++{
++	TransactionId		xmin;
++	TransactionId		xmax;
++	bool				xmin_frozen;
++} TupleCheckValues;
++
++typedef struct RelCheckValues
++{
++	TupleCheckValues   *tcv;
++	Size				ntuples;
++} RelCheckValues;
++
++static RelCheckValues
++FillRelCheckValues(Relation rel, Buffer buffer, Page page)
++{
++	RelCheckValues		set;
++	Size				n;
++
++#define DEFAULT_SET_SIZE 64
++	n = DEFAULT_SET_SIZE;
++	set.ntuples = 0;
++	set.tcv = palloc(sizeof(set.tcv[0]) * n);
++
++	{
++		OffsetNumber		maxoff,
++							offnum;
++		HeapTupleHeader		tuphdr;
++		ItemId				itemid;
++		HeapTupleData		tuple;
++		TransactionId		xmin,
++							xmax;
++
++		maxoff = PageGetMaxOffsetNumber(page);
++
++		for (offnum = FirstOffsetNumber;
++			 offnum <= maxoff;
++			 offnum = OffsetNumberNext(offnum))
++		{
++			itemid = PageGetItemId(page, offnum);
++			if (!ItemIdIsNormal(itemid))
++				continue;
++			tuphdr = (HeapTupleHeader) PageGetItem(page, itemid);
++			tuple.t_data = tuphdr;
++			tuple.t_len = ItemIdGetLength(itemid);
++			tuple.t_tableOid = RelationGetRelid(rel);
++
++			if (PageGetPageLayoutVersion(page) == PG_PAGE_LAYOUT_VERSION - 1)
++			{
++				xmin = tuphdr->t_choice.t_heap.t_xmin;
++				xmax = tuphdr->t_choice.t_heap.t_xmax;
++			}
++			else
++			{
++				HeapTupleCopyXidsFromPage(buffer, &tuple, page);
++
++				xmin = HeapTupleGetRawXmin(&tuple);
++				xmax = HeapTupleGetRawXmax(&tuple);
++			}
++
++			if (set.ntuples == n)
++			{
++				n *= 2;
++				set.tcv = repalloc(set.tcv, sizeof(set.tcv[0]) * n);
++			}
++
++			set.tcv[set.ntuples].xmin = xmin;
++			set.tcv[set.ntuples].xmax = xmax;
++			set.tcv[set.ntuples].xmin_frozen = HeapTupleHeaderXminFrozen(tuphdr);
++			set.ntuples++;
++		}
++	}
++
++	return set;
++}
++
++/*
++ * Test xmin/xmax invariant when converting page from 32bit xid to 64xid.
++ *
++ * Scenario:
++ * - enforce all relation pages to 32bit xid format, discarding pd_xid_base and
++ *   pd_multi_base
++ * - store all xmin/xmax in array
++ * - convert all the pages from relation into 64xid format
++ * - store all new xmin/xmax in array
++ * - compare old and new xmin/xmax
++ *
++ * NOTE: inital xid value does not affect test as pd_xid_base/pd_multi_base
++ * discarded.
++ */
++PG_FUNCTION_INFO_V1(xid64_test_2);
++Datum
++xid64_test_2(PG_FUNCTION_ARGS)
++{
++	Oid					relid;
++	Relation			rel;
++	RelCheckValues		before,
++						after;
++	BlockNumber			pageno,
++						npages;
++	Size				i;
++
++	relid = PG_GETARG_OID(0);
++	rel = relation_open(relid, AccessExclusiveLock);
++	npages = RelationGetNumberOfBlocks(rel);
++
++	for (pageno = 0; pageno != npages; ++pageno)
++	{
++		Buffer			buf;
++		Page			page;
++		PageHeader		hdr;
++
++		/* get page */
++		buf = ReadBuffer(rel, pageno);
++		LockBuffer(buf, BUFFER_LOCK_EXCLUSIVE);
++		page = BufferGetPage(buf);
++		hdr = (PageHeader) page;
++
++		/* make page look like 32-bit xid page */
++		hdr->pd_special = BLCKSZ;
++		PageSetPageSizeAndVersion(page, BLCKSZ, PG_PAGE_LAYOUT_VERSION - 1);
++		hdr->pd_checksum = pg_checksum_page((char *) page, pageno);
++
++		before = FillRelCheckValues(rel, buf, page);
++		ConvertTestPage(rel, page, buf, pageno);
++		after = FillRelCheckValues(rel, buf, page);
++
++		/* check */
++		if (before.ntuples != after.ntuples)
++			elog(ERROR, "number of tuples must be equal");
++
++		for (i = 0; i != before.ntuples; ++i)
++		{
++			if (before.tcv[i].xmin != after.tcv[i].xmin &&
++				!after.tcv[i].xmin_frozen)
++				elog(ERROR, "old and new xmin does not match (%" PRIu64 " != %" PRIu64 ")",
++					 before.tcv[i].xmin, after.tcv[i].xmin);
++
++			if (before.tcv[i].xmax != after.tcv[i].xmax)
++				elog(ERROR, "old and new xmax does not match (%" PRIu64 " != %" PRIu64 ")",
++					 before.tcv[i].xmax, after.tcv[i].xmax);
++		}
++
++		Assert(npages != 0);
++		pfree(before.tcv);
++		pfree(after.tcv);
++
++		UnlockReleaseBuffer(buf);
++	}
++
++	relation_close(rel, AccessExclusiveLock);
++
++	PG_RETURN_VOID();
++}
++
++PG_FUNCTION_INFO_V1(xid64_test_double_xmax);
++Datum
++xid64_test_double_xmax(PG_FUNCTION_ARGS)
++{
++	Oid					relid;
++	Relation			rel;
++	BlockNumber			pageno,
++						npages;
++	bool				found;
++
++	relid = PG_GETARG_OID(0);
++	rel = relation_open(relid, AccessExclusiveLock);
++	npages = RelationGetNumberOfBlocks(rel);
++	found = false;
++
++	for (pageno = 0; pageno != npages; ++pageno)
++	{
++		Buffer			buf;
++		Page			page;
++		PageHeader		hdr;
++		ItemId			itemid;
++		OffsetNumber 	offnum;
++		HeapTupleHeader	tuphdr;
++
++		buf = ReadBuffer(rel, pageno);
++		LockBuffer(buf, BUFFER_LOCK_EXCLUSIVE);
++		page = BufferGetPage(buf);
++		hdr = (PageHeader) page;
++
++		if (pageno == 0)
++		{
++			itemid = PageGetItemId(page, FirstOffsetNumber);
++			itemid->lp_len += 16; /* Move to overlap special */
++		}
++
++		for (offnum = FirstOffsetNumber;
++			 offnum <= PageGetMaxOffsetNumber(page);
++			 offnum = OffsetNumberNext(offnum))
++		{
++			itemid = PageGetItemId(page, offnum);
++			if (!ItemIdIsNormal(itemid))
++				continue;
++			tuphdr = (HeapTupleHeader) PageGetItem(page, itemid);
++			tuphdr->t_infomask |= HEAP_XMIN_COMMITTED;
++		}
++
++		hdr->pd_special = BLCKSZ;
++		PageSetPageSizeAndVersion(page, BLCKSZ, PG_PAGE_LAYOUT_VERSION - 1);
++		hdr->pd_checksum = pg_checksum_page((char *) page, pageno);
++
++		ConvertTestPage(rel, page, buf, pageno);
++
++		if (HeapPageIsDoubleXmax(page))
++		{
++			found = true;
++			elog(INFO, "test double xmax: page %u is converted into double xmax format",
++				 pageno);
++		}
++
++		UnlockReleaseBuffer(buf);
++	}
++
++	if (!found)
++		elog(ERROR, "test double xmax: failed, no double xmax");
++
++	Assert(npages != 0);
++	elog(INFO, "test double xmax: end");
++
++	relation_close(rel, AccessExclusiveLock);
++
++	PG_RETURN_VOID();
++}
+diff --git a/src/test/regress/sql/xid64.sql b/src/test/regress/sql/xid64.sql
+new file mode 100644
+index 00000000000..caa97a0ed99
+--- /dev/null
++++ b/src/test/regress/sql/xid64.sql
+@@ -0,0 +1,84 @@
++---
++--- Unit test for xid64 functions
++---
++
++-- directory paths and dlsuffix are passed to us in environment variables
++\getenv libdir PG_LIBDIR
++\getenv dlsuffix PG_DLSUFFIX
++
++\set regresslib :libdir '/regress' :dlsuffix
++
++CREATE FUNCTION xid64_test_1(rel regclass) RETURNS VOID
++    AS :'regresslib', 'xid64_test_1' LANGUAGE C STRICT;
++CREATE FUNCTION xid64_test_2(rel regclass) RETURNS VOID
++    AS :'regresslib', 'xid64_test_2' LANGUAGE C STRICT;
++CREATE FUNCTION xid64_test_double_xmax(rel regclass) RETURNS VOID
++    AS :'regresslib', 'xid64_test_double_xmax' LANGUAGE C STRICT;
++
++---
++--- Check page consistency after conversion
++---
++CREATE UNLOGGED TABLE test_xid64_table(a int);
++ALTER TABLE test_xid64_table SET (autovacuum_enabled = false);
++INSERT INTO test_xid64_table(a) SELECT a FROM generate_series(1, 1000) AS a;
++SELECT xid64_test_1('test_xid64_table');
++DROP TABLE test_xid64_table;
++
++---
++--- Check tuples consistency after conversion
++---
++CREATE UNLOGGED TABLE test_xid64_table(s serial, i int, t text);
++ALTER TABLE test_xid64_table SET (autovacuum_enabled = false);
++
++DO $$
++BEGIN
++  FOR j IN 1..20 LOOP
++    INSERT INTO test_xid64_table(i, t) VALUES (random()::int, md5(random()::text));
++    COMMIT;
++  END LOOP;
++END $$;
++
++DO $$
++BEGIN
++  FOR j IN 1..10 LOOP
++    DELETE FROM test_xid64_table WHERE ctid IN (SELECT ctid FROM test_xid64_table TABLESAMPLE BERNOULLI (5));
++    COMMIT;
++  END LOOP;
++END $$;
++
++SELECT xid64_test_2('test_xid64_table');
++DROP TABLE test_xid64_table;
++
++---
++--- Check tuples consistency after conversion to double xmax (on full page)
++---
++CREATE UNLOGGED TABLE test_xid64_table(i int);
++
++DO $$
++BEGIN
++  FOR j IN 1..40 LOOP
++    INSERT INTO test_xid64_table SELECT i FROM generate_series(1, 100) AS i;
++    COMMIT;
++  END LOOP;
++END $$;
++
++SELECT xid64_test_2('test_xid64_table');
++DROP TABLE test_xid64_table;
++
++CREATE UNLOGGED TABLE test_xid64_table(i text);
++INSERT INTO test_xid64_table(i) VALUES ('NNBABCDSDFGHJKLP');
++
++DO $$
++BEGIN
++  FOR j IN 1..40 LOOP
++    INSERT INTO test_xid64_table(i) SELECT 'A' FROM generate_series(1, 100) AS i;
++    COMMIT;
++  END LOOP;
++END $$;
++
++SELECT xid64_test_double_xmax('test_xid64_table');
++DROP TABLE test_xid64_table;
++
++DROP FUNCTION xid64_test_1(rel regclass);
++DROP FUNCTION xid64_test_2(rel regclass);
++DROP FUNCTION xid64_test_double_xmax(rel regclass);
+diff --git a/src/test/xid-64/t/006_zeropage.pl b/src/test/xid-64/t/006_zeropage.pl
+new file mode 100644
+index 00000000000..6b53668838d
+--- /dev/null
++++ b/src/test/xid-64/t/006_zeropage.pl
+@@ -0,0 +1,33 @@
++use strict;
++use warnings;
++
++use PostgreSQL::Test::Cluster;
++use PostgreSQL::Test::Utils;
++use Test::More;
++
++# Check  WAL for ZEROPAGE record.
++
++sub command_output
++{
++	my ($cmd) = @_;
++	my ($stdout, $stderr);
++	print("# Running: " . join(" ", @{$cmd}) . "\n");
++	my $result = IPC::Run::run $cmd, '>', \$stdout, '2>', \$stderr;
++	return $stdout;
++}
++
++my $node = PostgreSQL::Test::Cluster->new('main');
++$node->init(extra => [ "--xid=3", "--multixact-id=3", "--multixact-offset=1" ]);
++$node->start;
++my $pgdata = $node->data_dir;
++my $xlogfilename0 = $node->safe_psql('postgres',
++	"SELECT pg_walfile_name(pg_current_wal_lsn())");
++#$node->command_like(
++#	[ 'pg_waldump', '-S', "$pgdata/pg_wal/$xlogfilename0" ],
++#	qr/ZEROPAGE/,
++#	'pg_waldump prints start timestamp');
++my $wd_output = command_output(
++    [ 'pg_waldump', "$pgdata/pg_wal/$xlogfilename0" ]);
++ok($wd_output =~ qr/ZEROPAGE page 0/, "ZEROPAGE found");
++
++done_testing();
+-- 
+2.55.0
+

@@ -1,7 +1,7 @@
-From 1f17b0195b795ec06271b66bfd688731cf75db3d Mon Sep 17 00:00:00 2001
+From fc8e48db90257f037223df6a3723b90d7d8d6539 Mon Sep 17 00:00:00 2001
 From: Maxim Orlov <m.orlov@postgrespro.ru>
 Date: Fri, 11 Mar 2022 11:34:26 +0300
-Subject: [PATCH v67 04/12] Use 64-bit GUCs
+Subject: [PATCH v1900 4/7] Use 64-bit GUCs
 
 Authors:
 - Alexander Korotkov <aekorotkov@gmail.com>
@@ -13,17 +13,21 @@ Authors:
 Reviewed-by: Aleksander Alekseev <aleksander@timescale.com>
 Discussion: https://postgr.es/m/CACG%3DezZe1NQSCnfHOr78AtAZxJZeCvxrts0ygrxYwe%3DpyyjVWA%40mail.gmail.com
 Discussion: https://postgr.es/m/CAJ7c6TPDOYBYrnCAeyndkBktO0WG2xSdYduTF0nxq%2BvfkmTF5Q%40mail.gmail.com
+
+Author: Evgeny Voropaev <evorop@gmail.com>
+
+Fold in v67-0012: avoid the MSVC reserved _int64 member name.
 ---
- src/backend/access/common/reloptions.c   |  69 ++++++
- src/backend/utils/misc/gen_guc_tables.pl |  20 +-
- src/backend/utils/misc/guc.c             | 412 +++++++++++++++++++++++++++++++
+ src/backend/access/common/reloptions.c   |  69 ++++
+ src/backend/utils/misc/gen_guc_tables.pl |  24 +-
+ src/backend/utils/misc/guc.c             | 412 +++++++++++++++++++++++
  src/backend/utils/misc/guc_funcs.c       |  25 ++
  src/backend/utils/misc/guc_tables.c      |   1 +
  src/backend/utils/misc/help_config.c     |   7 +-
  src/include/access/reloptions.h          |  13 +
- src/include/utils/guc.h                  |  17 ++
- src/include/utils/guc_tables.h           |  17 ++
- 9 files changed, 575 insertions(+), 6 deletions(-)
+ src/include/utils/guc.h                  |  17 +
+ src/include/utils/guc_tables.h           |  17 +
+ 9 files changed, 578 insertions(+), 7 deletions(-)
 
 diff --git a/src/backend/access/common/reloptions.c b/src/backend/access/common/reloptions.c
 index 3e832c3797e..1666c8fbe6d 100644
@@ -149,12 +153,17 @@ index 3e832c3797e..1666c8fbe6d 100644
  						*(double *) itempos = options[i].isset ?
  							options[i].real_val :
 diff --git a/src/backend/utils/misc/gen_guc_tables.pl b/src/backend/utils/misc/gen_guc_tables.pl
-index ac23e93c395..8606b70bc9d 100644
+index ac23e93c395..b772d9c674a 100644
 --- a/src/backend/utils/misc/gen_guc_tables.pl
 +++ b/src/backend/utils/misc/gen_guc_tables.pl
-@@ -153,11 +153,21 @@ sub print_table
+@@ -151,13 +151,25 @@ sub print_table
+ 		}
+ 		printf $ofh "\t\t.flags = %s,\n", $entry->{flags} if $entry->{flags};
  		printf $ofh "\t\t.vartype = %s,\n", ('PGC_' . uc($entry->{type}));
- 		printf $ofh "\t\t._%s = {\n", $entry->{type};
+-		printf $ofh "\t\t._%s = {\n", $entry->{type};
++		# MSVC reserves _int64; the GUC type name remains "int64".
++		my $member = $entry->{type} eq 'int64' ? 'int_64' : $entry->{type};
++		printf $ofh "\t\t._%s = {\n", $member;
  		printf $ofh "\t\t\t.variable = &%s,\n", $entry->{variable};
 -		printf $ofh "\t\t\t.boot_val = %s,\n", $entry->{boot_val};
 -		printf $ofh "\t\t\t.min = %s,\n", $entry->{min}
@@ -180,7 +189,7 @@ index ac23e93c395..8606b70bc9d 100644
  		  if $entry->{type} eq 'enum';
  		printf $ofh "\t\t\t.check_hook = %s,\n", $entry->{check_hook}
 diff --git a/src/backend/utils/misc/guc.c b/src/backend/utils/misc/guc.c
-index 774bbc9be5f..3d0f3ba2a0d 100644
+index 774bbc9be5f..6edc1aaf07c 100644
 --- a/src/backend/utils/misc/guc.c
 +++ b/src/backend/utils/misc/guc.c
 @@ -266,6 +266,8 @@ static bool call_bool_check_hook(const struct config_generic *conf, bool *newval
@@ -197,7 +206,7 @@ index 774bbc9be5f..3d0f3ba2a0d 100644
  			val->val.intval = *gconf->_int.variable;
  			break;
 +		case PGC_INT64:
-+			val->val.int64val = *gconf->_int64.variable;
++			val->val.int64val = *gconf->_int_64.variable;
 +			break;
  		case PGC_REAL:
  			val->val.realval = *gconf->_real.variable;
@@ -224,7 +233,7 @@ index 774bbc9be5f..3d0f3ba2a0d 100644
  			}
 +		case PGC_INT64:
 +			{
-+				const struct config_int64 *conf = &gconf->_int64;
++				const struct config_int64 *conf = &gconf->_int_64;
 +
 +				if (*conf->variable != 0 && *conf->variable != conf->boot_val)
 +				{
@@ -243,7 +252,7 @@ index 774bbc9be5f..3d0f3ba2a0d 100644
  			}
 +		case PGC_INT64:
 +			{
-+				struct config_int64 *conf = &gconf->_int64;
++				struct config_int64 *conf = &gconf->_int_64;
 +				int64		newval = conf->boot_val;
 +
 +				Assert(newval >= conf->min);
@@ -274,7 +283,7 @@ index 774bbc9be5f..3d0f3ba2a0d 100644
 +				}
 +			case PGC_INT64:
 +				{
-+					struct config_int64 *conf = &gconf->_int64;
++					struct config_int64 *conf = &gconf->_int_64;
 +
  					if (conf->assign_hook)
  						conf->assign_hook(conf->reset_val,
@@ -297,7 +306,7 @@ index 774bbc9be5f..3d0f3ba2a0d 100644
 +						}
 +					case PGC_INT64:
 +						{
-+							struct config_int64 *conf = &gconf->_int64;
++							struct config_int64 *conf = &gconf->_int_64;
 +							int64		newval = newvalue.val.int64val;
 +							void	   *newextra = newvalue.extra;
 +
@@ -384,7 +393,7 @@ index 774bbc9be5f..3d0f3ba2a0d 100644
  			break;
 +		case PGC_INT64:
 +			{
-+				const struct config_int64 *conf = &record->_int64;
++				const struct config_int64 *conf = &record->_int_64;
 +				const char *hintmsg;
 +
 +				if (!parse_int64(value, &newval->int64val,
@@ -435,7 +444,7 @@ index 774bbc9be5f..3d0f3ba2a0d 100644
 +
 +		case PGC_INT64:
 +			{
-+				struct config_int64 *conf = &record->_int64;
++				struct config_int64 *conf = &record->_int_64;
 +
 +#define newval (newval_union.int64val)
 +
@@ -535,7 +544,7 @@ index 774bbc9be5f..3d0f3ba2a0d 100644
  
 +		case PGC_INT64:
 +			snprintf(buffer, sizeof(buffer), "%lld",
-+					 (long long) *record->_int64.variable);
++					 (long long) *record->_int_64.variable);
 +			return buffer;
 +
  		case PGC_REAL:
@@ -547,7 +556,7 @@ index 774bbc9be5f..3d0f3ba2a0d 100644
  
 +		case PGC_INT64:
 +			snprintf(buffer, sizeof(buffer), "%lld",
-+					 (long long) record->_int64.reset_val);
++					 (long long) record->_int_64.reset_val);
 +			return buffer;
 +
  		case PGC_REAL:
@@ -574,14 +583,14 @@ index 774bbc9be5f..3d0f3ba2a0d 100644
 +	struct config_generic *var;
 +
 +	var = init_custom_variable(name, short_desc, long_desc, context, flags, PGC_INT64);
-+	var->_int64.variable = valueAddr;
-+	var->_int64.boot_val = bootValue;
-+	var->_int64.reset_val = bootValue;
-+	var->_int64.min = minValue;
-+	var->_int64.max = maxValue;
-+	var->_int64.check_hook = check_hook;
-+	var->_int64.assign_hook = assign_hook;
-+	var->_int64.show_hook = show_hook;
++	var->_int_64.variable = valueAddr;
++	var->_int_64.boot_val = bootValue;
++	var->_int_64.reset_val = bootValue;
++	var->_int_64.min = minValue;
++	var->_int_64.max = maxValue;
++	var->_int_64.check_hook = check_hook;
++	var->_int_64.assign_hook = assign_hook;
++	var->_int_64.show_hook = show_hook;
 +	define_custom_variable(var);
 +}
 +
@@ -594,7 +603,7 @@ index 774bbc9be5f..3d0f3ba2a0d 100644
  
 +			case PGC_INT64:
 +				{
-+					struct config_int64 *lconf = &conf->_int64;
++					struct config_int64 *lconf = &conf->_int_64;
 +
 +					modified = (lconf->boot_val != *(lconf->variable));
 +				}
@@ -609,7 +618,7 @@ index 774bbc9be5f..3d0f3ba2a0d 100644
  
 +		case PGC_INT64:
 +			{
-+				const struct config_int64 *conf = &record->_int64;
++				const struct config_int64 *conf = &record->_int_64;
 +
 +				if (conf->show_hook)
 +					val = conf->show_hook();
@@ -645,7 +654,7 @@ index 774bbc9be5f..3d0f3ba2a0d 100644
  
 +		case PGC_INT64:
 +			{
-+				struct config_int64 *conf = &gconf->_int64;
++				struct config_int64 *conf = &gconf->_int_64;
 +
 +				fprintf(fp, "%lld", (long long) *conf->variable);
 +			}
@@ -660,7 +669,7 @@ index 774bbc9be5f..3d0f3ba2a0d 100644
  
 +		case PGC_INT64:
 +			{
-+				struct config_int64 *conf = &gconf->_int64;
++				struct config_int64 *conf = &gconf->_int_64;
 +
 +				/*
 +				 * Instead of getting the exact display length, use max
@@ -684,7 +693,7 @@ index 774bbc9be5f..3d0f3ba2a0d 100644
  
 +		case PGC_INT64:
 +			{
-+				struct config_int64 *conf = &gconf->_int64;
++				struct config_int64 *conf = &gconf->_int_64;
 +
 +				do_serialize(destptr, maxbytes, "%lld", (long long) *conf->variable);
 +			}
@@ -710,7 +719,7 @@ index 774bbc9be5f..3d0f3ba2a0d 100644
 +					GucSource source, int elevel)
 +{
 +	/* Quick success if no hook */
-+	if (!conf->_int64.check_hook)
++	if (!conf->_int_64.check_hook)
 +		return true;
 +
 +	/* Reset variables that might be set by hook */
@@ -719,7 +728,7 @@ index 774bbc9be5f..3d0f3ba2a0d 100644
 +	GUC_check_errdetail_string = NULL;
 +	GUC_check_errhint_string = NULL;
 +
-+	if (!conf->_int64.check_hook(newval, extra, source))
++	if (!conf->_int_64.check_hook(newval, extra, source))
 +	{
 +		ereport(elevel,
 +				(errcode(GUC_check_errcode_value),
@@ -743,7 +752,7 @@ index 774bbc9be5f..3d0f3ba2a0d 100644
  call_real_check_hook(const struct config_generic *conf, double *newval, void **extra,
  					 GucSource source, int elevel)
 diff --git a/src/backend/utils/misc/guc_funcs.c b/src/backend/utils/misc/guc_funcs.c
-index e2c2919484e..901898aee4e 100644
+index e2c2919484e..4aa229be54a 100644
 --- a/src/backend/utils/misc/guc_funcs.c
 +++ b/src/backend/utils/misc/guc_funcs.c
 @@ -704,6 +704,31 @@ GetConfigOptionValues(const struct config_generic *conf, const char **values)
@@ -752,7 +761,7 @@ index e2c2919484e..901898aee4e 100644
  
 +		case PGC_INT64:
 +			{
-+				const struct config_int64 *lconf = &conf->_int64;
++				const struct config_int64 *lconf = &conf->_int_64;
 +
 +				/* min_val */
 +				snprintf(buffer, sizeof(buffer), "%lld", (long long) lconf->min);
@@ -791,7 +800,7 @@ index 7fd83081462..3aab46078d4 100644
  	[PGC_STRING] = "string",
  	[PGC_ENUM] = "enum",
 diff --git a/src/backend/utils/misc/help_config.c b/src/backend/utils/misc/help_config.c
-index f7bf70d675c..00405e9f26b 100644
+index f7bf70d675c..adcfd2a45ca 100644
 --- a/src/backend/utils/misc/help_config.c
 +++ b/src/backend/utils/misc/help_config.c
 @@ -90,7 +90,12 @@ printMixedStruct(const struct config_generic *structToPrint)
@@ -801,9 +810,9 @@ index f7bf70d675c..00405e9f26b 100644
 -
 +		case PGC_INT64:
 +			printf("INTEGER\t%" PRIi64 "\t%" PRIi64 "\t%" PRIi64 "\t",
-+				   structToPrint->_int64.reset_val,
-+				   structToPrint->_int64.min,
-+				   structToPrint->_int64.max);
++				   structToPrint->_int_64.reset_val,
++				   structToPrint->_int_64.min,
++				   structToPrint->_int_64.max);
 +			break;
  		case PGC_REAL:
  			printf("REAL\t%g\t%g\t%g\t",
@@ -902,7 +911,7 @@ index dc406d6651a..ff7ea5fae5c 100644
  					   const char **hintmsg);
  extern int	set_config_option(const char *name, const char *value,
 diff --git a/src/include/utils/guc_tables.h b/src/include/utils/guc_tables.h
-index 63440b8e36c..d6e37c85958 100644
+index 63440b8e36c..a1bc725b1a3 100644
 --- a/src/include/utils/guc_tables.h
 +++ b/src/include/utils/guc_tables.h
 @@ -24,6 +24,7 @@ enum config_type
@@ -946,9 +955,10 @@ index 63440b8e36c..d6e37c85958 100644
  	{
  		struct config_bool _bool;
  		struct config_int _int;
-+		struct config_int64 _int64;
++		struct config_int64 _int_64;
  		struct config_real _real;
  		struct config_string _string;
  		struct config_enum _enum;
 -- 
-2.51.0
+2.55.0
+

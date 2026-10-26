@@ -1,0 +1,115 @@
+{
+  "base": "3638289fb57bdabec00deda98ee9624a35f5d66a",
+  "source": "d64b5f0220f262b52dcc88a93cf66e9803d4d16b",
+  "commits": [
+    {
+      "commit": "6cf34113ff408640db4f0edcbafcd269fb454204",
+      "subject": "Use 64-bit format to output XIDs"
+    },
+    {
+      "commit": "3d34a6494b8c27f6cd49d3390bf96376c790d5d1",
+      "subject": "Use 64-bit FullTransactionId instead of Epoch:xid"
+    },
+    {
+      "commit": "a97680af1e578707d25afffe5073924f1ab95d5a",
+      "subject": "Use 64-bit SLRU pages in callers."
+    },
+    {
+      "commit": "fc8e48db90257f037223df6a3723b90d7d8d6539",
+      "subject": "Use 64-bit GUCs"
+    },
+    {
+      "commit": "1765ef52efd90d5a16872da3d13ab71f210a0a00",
+      "subject": "Use 64-bit XIDs"
+    },
+    {
+      "commit": "431bb3af90d26a76b3ecd35e743eb4d55f87a7e9",
+      "subject": "README.XID64"
+    },
+    {
+      "commit": "a15f01026cba8e9e3e97fdc3305b1c0481a9ddf6",
+      "subject": "Resolve the upgrade issues"
+    }
+  ],
+  "source_tip": "a15f01026cba8e9e3e97fdc3305b1c0481a9ddf6",
+  "source_tree": "8b9a82a7d6c5fa097093188bcc4eba992a511952",
+  "baloo_source": "df5d86829d46b5ad174dcde45ff7182bc07ad817",
+  "deferred_paths": [
+    "src/backend/access/transam/xloginsert.c",
+    "src/backend/commands/dbcommands.c",
+    "src/backend/storage/aio/read_stream.c",
+    "src/bin/pg_upgrade/.gitignore",
+    "src/bin/pg_upgrade/IMPLEMENTATION",
+    "src/bin/pg_upgrade/Makefile",
+    "src/bin/pg_upgrade/TESTING",
+    "src/bin/pg_upgrade/check.c",
+    "src/bin/pg_upgrade/controldata.c",
+    "src/bin/pg_upgrade/dump.c",
+    "src/bin/pg_upgrade/exec.c",
+    "src/bin/pg_upgrade/file.c",
+    "src/bin/pg_upgrade/function.c",
+    "src/bin/pg_upgrade/info.c",
+    "src/bin/pg_upgrade/meson.build",
+    "src/bin/pg_upgrade/multixact_read_v18.c",
+    "src/bin/pg_upgrade/multixact_read_v18.h",
+    "src/bin/pg_upgrade/multixact_rewrite.c",
+    "src/bin/pg_upgrade/nls.mk",
+    "src/bin/pg_upgrade/option.c",
+    "src/bin/pg_upgrade/parallel.c",
+    "src/bin/pg_upgrade/pg_upgrade.c",
+    "src/bin/pg_upgrade/pg_upgrade.h",
+    "src/bin/pg_upgrade/po/LINGUAS",
+    "src/bin/pg_upgrade/po/cs.po",
+    "src/bin/pg_upgrade/po/de.po",
+    "src/bin/pg_upgrade/po/es.po",
+    "src/bin/pg_upgrade/po/fr.po",
+    "src/bin/pg_upgrade/po/ja.po",
+    "src/bin/pg_upgrade/po/ka.po",
+    "src/bin/pg_upgrade/po/ko.po",
+    "src/bin/pg_upgrade/po/meson.build",
+    "src/bin/pg_upgrade/po/ru.po",
+    "src/bin/pg_upgrade/po/sv.po",
+    "src/bin/pg_upgrade/po/tr.po",
+    "src/bin/pg_upgrade/po/uk.po",
+    "src/bin/pg_upgrade/po/zh_CN.po",
+    "src/bin/pg_upgrade/relfilenumber.c",
+    "src/bin/pg_upgrade/segresize.c",
+    "src/bin/pg_upgrade/server.c",
+    "src/bin/pg_upgrade/slru_io.c",
+    "src/bin/pg_upgrade/slru_io.h",
+    "src/bin/pg_upgrade/t/001_basic.pl",
+    "src/bin/pg_upgrade/t/002_pg_upgrade.pl",
+    "src/bin/pg_upgrade/t/003_logical_slots.pl",
+    "src/bin/pg_upgrade/t/004_subscription.pl",
+    "src/bin/pg_upgrade/t/005_char_signedness.pl",
+    "src/bin/pg_upgrade/t/006_transfer_modes.pl",
+    "src/bin/pg_upgrade/t/007_multixact_conversion.pl",
+    "src/bin/pg_upgrade/t/008_extension_control_path.pl",
+    "src/bin/pg_upgrade/t/009_xid32_to_xid64_recovery.pl",
+    "src/bin/pg_upgrade/t/010_xid32_to_xid64_createdb.pl",
+    "src/bin/pg_upgrade/t/011_xid32_to_xid64_double_xmax.pl",
+    "src/bin/pg_upgrade/t/012_xid32_to_xid64_hot.pl",
+    "src/bin/pg_upgrade/tablespace.c",
+    "src/bin/pg_upgrade/task.c",
+    "src/bin/pg_upgrade/util.c",
+    "src/bin/pg_upgrade/version.c",
+    "src/include/access/xloginsert.h",
+    "src/include/storage/aio_types.h",
+    "src/include/storage/buf_internals.h",
+    "src/include/storage/read_stream.h",
+    "src/include/storage/relation_extra_data.h",
+    "src/test/perl/PostgreSQL/Test/AdjustUpgrade.pm",
+    "src/test/regress/expected/xid64.out",
+    "src/test/regress/parallel_schedule",
+    "src/test/regress/sql/xid64.sql",
+    "src/test/xid-64/t/006_zeropage.pl"
+  ],
+  "core_split_paths": [
+    "src/backend/access/heap/heapam_visibility.c",
+    "src/include/access/htup_details.h",
+    "src/backend/access/heap/pruneheap.c",
+    "src/backend/storage/buffer/bufmgr.c",
+    "src/include/storage/bufmgr.h",
+    "src/backend/storage/buffer/heap_convert.c"
+  ]
+}
