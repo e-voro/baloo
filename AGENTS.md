@@ -5,6 +5,13 @@ Read the tail of baloo/codex.log, inspect git status in both the main repository
 and baloo, and inspect branch history before changing anything. The report is
 historical; verify it against the actual checkout.
 
+For the complete adaptation record from 0001 onward, read
+[xid64-logical-issues.md](xid64-logical-issues.md). It covers 25 numbered topics,
+decisions and implementations, the complete-series map, and the PG18 xid64 /
+Tantor 18 backport checklist. Error safety is part of backend conversion, not
+an additional independently counted fix. The normal-page freeze range guard
+is explicitly a mitigation; mixed-format protocol protection remains open.
+
 > **CURRENT (2026-10-26, b0d9496f94f): normal permanent-page conversion emits an
 > immediate full-page WAL image before publishing readiness. BM_CONVERTED
 > is renamed BM_CONVERSION_NEEDS_WAL; BM_CONVERSION_PENDING still means

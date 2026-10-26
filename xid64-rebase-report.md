@@ -1,5 +1,10 @@
 # xid64 PostgreSQL 19 rebase: handoff and validation
 
+The complete record from the first formatting patch through the latest
+conversion/WAL changes is [xid64-logical-issues.md](xid64-logical-issues.md).
+It records decisions, implementations, supplied-fix overlap, remaining limits
+and required/conditional PG18 xid64 and Tantor 18 backports for 25 topics.
+
 ## Immediate conversion WAL update (2026-10-26)
 
 Source b0d9496f94f now dirties the page, inserts a forced XLOG_FPI,
