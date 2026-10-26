@@ -26,3 +26,4 @@ pg19-binary-xid-test.patch
 pg19-upgrade-source-checksums.patch
 pg19-freeze-xmax-range-check.patch
 pg19-conversion-publication-gate.patch
+pg19-immediate-conversion-wal.patch

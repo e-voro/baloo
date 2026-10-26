@@ -59,7 +59,16 @@ gate_read(PG_FUNCTION_ARGS)
 	Relation rel = relation_open(PG_GETARG_OID(0), AccessShareLock);
 	char *marker = text_to_cstring(PG_GETARG_TEXT_PP(1));
 	Buffer buffer = ReadBuffer(rel, 0);
-	FILE *file = fopen(marker, "w");
+	FILE *file;
+	uint64 state;
+
+	LockBuffer(buffer, BUFFER_LOCK_SHARE);
+	state = pg_atomic_read_u64(&GetBufferDescriptor(buffer - 1)->state);
+	if ((state & (BM_CONVERSION_PENDING | BM_CONVERSION_NEEDS_WAL)) ||
+		!XLogRecPtrIsValid(PageGetLSN(BufferGetPage(buffer))))
+		elog(ERROR, "normal read returned before conversion WAL was published");
+	LockBuffer(buffer, BUFFER_LOCK_UNLOCK);
+	file = fopen(marker, "w");
 
 	if (file == NULL)
 		elog(ERROR, "cannot write conversion-gate marker");

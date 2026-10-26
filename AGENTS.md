@@ -5,6 +5,14 @@ Read the tail of baloo/codex.log, inspect git status in both the main repository
 and baloo, and inspect branch history before changing anything. The report is
 historical; verify it against the actual checkout.
 
+> **CURRENT (2026-10-26, b0d9496f94f): normal permanent-page conversion emits an
+> immediate full-page WAL image before publishing readiness. BM_CONVERTED
+> is renamed BM_CONVERSION_NEEDS_WAL; BM_CONVERSION_PENDING still means
+> conversion is unfinished, not that a backend owns it. AIO sets both with
+> BM_VALID. See xid64-logical-issues.md for the updated issue/backport list
+> and the latest section below for passing full/upgrade validation. Older deferred-WAL descriptions
+> apply only to history and retained exceptional paths.**
+
 > **CURRENT (2026-10-22): 0005 is fully adapted/applied; all mini steps
 > mini0000(verify_heapam.c) through mini0214(typedefs.list) are processed.
 > Main series through 0012 is
@@ -1443,3 +1451,59 @@ contracts below; this is not a claim about arbitrary external extensions.
 - **Needed for rebase to Tantor 18:** compare/backport atomic conversion
   readiness, including all normal/recent read gates, publication barriers,
   overwrite handling and the in-memory flag-layout rebuild requirement.
+
+## IMPORTANT: immediate conversion WAL and revised issue list (2026-10-26)
+
+The user requested WAL insertion immediately after backend conversion. The
+current issue and PG18/Tantor 18 backport report is
+[xid64-logical-issues.md](xid64-logical-issues.md). It supersedes earlier lists
+where normal conversion waited for a later modifying operation.
+
+- Physical input still completes in AIO. Legacy completion atomically sets
+  BM_VALID, BM_CONVERSION_PENDING and BM_CONVERSION_NEEDS_WAL, and ends I/O.
+  The flags live in BufferDesc, not disk page headers. BM_VALID means physical
+  input succeeded; it does not authorize ordinary tuple use before the gate.
+- BM_CONVERSION_PENDING is set by completion, before any backend starts
+  conversion. It means conversion is unfinished. The exclusive content lock,
+  not a flag transition at conversion start, chooses the sole converter.
+- Rename BM_CONVERTED and its helper APIs to describe the remaining WAL
+  obligation: BM_CONVERSION_NEEDS_WAL, BufferConversionNeedsWAL and
+  MarkBufferConversionNeedsWAL. Neither name implies completed conversion.
+- FinishReadBufferConversion validates/converts a private copy, prepares a
+  forced XLOG_FPI outside the critical section, installs shared bytes, marks
+  dirty, inserts WAL and sets the page LSN inside the critical section, then
+  atomically clears both obligations before unlocking. WAL preparation before
+  shared mutation keeps insertion-context errors outside that critical section.
+- Normal permanent conversions no longer depend on a later UPDATE, VACUUM or
+  hint write for their format-change image. The original hint/checkpoint/
+  restart durability problem is prevented directly by conversion WAL.
+- Keep deferred safeguards for recovery and permanent relations deliberately
+  skipping WAL. Those conversions remain clean and retain the WAL obligation;
+  a standby read followed by promotion can still require a later first image.
+  Unlogged converted pages are dirtied without ordinary WAL and clear the WAL
+  obligation. Do not remove fallback REGBUF_CONVERTED/NO_IMAGE/WILL_INIT handling
+  or hint guards merely because normal conversions no longer use them.
+- Backend MultiXact ownership, private-copy error safety, no-hints visibility,
+  full-XID cache ownership, HOT roots, metadata-free read checks, atomic read
+  gates, age arithmetic and freeze range validation remain necessary.
+  Automatic normal-page freeze range handling is still open; the precritical
+  SQL-error guard remains a mitigation, not a complete solution.
+- The report also consolidates earlier lock-key, binary-XID, pruning-hint,
+  TOAST, logical-decoding and upgrade backport items. Supplied PG18 fixes must
+  be compared against the actual target revision to avoid duplicate backports.
+- Fresh assertion/injection build passes world-bin. Actual PG15.19 and PG18.4
+  sources each pass five upgrade/recovery suites, 102 assertions. The new case
+  checks exactly one immediate XLOG/FPI for a frozen read-only legacy page and
+  its standby replay, with checksums/hint WAL/full_page_writes off.
+- The competing-reader probe passes 17 assertions and now also checks the
+  post-read flags and page LSN. Full check-world on b0d9496f94f passes, exit 0,
+  with WAL consistency checking: core 246 tests, recovery 54 files / 755
+  assertions, AIO 597, xid64 67, subscription 595 and native pg_upgrade 145.
+  Actual-source tests skip in the native run and pass separately as above.
+- Follow-up patch pg19-immediate-conversion-wal.patch is saved in series.
+  All 28 patches replay from 3421b154340 exactly across 268 source paths.
+  Logs: /tmp/pg19-xid64-immediate-wal-{check-world,upgrade15,upgrade18,gate}.log;
+  build: /tmp/pg19-xid64-immediate-wal. Earlier source gates remain historical.
+- Rebuild core and extensions: helper symbols were renamed. There is no new
+  page layout or WAL record format, and the flag bit positions are unchanged
+  from 12ff893c75f. Save this correction as a separate follow-up patch in series.

@@ -1,5 +1,22 @@
 # xid64 PostgreSQL 19 rebase: handoff and validation
 
+## Immediate conversion WAL update (2026-10-26)
+
+Source b0d9496f94f now dirties the page, inserts a forced XLOG_FPI,
+sets its LSN and then publishes readiness. BM_CONVERTED is renamed
+BM_CONVERSION_NEEDS_WAL; BM_CONVERSION_PENDING remains the unfinished-conversion
+gate set by AIO completion. Recovery and deliberate WAL-skipping paths retain
+their deferred-WAL safeguards. No new page/WAL format or flag-bit assignment.
+
+The revised logical issues and PG18/Tantor 18 backports are in
+[xid64-logical-issues.md](xid64-logical-issues.md); the detailed current checkpoint
+is at the end of AGENTS.md. Both actual PG15.19 and PG18.4 upgrade runs pass
+102 assertions, and the concurrent-publication probe passes 17. Fresh full
+check-world with WAL consistency checking passes on b0d9496f94f, exit 0,
+including recovery 755, AIO 597, xid64 67, subscription 595 and core 246.
+All 28 saved patches replay exactly from 3421b154340 across 268 source paths.
+The completed full gate below belongs to the preceding source revision.
+
 ## Current status (2026-10-22)
 
 Latest source 12ff893c75f corrects a confirmed early-return race during page

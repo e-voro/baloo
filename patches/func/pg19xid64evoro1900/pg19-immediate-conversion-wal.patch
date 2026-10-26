@@ -1,0 +1,427 @@
+From b0d9496f94faf4e7c1adc3fb509cb03295487064 Mon Sep 17 00:00:00 2001
+From: Evgeny Voropaev <evorop@gmail.com>
+Date: Mon, 26 Oct 2026 16:51:38 +0800
+Subject: [PATCH] Log backend page conversion before publishing readiness
+
+---
+ src/backend/access/heap/pruneheap.c           |  2 +-
+ src/backend/access/transam/xloginsert.c       |  6 +-
+ src/backend/storage/buffer/bufmgr.c           | 86 +++++++++++++------
+ src/backend/storage/buffer/heap_convert.c     |  4 +-
+ src/bin/pg_upgrade/Makefile                   |  2 +-
+ .../t/009_xid32_to_xid64_recovery.pl          | 29 ++++++-
+ .../t/010_xid32_to_xid64_createdb.pl          |  2 +-
+ .../pg_upgrade/t/012_xid32_to_xid64_hot.pl    |  2 +-
+ src/include/storage/buf_internals.h           |  4 +-
+ src/include/storage/bufmgr.h                  |  4 +-
+ 10 files changed, 101 insertions(+), 40 deletions(-)
+
+diff --git a/src/backend/access/heap/pruneheap.c b/src/backend/access/heap/pruneheap.c
+index 54753c26180..83b4849af68 100644
+--- a/src/backend/access/heap/pruneheap.c
++++ b/src/backend/access/heap/pruneheap.c
+@@ -2683,7 +2683,7 @@ log_heap_prune_and_freeze(Relation relation, Buffer buffer,
+ 	 * to replay our record and find that the page isn't initialized, which
+ 	 * would cause a PANIC.
+ 	 */
+-	if (IsBufferConverted(buffer) || !XLogRecPtrIsValid(PageGetLSN(heap_page)))
++	if (BufferConversionNeedsWAL(buffer) || !XLogRecPtrIsValid(PageGetLSN(heap_page)))
+ 		regbuf_flags_heap |= REGBUF_FORCE_IMAGE;
+ 	else if (!do_prune && nfrozen == 0 && (!do_set_vm || !XLogHintBitIsNeeded()))
+ 	{
+diff --git a/src/backend/access/transam/xloginsert.c b/src/backend/access/transam/xloginsert.c
+index fee08985fb3..bb2eb19c3ac 100644
+--- a/src/backend/access/transam/xloginsert.c
++++ b/src/backend/access/transam/xloginsert.c
+@@ -281,7 +281,7 @@ XLogRegisterBuffer(uint8 block_id, Buffer buffer, uint8 flags)
+ 	BufferGetTag(buffer, &regbuf->rlocator, &regbuf->forkno, &regbuf->block);
+ 	regbuf->page = BufferGetPage(buffer);
+ 	regbuf->flags = flags;
+-	if (IsBufferConverted(buffer))
++	if (BufferConversionNeedsWAL(buffer))
+ 	{
+ 		/* WILL_INIT reconstructs the page without reading legacy contents. */
+ 		if ((flags & REGBUF_WILL_INIT) != REGBUF_WILL_INIT)
+@@ -289,7 +289,7 @@ XLogRegisterBuffer(uint8 block_id, Buffer buffer, uint8 flags)
+ 
+ 		/* Keep the marker on references that need not make the page durable. */
+ 		if (!(flags & REGBUF_NO_CHANGE))
+-			MarkBufferConverted(buffer, false);
++			MarkBufferConversionNeedsWAL(buffer, false);
+ 	}
+ 	regbuf->rdata_tail = (XLogRecData *) &regbuf->rdata_head;
+ 	regbuf->rdata_len = 0;
+@@ -1169,7 +1169,7 @@ XLogSaveBufferForHint(Buffer buffer, bool buffer_std)
+ 	 */
+ 	lsn = PageGetLSN(BufferGetPage(buffer));
+ 
+-	if (IsBufferConverted(buffer) || lsn <= RedoRecPtr)
++	if (BufferConversionNeedsWAL(buffer) || lsn <= RedoRecPtr)
+ 	{
+ 		int			flags = 0;
+ 
+diff --git a/src/backend/storage/buffer/bufmgr.c b/src/backend/storage/buffer/bufmgr.c
+index 6bb8d978bbb..801d50d5857 100644
+--- a/src/backend/storage/buffer/bufmgr.c
++++ b/src/backend/storage/buffer/bufmgr.c
+@@ -40,6 +40,7 @@
+ #include "access/tableam.h"
+ #include "access/xloginsert.h"
+ #include "access/xlogutils.h"
++#include "catalog/pg_control.h"
+ #ifdef USE_ASSERT_CHECKING
+ #include "catalog/pg_tablespace_d.h"
+ #endif
+@@ -1277,9 +1278,10 @@ PinBufferForBlock(Relation rel,
+  * BM_CONVERSION_PENDING is published atomically with BM_VALID and is cleared
+  * only after the full page has been installed.  The page version must not be
+  * used as an unlocked completion test: a memcpy may expose its header first.
+- * BM_CONVERTED separately preserves the first-image WAL obligation.  Other
+- * readers serialize on the content lock, and a failed conversion leaves the
+- * shared page unchanged for retry.
++ * Permanent pages log their conversion image before readiness is published.
++ * BM_CONVERSION_NEEDS_WAL preserves the first-image obligation on paths that
++ * cannot insert WAL.  Readers serialize on the content lock, and a failed
++ * private conversion leaves the shared page unchanged for retry.
+  */
+ static void
+ FinishReadBufferConversion(ReadBuffersOperation *operation, Buffer buffer)
+@@ -1291,6 +1293,8 @@ FinishReadBufferConversion(ReadBuffersOperation *operation, Buffer buffer)
+ 	ForkNumber forknum;
+ 	BlockNumber blocknum;
+ 	PGAlignedBlock copy;
++	bool		permanent;
++	bool		log_conversion;
+ 
+ 	if (BufferIsLocal(buffer))
+ 		return;
+@@ -1341,6 +1345,20 @@ FinishReadBufferConversion(ReadBuffersOperation *operation, Buffer buffer)
+ 
+ 	memcpy(copy.data, page, BLCKSZ);
+ 	convert_page(&rel_extra, &locator, forknum, copy.data, buffer, blocknum);
++	permanent = BufferIsPermanent(buffer);
++	log_conversion = permanent && XLogInsertAllowed() &&
++		!RelFileLocatorSkippingWAL(locator);
++	/*
++	 * Prepare the forced image before changing shared bytes.  In particular,
++	 * an invalid WAL insertion context must fail outside the critical section.
++	 * Register the private copy: it remains stable until XLogInsert finishes.
++	 */
++	if (log_conversion)
++	{
++		XLogBeginInsert();
++		XLogRegisterBlock(0, &locator, forknum, blocknum, copy.data,
++						 REGBUF_FORCE_IMAGE | REGBUF_STANDARD);
++	}
+ 	INJECTION_POINT_LOAD("buffer-conversion-header-published");
+ 	START_CRIT_SECTION();
+ 	/* Expose a legal partial-copy interleaving to concurrency tests. */
+@@ -1352,8 +1370,26 @@ FinishReadBufferConversion(ReadBuffersOperation *operation, Buffer buffer)
+ #else
+ 	memcpy(page, copy.data, BLCKSZ);
+ #endif
++	/*
++	 * Dirty before WAL insertion so a concurrent checkpoint cannot miss the
++	 * format change.  The exclusive content lock prevents flushing until the
++	 * image and its LSN are installed.  A crash then replays conversion even
++	 * if the first access was a read with no hint updates.
++	 */
++	if (log_conversion || !permanent)
++		MarkBufferDirty(buffer);
++	if (log_conversion)
++		PageSetLSN(page, XLogInsert(RM_XLOG_ID, XLOG_FPI));
++	/*
++	 * Recovery and permanent relations skipping WAL retain a clean converted
++	 * page and its WAL obligation.  Their existing overwrite/first-write paths
++	 * must discharge that obligation before the page becomes durable.
++	 */
+ 	/* Full-barrier atomic publication; fast readers never inspect half a copy. */
+-	pg_atomic_fetch_and_u64(&bufHdr->state, ~BM_CONVERSION_PENDING);
++	pg_atomic_fetch_and_u64(&bufHdr->state,
++							~(BM_CONVERSION_PENDING |
++							  ((log_conversion || !permanent) ?
++							   BM_CONVERSION_NEEDS_WAL : 0)));
+ 	END_CRIT_SECTION();
+ 	LockBuffer(buffer, BUFFER_LOCK_UNLOCK);
+ }
+@@ -5861,7 +5897,7 @@ MarkSharedBufferDirtyHint(Buffer buffer, BufferDesc *bufHdr, uint64 lockstate,
+ 	{
+ 		XLogRecPtr	lsn = InvalidXLogRecPtr;
+ 		bool		wal_log = false;
+-		bool		converted = (lockstate & BM_CONVERTED) != 0;
++		bool		needs_wal = (lockstate & BM_CONVERSION_NEEDS_WAL) != 0;
+ 		uint64		buf_state;
+ 
+ 		/*
+@@ -5875,10 +5911,10 @@ MarkSharedBufferDirtyHint(Buffer buffer, BufferDesc *bufHdr, uint64 lockstate,
+ 		 *
+ 		 * Conversion is a persistent format change even when the only backend
+ 		 * change is a hint.  Log its image before the page can reach disk;
+-		 * otherwise eviction or restart loses BM_CONVERTED and later incremental
+-		 * WAL would be applied to an old-format page on the standby.
++		 * otherwise eviction or restart loses the WAL obligation and subsequent
++		 * incremental WAL reaches an old-format page on the standby.
+ 		 */
+-		if ((XLogHintBitIsNeeded() || converted) &&
++		if ((XLogHintBitIsNeeded() || needs_wal) &&
+ 			(lockstate & BM_PERMANENT))
+ 		{
+ 			/*
+@@ -5897,7 +5933,7 @@ MarkSharedBufferDirtyHint(Buffer buffer, BufferDesc *bufHdr, uint64 lockstate,
+ 		}
+ 
+ 		/* A converted page must not remain dirty after a WAL insertion error. */
+-		if (converted && wal_log)
++		if (needs_wal && wal_log)
+ 			START_CRIT_SECTION();
+ 
+ 		/*
+@@ -5951,7 +5987,7 @@ MarkSharedBufferDirtyHint(Buffer buffer, BufferDesc *bufHdr, uint64 lockstate,
+ 			UnlockBufHdr(bufHdr);
+ 		}
+ 
+-		if (converted && wal_log)
++		if (needs_wal && wal_log)
+ 			END_CRIT_SECTION();
+ 
+ 		pgBufferUsage.shared_blks_dirtied++;
+@@ -5999,12 +6035,13 @@ MarkBufferDirtyHint(Buffer buffer, bool buffer_std)
+ /*
+  * Track a format conversion that must be covered by a full image in WAL.
+  * AIO completion publishes this marker together with BM_CONVERSION_PENDING.
+- * Conversion clears the pending bit after publishing the page; this marker
+- * remains until WAL covers the format change.  A completed overwrite can
+- * discharge both obligations when its buffer is registered for WAL.
++ * Normal backend conversion logs its image immediately and clears both bits.
++ * When conversion cannot insert WAL, this marker remains until WAL covers the
++ * format change.  A completed overwrite can discharge both obligations when
++ * its buffer is registered for WAL.  It does not mean conversion is pending.
+  */
+ void
+-MarkBufferConverted(Buffer buffer, bool converted)
++MarkBufferConversionNeedsWAL(Buffer buffer, bool needs_wal)
+ {
+ 	BufferDesc *bufHdr;
+ 	uint64		buf_state;
+@@ -6012,34 +6049,35 @@ MarkBufferConverted(Buffer buffer, bool converted)
+ 	Assert(BufferIsValid(buffer) && !BufferIsLocal(buffer));
+ 	bufHdr = GetBufferDescriptor(buffer - 1);
+ 	buf_state = pg_atomic_read_u64(&bufHdr->state);
+-	Assert(!converted ||
++	Assert(!needs_wal ||
+ 		   ((buf_state & BM_IO_IN_PROGRESS) && !(buf_state & BM_VALID)) ||
+ 		   BufferLockHeldByMe(bufHdr));
+ 
+-	if (((buf_state & BM_CONVERTED) != 0) == converted &&
+-		(converted || !(buf_state & BM_CONVERSION_PENDING)))
++	if (((buf_state & BM_CONVERSION_NEEDS_WAL) != 0) == needs_wal &&
++		(needs_wal || !(buf_state & BM_CONVERSION_PENDING)))
+ 		return;
+ 	/* A WAL-logged overwrite can discharge both obligations together. */
+-	Assert(converted || !(buf_state & BM_CONVERSION_PENDING) ||
++	Assert(needs_wal || !(buf_state & BM_CONVERSION_PENDING) ||
+ 		   (BufferLockHeldByMe(bufHdr) &&
+ 			(PageIsNew(BufferGetPage(buffer)) ||
+ 			 PageGetPageLayoutVersion(BufferGetPage(buffer)) == PG_PAGE_LAYOUT_VERSION)));
+ 
+ 	buf_state = LockBufHdr(bufHdr);
+ 	UnlockBufHdrExt(bufHdr, buf_state,
+-					converted ? BM_CONVERTED : 0,
+-					converted ? 0 : (BM_CONVERTED | BM_CONVERSION_PENDING), 0);
++					needs_wal ? BM_CONVERSION_NEEDS_WAL : 0,
++					needs_wal ? 0 :
++					(BM_CONVERSION_NEEDS_WAL | BM_CONVERSION_PENDING), 0);
+ }
+ 
+ bool
+-IsBufferConverted(Buffer buffer)
++BufferConversionNeedsWAL(Buffer buffer)
+ {
+ 	BufferDesc *bufHdr;
+ 
+ 	Assert(BufferIsValid(buffer) && !BufferIsLocal(buffer));
+ 	Assert(BufferIsPinned(buffer));
+ 	bufHdr = GetBufferDescriptor(buffer - 1);
+-	return (pg_atomic_read_u64(&bufHdr->state) & BM_CONVERTED) != 0;
++	return (pg_atomic_read_u64(&bufHdr->state) & BM_CONVERSION_NEEDS_WAL) != 0;
+ }
+ 
+ bool
+@@ -8892,7 +8930,7 @@ buffer_readv_complete_one(PgAioTargetData *td, uint8 buf_off, Buffer buffer,
+ 	 * shared AIO completion has neither backend transaction state nor an
+ 	 * error-safe context.  Publish the pending marker in the same atomic state
+ 	 * change as BM_VALID.  Conversion readiness is independent of the header
+-	 * version and of the BM_CONVERTED first-image WAL marker.
++	 * version and of the BM_CONVERSION_NEEDS_WAL first-image WAL marker.
+ 	 */
+ 	set_flag_bits = failed ? BM_IO_ERROR : BM_VALID;
+ 	if (!failed &&
+@@ -8901,7 +8939,7 @@ buffer_readv_complete_one(PgAioTargetData *td, uint8 buf_off, Buffer buffer,
+ 		!PageIsNew((Page) bufdata))
+ 	{
+ 		Assert(!is_temp);
+-		set_flag_bits |= BM_CONVERTED | BM_CONVERSION_PENDING;
++		set_flag_bits |= BM_CONVERSION_NEEDS_WAL | BM_CONVERSION_PENDING;
+ 	}
+ 
+ 	/* Terminate I/O and set BM_VALID. */
+diff --git a/src/backend/storage/buffer/heap_convert.c b/src/backend/storage/buffer/heap_convert.c
+index 12304398626..1848c8bc61a 100644
+--- a/src/backend/storage/buffer/heap_convert.c
++++ b/src/backend/storage/buffer/heap_convert.c
+@@ -150,7 +150,7 @@ convert_page(RelationExtraData *rel_extra, RelFileLocator *relfilelocator, ForkN
+ {
+ 	/*
+ 	 * The reading backend converts a private copy before exposing the page.
+-	 * Keep it clean until a modifying backend logs a conversion image.
++	 * The caller publishes it and logs a conversion image when WAL is allowed.
+ 	 */
+ 	if (rel_extra->relkind == RELKIND_RELATION ||
+ 		rel_extra->relkind == RELKIND_MATVIEW ||
+@@ -158,7 +158,7 @@ convert_page(RelationExtraData *rel_extra, RelFileLocator *relfilelocator, ForkN
+ 		validate_legacy_heap_page(page);
+ 
+ 	convert_page_internal(rel_extra, relfilelocator, forknum, page, buf, blkno);
+-	MarkBufferConverted(buf, true);
++	MarkBufferConversionNeedsWAL(buf, true);
+ }
+ 
+ /* Expand a source 32-bit MultiXactId using the relation's source horizon. */
+diff --git a/src/bin/pg_upgrade/Makefile b/src/bin/pg_upgrade/Makefile
+index 10ef4910d31..a5bc9bf93b6 100644
+--- a/src/bin/pg_upgrade/Makefile
++++ b/src/bin/pg_upgrade/Makefile
+@@ -3,7 +3,7 @@
+ PGFILEDESC = "pg_upgrade - an in-place binary upgrade utility"
+ PGAPPICON = win32
+ 
+-EXTRA_INSTALL=contrib/test_decoding contrib/pg_visibility src/test/modules/dummy_seclabel src/test/modules/test_extensions
++EXTRA_INSTALL=contrib/test_decoding contrib/pg_visibility contrib/pg_walinspect src/test/modules/dummy_seclabel src/test/modules/test_extensions
+ 
+ subdir = src/bin/pg_upgrade
+ top_builddir = ../../..
+diff --git a/src/bin/pg_upgrade/t/009_xid32_to_xid64_recovery.pl b/src/bin/pg_upgrade/t/009_xid32_to_xid64_recovery.pl
+index 69c03b4eef1..74b44d7eafd 100644
+--- a/src/bin/pg_upgrade/t/009_xid32_to_xid64_recovery.pl
++++ b/src/bin/pg_upgrade/t/009_xid32_to_xid64_recovery.pl
+@@ -28,7 +28,8 @@ $old->command_ok([$old->installed_command('pg_checksums'), '--disable',
+ $old->start;
+ is($old->safe_psql('postgres', 'SHOW data_checksums'), 'off',
+ 	'source checksums are disabled');
+-for my $table ('recovery_update', 'recovery_extend', 'recovery_visible')
++for my $table ('recovery_update', 'recovery_extend', 'recovery_visible',
++	'recovery_read_only')
+ {
+ 	$old->safe_psql('postgres', "CREATE TABLE $table AS SELECT 1 AS n");
+ 	$old->safe_psql('postgres', "VACUUM FREEZE $table");
+@@ -101,6 +102,7 @@ BAIL_OUT('upgrade failed') unless $upgraded;
+ 
+ $primary->start;
+ $primary->safe_psql('postgres', 'CREATE EXTENSION pg_visibility');
++$primary->safe_psql('postgres', 'CREATE EXTENSION pg_walinspect');
+ my $regresslib = $ENV{REGRESS_SHLIB};
+ BAIL_OUT('REGRESS_SHLIB is required') unless defined $regresslib;
+ $regresslib =~ s/'/''/g;
+@@ -114,7 +116,8 @@ $primary->safe_psql('postgres',
+ 	q{SELECT pg_truncate_visibility_map('recovery_visible')});
+ my %paths;
+ for my $table ('recovery_update', 'recovery_extend', 'recovery_visible',
+-	'recovery_dense', 'recovery_dense_unfrozen', 'recovery_hint', 'recovery_bad')
++	'recovery_dense', 'recovery_dense_unfrozen', 'recovery_hint', 'recovery_bad',
++	'recovery_read_only')
+ {
+ 	$paths{$table} = $primary->safe_psql('postgres',
+ 		"SELECT pg_relation_filepath('$table')");
+@@ -177,6 +180,26 @@ truncate($extend_path, 0) or die "truncate $extend_path: $!";
+ $primary->start;
+ $standby->start;
+ 
++# Frozen tuples already have their visibility hints.  The read itself must
++# emit exactly one conversion FPI, before any UPDATE, hint write or VACUUM.
++my $read_start = $primary->safe_psql('postgres', 'SELECT pg_current_wal_insert_lsn()');
++is($primary->safe_psql('postgres', 'SELECT n FROM recovery_read_only'), '1',
++	'read a frozen legacy page without modifying tuple hints');
++my $read_end = $primary->safe_psql('postgres', 'SELECT pg_current_wal_insert_lsn()');
++# Flush the inspected interval; this does not modify the test relation.
++$primary->safe_psql('postgres', 'SELECT pg_switch_wal()');
++is($primary->safe_psql('postgres', qq{
++	SELECT count(*) FROM pg_get_wal_block_info('$read_start', '$read_end', false)
++	WHERE relfilenode = pg_relation_filenode('recovery_read_only')
++	  AND reldatabase = (SELECT oid FROM pg_database WHERE datname = current_database())
++	  AND relforknumber = 0 AND relblocknumber = 0
++	  AND resource_manager = 'XLOG' AND record_type = 'FPI'
++	  AND block_fpi_length > 0
++}), '1', 'read-only conversion immediately emits one full-page WAL image');
++$primary->wait_for_catchup($standby);
++is($standby->safe_psql('postgres', 'SELECT n FROM recovery_read_only'), '1',
++	'conversion image alone makes the legacy page readable on the standby');
++
+ # A hint-only read must WAL-log conversion even without checksums/hint WAL.
+ # Restart loses the in-memory conversion marker; a subsequent incremental
+ # update must therefore find an already converted page on the standby.
+@@ -206,7 +229,7 @@ is($standby->safe_psql('postgres', 'SELECT n FROM recovery_extend'), '2',
+ is($standby->safe_psql('postgres', 'SELECT sum(n) FROM recovery_dense'), '5',
+ 	'dense legacy conversion and double-xmax update replay correctly');
+ is($standby->safe_psql('postgres', 'SELECT sum(n) FROM recovery_dense_unfrozen'), '5',
+-	'dense legacy conversion can check commit status in an AIO worker');
++	'dense legacy conversion can check commit status in the reading backend');
+ # Subsequent records use the normal relcache-less read path on current pages.
+ $standby->stop;
+ $primary->safe_psql('postgres', q{
+diff --git a/src/bin/pg_upgrade/t/010_xid32_to_xid64_createdb.pl b/src/bin/pg_upgrade/t/010_xid32_to_xid64_createdb.pl
+index 8dddd51c807..60229a5f398 100644
+--- a/src/bin/pg_upgrade/t/010_xid32_to_xid64_createdb.pl
++++ b/src/bin/pg_upgrade/t/010_xid32_to_xid64_createdb.pl
+@@ -1,5 +1,5 @@
+ # Copyright (c) 2026, Tantor Labs
+-# CREATE DATABASE must pass source pg_class metadata to worker-side conversion.
++# CREATE DATABASE must pass source pg_class metadata to backend conversion.
+ use strict;
+ use warnings FATAL => 'all';
+ 
+diff --git a/src/bin/pg_upgrade/t/012_xid32_to_xid64_hot.pl b/src/bin/pg_upgrade/t/012_xid32_to_xid64_hot.pl
+index 33fbfea8ea0..2ae32924dc4 100644
+--- a/src/bin/pg_upgrade/t/012_xid32_to_xid64_hot.pl
++++ b/src/bin/pg_upgrade/t/012_xid32_to_xid64_hot.pl
+@@ -127,7 +127,7 @@ for my $case (@cases)
+ 		SET enable_indexscan = off; SET enable_bitmapscan = off;
+ 		SELECT payload FROM $table WHERE id = 1;
+ 	}), $value, "$table sequential scan agrees");
+-	# Force the conversion image into WAL, including the rewritten root.
++	# Exercise incremental WAL after conversion already logged the rewritten root.
+ 	$new->safe_psql('postgres', "UPDATE $table SET payload = repeat('q', length(payload)) WHERE id = 2");
+ 	$new->safe_psql('postgres', "UPDATE $table SET payload = 'new' WHERE id = 1")
+ 	  if length $value;
+diff --git a/src/include/storage/buf_internals.h b/src/include/storage/buf_internals.h
+index 7f7460d31f3..77aee0adacf 100644
+--- a/src/include/storage/buf_internals.h
++++ b/src/include/storage/buf_internals.h
+@@ -114,8 +114,8 @@ StaticAssertDecl(BUF_REFCOUNT_BITS + BUF_USAGECOUNT_BITS + BUF_FLAG_BITS + BUF_L
+ #define BM_IO_IN_PROGRESS			BUF_DEFINE_FLAG( 4)
+ /* previous I/O failed */
+ #define BM_IO_ERROR					BUF_DEFINE_FLAG( 5)
+-/* converted in memory or pending conversion; force first WAL image */
+-#define BM_CONVERTED				BUF_DEFINE_FLAG( 6)
++/* format conversion still requires a WAL image before becoming durable */
++#define BM_CONVERSION_NEEDS_WAL		BUF_DEFINE_FLAG( 6)
+ /* have waiter for sole pin */
+ #define BM_PIN_COUNT_WAITER			BUF_DEFINE_FLAG( 7)
+ /* must write for checkpoint */
+diff --git a/src/include/storage/bufmgr.h b/src/include/storage/bufmgr.h
+index db821751ac5..25262feaf3b 100644
+--- a/src/include/storage/bufmgr.h
++++ b/src/include/storage/bufmgr.h
+@@ -318,8 +318,8 @@ extern void BufferGetTag(Buffer buffer, RelFileLocator *rlocator,
+ 						 ForkNumber *forknum, BlockNumber *blknum);
+ 
+ extern void MarkBufferDirtyHint(Buffer buffer, bool buffer_std);
+-extern void MarkBufferConverted(Buffer buffer, bool converted);
+-extern bool IsBufferConverted(Buffer buffer);
++extern void MarkBufferConversionNeedsWAL(Buffer buffer, bool needs_wal);
++extern bool BufferConversionNeedsWAL(Buffer buffer);
+ extern bool IsBufferLocked(Buffer buffer);
+ extern bool IsBufferLockedExclusive(Buffer buffer);
+ 
+-- 
+2.55.0
+
