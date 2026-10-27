@@ -1,5 +1,15 @@
 # Instructions for future AI instances
 
+> **HISTORY CLEANUP (2026-10-27): user-supplied
+> `patches/func/tt186xid64/0008-Upgrade-and-fix-page-conversion-for-the-new-AIO-syst.patch`
+> was removed from all local Baloo refs/history at the user's request. The user
+> had already deleted the working file; leave it absent. Do not stage supplied
+> raw patches implicitly. The active source branch's historical gitlinks were
+> remapped; the seven source patches and runtime tree did not change.
+> Local remote-tracking refs were rewritten; the remote server was not updated.
+> Recovery bundle and full rewrite map are outside Baloo at
+> `/tmp/xid64-baloo-history-cleanup-20261027-6z01il6e/`.
+
 > **CURRENT AGGREGATION (2026-10-26): active source/Baloo branch is
 > `pg19xid64evoro1900`. Apply the seven entries in
 > `patches/func/pg19xid64evoro1900/series` from vanilla beta3 `3638289fb57`.
