@@ -51,6 +51,9 @@ def message(i):
     subject = re.sub(r'^\[PATCH[^]]*\] ', '', subject.replace('\n ', ' '))
     author = re.search(r'^From: (.*)$', headers, re.M).group(1)
     date = re.search(r'^Date: (.*)$', headers, re.M).group(1)
+    if i == 5:
+        before, discussion = body.split('Discussion:', 1)
+        body = before + '- Evgeny Voropaev <evorop@gmail.com>\nDiscussion:' + discussion
     body += '\n\nAuthor: Evgeny Voropaev <evorop@gmail.com>\n'
     body += f'\nOriginal-author: {author}\n'
     return subject, body, 'Evgeny Voropaev <evorop@gmail.com>', date

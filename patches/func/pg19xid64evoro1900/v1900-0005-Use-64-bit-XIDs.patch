@@ -1,4 +1,4 @@
-From 30261f254f6f17d32e433ef26031fb5a5157b9ce Mon Sep 17 00:00:00 2001
+From 5cc66d1205c22fd353f5a23a00f36a1672893b05 Mon Sep 17 00:00:00 2001
 From: Evgeny Voropaev <evorop@gmail.com>
 Date: Fri, 11 Mar 2022 11:37:29 +0300
 Subject: [PATCH v1900 5/7] Use 64-bit XIDs
@@ -19,6 +19,7 @@ Authors:
 - Pavel Borisov <pashkin.elfe@gmail.com>
 - Yura Sokolov <y.sokolov@postgrespro.ru> <funny.falcon@gmail.com>
 - Aleksander Alekseev <aleksander@timescale.com>
+- Evgeny Voropaev <evorop@gmail.com>
 Discussion: https://postgr.es/m/CACG%3DezZe1NQSCnfHOr78AtAZxJZeCvxrts0ygrxYwe%3DpyyjVWA%40mail.gmail.com
 Discussion: https://postgr.es/m/CAJ7c6TPDOYBYrnCAeyndkBktO0WG2xSdYduTF0nxq%2BvfkmTF5Q%40mail.gmail.com
 

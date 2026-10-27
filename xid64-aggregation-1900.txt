@@ -6,7 +6,7 @@ Base: 3638289fb57bdabec00deda98ee9624a35f5d66a (Stamp 19beta3)
 Source snapshot: d64b5f0220f262b52dcc88a93cf66e9803d4d16b
 Preserved source branch: pg19beta3xid64_CODEX_OVERNIGHT_20261021
 Preserved Baloo snapshot: df5d86829d46b5ad174dcde45ff7182bc07ad817
-Source series tip: db607e6ea937ee171e8d00fba543697ae0d5def2
+Source series tip: c95511146e5329204617ac829547e4d518d573d9
 
 Apply the seven entries in patches/func/pg19xid64evoro1900/series in order.
 They contain source and native PostgreSQL tests/documentation only. They do
@@ -21,9 +21,9 @@ Source commits and exported filenames
 0002 85a343104d733b16bbc287aac7d3c2e5a9dba1b5 v1900-0002-Use-64-bit-FullTransactionId-instead-of-Epoch-xi.patch
 0003 7d3c1b933ce6460e7f145646933f868105b51296 v1900-0003-Use-64-bit-SLRU-pages-in-callers.patch
 0004 2e5c05310c9dc53669da87bf18f1195ca70aec32 v1900-0004-Use-64-bit-GUCs.patch
-0005 30261f254f6f17d32e433ef26031fb5a5157b9ce v1900-0005-Use-64-bit-XIDs.patch
-0006 a7b906af4d5c033521dc29794762f5f6be06b968 v1900-0006-README.XID64.patch
-0007 db607e6ea937ee171e8d00fba543697ae0d5def2 v1900-0007-Resolve-the-upgrade-issues.patch
+0005 5cc66d1205c22fd353f5a23a00f36a1672893b05 v1900-0005-Use-64-bit-XIDs.patch
+0006 87175ba1cc293d7ede03ae627b0a1d32d994eafb v1900-0006-README.XID64.patch
+0007 c95511146e5329204617ac829547e4d518d573d9 v1900-0007-Resolve-the-upgrade-issues.patch
 
 Grouping
 --------
@@ -126,4 +126,12 @@ Updated seven-patch replay verification follows below.
 
 Seven-patch git-am replay: PASS, exact tree 8b9a82a7d6c5fa097093188bcc4eba992a511952.
 Replay directory: /tmp/xid64-1900-verified-am-7cgs67sg.
+Every intermediate commit tree, author identity/date and infrastructure exclusion: PASS.
+
+2026-10-27: added Evgeny Voropaev <evorop@gmail.com> to the main Authors list
+in 0005. Commit descendants/exports were regenerated; trees, identities and
+dates are unchanged. Updated patch replay is recorded below.
+
+Seven-patch git-am replay: PASS, exact tree 8b9a82a7d6c5fa097093188bcc4eba992a511952.
+Replay directory: /tmp/xid64-1900-verified-am-dwe15kj8.
 Every intermediate commit tree, author identity/date and infrastructure exclusion: PASS.
