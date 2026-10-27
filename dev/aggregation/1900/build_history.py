@@ -245,7 +245,6 @@ Co-author: Maksim Starkov
 Co-author: Maxim Starkov
 Co-author: Maksim Starkov <maksim.starkov@tantorlabs.com>
 Co-author: Stanislav Antonov
-Author: OpenAI Codex <codex@openai.com>
 
 Names without email addresses are retained as written in the supplied
 patches; no identities have been inferred from other repositories.

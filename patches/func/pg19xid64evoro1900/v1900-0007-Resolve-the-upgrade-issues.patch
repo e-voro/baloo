@@ -1,4 +1,4 @@
-From c8b157d08b16a2fc22fe06df391cbc58accb12f2 Mon Sep 17 00:00:00 2001
+From ccdf0f8828d19d31964ff46c27c09fa3c6f21842 Mon Sep 17 00:00:00 2001
 From: Evgeny Voropaev <evorop@gmail.com>
 Date: Mon, 26 Oct 2026 19:27:52 +0800
 Subject: [PATCH v1900 7/7] Resolve the upgrade issues
@@ -45,7 +45,6 @@ Co-author: Maksim Starkov
 Co-author: Maxim Starkov
 Co-author: Maksim Starkov <maksim.starkov@tantorlabs.com>
 Co-author: Stanislav Antonov
-Author: OpenAI Codex <codex@openai.com>
 
 Names without email addresses are retained as written in the supplied
 patches; no identities have been inferred from other repositories.
