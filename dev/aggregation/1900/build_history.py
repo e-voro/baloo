@@ -52,7 +52,8 @@ def message(i):
     author = re.search(r'^From: (.*)$', headers, re.M).group(1)
     date = re.search(r'^Date: (.*)$', headers, re.M).group(1)
     body += '\n\nAuthor: Evgeny Voropaev <evorop@gmail.com>\n'
-    return subject, body, author, date
+    body += f'\nOriginal-author: {author}\n'
+    return subject, body, 'Evgeny Voropaev <evorop@gmail.com>', date
 
 BASE = git('rev-parse', '3638289fb57').decode().strip()
 SOURCE = git('rev-parse', 'HEAD').decode().strip()

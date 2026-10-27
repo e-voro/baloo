@@ -3,35 +3,35 @@
   "source": "d64b5f0220f262b52dcc88a93cf66e9803d4d16b",
   "commits": [
     {
-      "commit": "6cf34113ff408640db4f0edcbafcd269fb454204",
+      "commit": "48a5a5d1509147d2f2711cb6c6dda78b8fb88a37",
       "subject": "Use 64-bit format to output XIDs"
     },
     {
-      "commit": "3d34a6494b8c27f6cd49d3390bf96376c790d5d1",
+      "commit": "85a343104d733b16bbc287aac7d3c2e5a9dba1b5",
       "subject": "Use 64-bit FullTransactionId instead of Epoch:xid"
     },
     {
-      "commit": "a97680af1e578707d25afffe5073924f1ab95d5a",
+      "commit": "7d3c1b933ce6460e7f145646933f868105b51296",
       "subject": "Use 64-bit SLRU pages in callers."
     },
     {
-      "commit": "fc8e48db90257f037223df6a3723b90d7d8d6539",
+      "commit": "2e5c05310c9dc53669da87bf18f1195ca70aec32",
       "subject": "Use 64-bit GUCs"
     },
     {
-      "commit": "1765ef52efd90d5a16872da3d13ab71f210a0a00",
+      "commit": "30261f254f6f17d32e433ef26031fb5a5157b9ce",
       "subject": "Use 64-bit XIDs"
     },
     {
-      "commit": "431bb3af90d26a76b3ecd35e743eb4d55f87a7e9",
+      "commit": "a7b906af4d5c033521dc29794762f5f6be06b968",
       "subject": "README.XID64"
     },
     {
-      "commit": "a15f01026cba8e9e3e97fdc3305b1c0481a9ddf6",
+      "commit": "db607e6ea937ee171e8d00fba543697ae0d5def2",
       "subject": "Resolve the upgrade issues"
     }
   ],
-  "source_tip": "a15f01026cba8e9e3e97fdc3305b1c0481a9ddf6",
+  "source_tip": "db607e6ea937ee171e8d00fba543697ae0d5def2",
   "source_tree": "8b9a82a7d6c5fa097093188bcc4eba992a511952",
   "baloo_source": "df5d86829d46b5ad174dcde45ff7182bc07ad817",
   "deferred_paths": [
@@ -111,5 +111,7 @@
     "src/backend/storage/buffer/bufmgr.c",
     "src/include/storage/bufmgr.h",
     "src/backend/storage/buffer/heap_convert.c"
-  ]
+  ],
+  "identity_policy": "Git author and committer: Evgeny Voropaev <evorop@gmail.com>; original authors retained as message credits.",
+  "before_author_update_branch": "pg19xid64evoro1900_BEFORE_AUTHOR_UPDATE_20261027"
 }

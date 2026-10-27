@@ -3,7 +3,8 @@
 > **CURRENT AGGREGATION (2026-10-26): active source/Baloo branch is
 > `pg19xid64evoro1900`. Apply the seven entries in
 > `patches/func/pg19xid64evoro1900/series` from vanilla beta3 `3638289fb57`.
-> The first six retain v67 authors and add Evgeny Voropaev; the seventh is
+> All seven use Evgeny Voropaev <evorop@gmail.com> as Git author and committer;
+> original v67/supplied contributors remain credited in their messages. The seventh is
 > "Resolve the upgrade issues". Baloo/TODO/probes remain separate infrastructure.
 > Final source equals overnight `d64b5f0220f`; both overnight branches survive.
 > Read `xid64-aggregation-1900.txt` for boundaries, credits and validation.

@@ -1,3 +1,11 @@
+> **2026-10-27 identity/cleanup update:** all commits added to
+> `pg19xid64evoro1900` since beta3 use Evgeny Voropaev <evorop@gmail.com>
+> as both author and committer. Original contributors remain credited in
+> commit messages; active patch headers and aggregation IDs are regenerated.
+> The obsolete 0011 `.skip` note is removed. Runtime source is unchanged.
+> Pre-rewrite backups exist in both repositories as
+> `pg19xid64evoro1900_BEFORE_AUTHOR_UPDATE_20261027`.
+
 > **2026-10-26 aggregated history:** branch `pg19xid64evoro1900` now
 > contains six v1900 core commits plus **Resolve the upgrade issues**, based
 > directly on vanilla beta3 `3638289fb57`. The complete source is unchanged

@@ -1,5 +1,5 @@
-From a97680af1e578707d25afffe5073924f1ab95d5a Mon Sep 17 00:00:00 2001
-From: Maxim Orlov <m.orlov@postgrespro.ru>
+From 7d3c1b933ce6460e7f145646933f868105b51296 Mon Sep 17 00:00:00 2001
+From: Evgeny Voropaev <evorop@gmail.com>
 Date: Thu, 7 Dec 2023 18:52:45 +0300
 Subject: [PATCH v1900 3/7] Use 64-bit SLRU pages in callers.
 
@@ -7,6 +7,8 @@ TODO:
  - add upgrade for slru segments
 
 Author: Evgeny Voropaev <evorop@gmail.com>
+
+Original-author: Maxim Orlov <m.orlov@postgrespro.ru>
 ---
  src/backend/access/transam/clog.c                        | 2 +-
  src/backend/access/transam/commit_ts.c                   | 2 +-

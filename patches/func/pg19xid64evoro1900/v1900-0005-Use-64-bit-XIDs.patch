@@ -1,5 +1,5 @@
-From 1765ef52efd90d5a16872da3d13ab71f210a0a00 Mon Sep 17 00:00:00 2001
-From: Maxim Orlov <m.orlov@postgrespro.ru>
+From 30261f254f6f17d32e433ef26031fb5a5157b9ce Mon Sep 17 00:00:00 2001
+From: Evgeny Voropaev <evorop@gmail.com>
 Date: Fri, 11 Mar 2022 11:37:29 +0300
 Subject: [PATCH v1900 5/7] Use 64-bit XIDs
 
@@ -41,6 +41,8 @@ Reviewed-by: Yura Sokolov <funny.falcon@gmail.com>
 
 Includes adapted test/counter ideas from supplied tt186xid64 0002 and 0010
 and the supplied pg_combinebackup fixture correction (no author header).
+
+Original-author: Maxim Orlov <m.orlov@postgrespro.ru>
 ---
  contrib/amcheck/verify_heapam.c               |  227 ++--
  contrib/amcheck/verify_nbtree.c               |    6 +-

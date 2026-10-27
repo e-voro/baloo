@@ -1,5 +1,5 @@
-From 431bb3af90d26a76b3ecd35e743eb4d55f87a7e9 Mon Sep 17 00:00:00 2001
-From: Maxim Orlov <m.orlov@postgrespro.ru>
+From a7b906af4d5c033521dc29794762f5f6be06b968 Mon Sep 17 00:00:00 2001
+From: Evgeny Voropaev <evorop@gmail.com>
 Date: Fri, 11 Mar 2022 11:35:16 +0300
 Subject: [PATCH v1900 6/7] README.XID64
 
@@ -16,6 +16,8 @@ Discussion: https://postgr.es/m/CAJ7c6TPDOYBYrnCAeyndkBktO0WG2xSdYduTF0nxq%2Bvfk
 Author: Evgeny Voropaev <evorop@gmail.com>
 
 The following upgrade commit updates this original design for backend conversion and immediate WAL.
+
+Original-author: Maxim Orlov <m.orlov@postgrespro.ru>
 ---
  src/backend/access/heap/README.XID64 | 134 +++++++++++++++++++++++++++
  1 file changed, 134 insertions(+)

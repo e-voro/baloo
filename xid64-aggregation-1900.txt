@@ -6,7 +6,7 @@ Base: 3638289fb57bdabec00deda98ee9624a35f5d66a (Stamp 19beta3)
 Source snapshot: d64b5f0220f262b52dcc88a93cf66e9803d4d16b
 Preserved source branch: pg19beta3xid64_CODEX_OVERNIGHT_20261021
 Preserved Baloo snapshot: df5d86829d46b5ad174dcde45ff7182bc07ad817
-Source series tip: a15f01026cba8e9e3e97fdc3305b1c0481a9ddf6
+Source series tip: db607e6ea937ee171e8d00fba543697ae0d5def2
 
 Apply the seven entries in patches/func/pg19xid64evoro1900/series in order.
 They contain source and native PostgreSQL tests/documentation only. They do
@@ -17,13 +17,13 @@ belong to the subsequent infrastructure commit.
 
 Source commits and exported filenames
 ------------------------------------
-0001 6cf34113ff408640db4f0edcbafcd269fb454204 v1900-0001-Use-64-bit-format-to-output-XIDs.patch
-0002 3d34a6494b8c27f6cd49d3390bf96376c790d5d1 v1900-0002-Use-64-bit-FullTransactionId-instead-of-Epoch-xi.patch
-0003 a97680af1e578707d25afffe5073924f1ab95d5a v1900-0003-Use-64-bit-SLRU-pages-in-callers.patch
-0004 fc8e48db90257f037223df6a3723b90d7d8d6539 v1900-0004-Use-64-bit-GUCs.patch
-0005 1765ef52efd90d5a16872da3d13ab71f210a0a00 v1900-0005-Use-64-bit-XIDs.patch
-0006 431bb3af90d26a76b3ecd35e743eb4d55f87a7e9 v1900-0006-README.XID64.patch
-0007 a15f01026cba8e9e3e97fdc3305b1c0481a9ddf6 v1900-0007-Resolve-the-upgrade-issues.patch
+0001 48a5a5d1509147d2f2711cb6c6dda78b8fb88a37 v1900-0001-Use-64-bit-format-to-output-XIDs.patch
+0002 85a343104d733b16bbc287aac7d3c2e5a9dba1b5 v1900-0002-Use-64-bit-FullTransactionId-instead-of-Epoch-xi.patch
+0003 7d3c1b933ce6460e7f145646933f868105b51296 v1900-0003-Use-64-bit-SLRU-pages-in-callers.patch
+0004 2e5c05310c9dc53669da87bf18f1195ca70aec32 v1900-0004-Use-64-bit-GUCs.patch
+0005 30261f254f6f17d32e433ef26031fb5a5157b9ce v1900-0005-Use-64-bit-XIDs.patch
+0006 a7b906af4d5c033521dc29794762f5f6be06b968 v1900-0006-README.XID64.patch
+0007 db607e6ea937ee171e8d00fba543697ae0d5def2 v1900-0007-Resolve-the-upgrade-issues.patch
 
 Grouping
 --------
@@ -53,12 +53,14 @@ Grouping
 
 Authorship
 ----------
-0001-0006 retain the original v67 From/Git author Maxim Orlov
-<m.orlov@postgrespro.ru>, original author dates, original named author lists
-and reviewer credits. Each also credits Evgeny Voropaev <evorop@gmail.com>.
-0007 is authored by Evgeny Voropaev and retains the original page-format/
-conversion authors. Supplied-patch names/emails are preserved literally;
-Maxim/Maksim spelling variants have not been silently merged.
+All seven source commits and their exported From headers use Evgeny Voropaev
+<evorop@gmail.com>; every commit since beta3, including infrastructure, uses
+that identity for both author and committer (user instruction, 2026-10-27).
+Original author/committer dates are preserved during the identity rewrite.
+The original v67 author lists/reviewer credits remain in the messages;
+Original-author trailers additionally preserve Maxim Orlov's original From
+identity. Supplied-patch names/emails are preserved literally; Maxim/Maksim
+spelling variants have not been silently merged.
 
 Supplied tt186xid64 contributions
 -------------------------------
@@ -107,4 +109,21 @@ Log: /tmp/xid64-aggregate-core-regress.log.
 
 Seven-patch git-am replay: PASS, exact tree 8b9a82a7d6c5fa097093188bcc4eba992a511952.
 Replay directory: /tmp/xid64-1900-verified-am-rkfr9if3.
+Every intermediate commit tree, author identity/date and infrastructure exclusion: PASS.
+
+Identity/submodule cleanup (2026-10-27)
+--------------------------------------
+Removed the obsolete v1900-0011-FPW-converted-page-if-it-was-changed.skip
+note. Original v67-0011 remains preserved; its WAL purpose is superseded by
+0007's backend/immediate-WAL implementation. It is not an additional patch.
+Before rewriting, both repositories were backed up as
+pg19xid64evoro1900_BEFORE_AUTHOR_UPDATE_20261027. The overnight branches and
+original v67 files remain unchanged. Only active exports/messages were updated;
+archived historical patches retain their original mail headers.
+Every rewritten tree and its dates match the pre-rewrite commit. Runtime
+source did not change, so build/runtime tests were not rerun for this cleanup.
+Updated seven-patch replay verification follows below.
+
+Seven-patch git-am replay: PASS, exact tree 8b9a82a7d6c5fa097093188bcc4eba992a511952.
+Replay directory: /tmp/xid64-1900-verified-am-7cgs67sg.
 Every intermediate commit tree, author identity/date and infrastructure exclusion: PASS.
