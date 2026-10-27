@@ -54,8 +54,9 @@ def message(i):
     if i == 5:
         before, discussion = body.split('Discussion:', 1)
         body = before + '- Evgeny Voropaev <evorop@gmail.com>\nDiscussion:' + discussion
-    body += '\n\nAuthor: Evgeny Voropaev <evorop@gmail.com>\n'
-    body += f'\nOriginal-author: {author}\n'
+    else:
+        body += '\n\nAuthor: Evgeny Voropaev <evorop@gmail.com>\n'
+        body += f'\nOriginal-author: {author}\n'
     return subject, body, 'Evgeny Voropaev <evorop@gmail.com>', date
 
 BASE = git('rev-parse', '3638289fb57').decode().strip()
@@ -197,15 +198,6 @@ Upgrade execution, backend legacy-page conversion, AIO metadata and its WAL
 publication are introduced separately by "Resolve the upgrade issues".
 Core page layouts/accessors and the page-base exhaustion freeze fallback
 remain here because ordinary xid64 heap operations also require them.
-
-Additional original v67 credits:
-Author: Evgeny Voropaev <evgeny.voropaev@tantorlabs.com>
-Author: Maxim Orlov <orlovmg@gmail.com>
-Author: Pavel Borisov <pashkin.elfe@gmail.com>
-Reviewed-by: Yura Sokolov <funny.falcon@gmail.com>
-
-Includes adapted test/counter ideas from supplied tt186xid64 0002 and 0010
-and the supplied pg_combinebackup fixture correction (no author header).
 '''
 commit(fifth, subject, body, author, date)
 

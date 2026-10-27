@@ -1,4 +1,4 @@
-From c95511146e5329204617ac829547e4d518d573d9 Mon Sep 17 00:00:00 2001
+From c8b157d08b16a2fc22fe06df391cbc58accb12f2 Mon Sep 17 00:00:00 2001
 From: Evgeny Voropaev <evorop@gmail.com>
 Date: Mon, 26 Oct 2026 19:27:52 +0800
 Subject: [PATCH v1900 7/7] Resolve the upgrade issues

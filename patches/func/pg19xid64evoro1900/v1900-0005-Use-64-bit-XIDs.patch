@@ -1,4 +1,4 @@
-From 5cc66d1205c22fd353f5a23a00f36a1672893b05 Mon Sep 17 00:00:00 2001
+From 7735de5694b71be25403f7e73eb63ad66961b153 Mon Sep 17 00:00:00 2001
 From: Evgeny Voropaev <evorop@gmail.com>
 Date: Fri, 11 Mar 2022 11:37:29 +0300
 Subject: [PATCH v1900 5/7] Use 64-bit XIDs
@@ -23,8 +23,6 @@ Authors:
 Discussion: https://postgr.es/m/CACG%3DezZe1NQSCnfHOr78AtAZxJZeCvxrts0ygrxYwe%3DpyyjVWA%40mail.gmail.com
 Discussion: https://postgr.es/m/CAJ7c6TPDOYBYrnCAeyndkBktO0WG2xSdYduTF0nxq%2BvfkmTF5Q%40mail.gmail.com
 
-Author: Evgeny Voropaev <evorop@gmail.com>
-
 PG19 adaptation: preserve PG19 pruning/VM/WAL interfaces, 64-bit MultiXact
 offsets, full-XID visibility/locks/replication and native regression coverage.
 Fold in v67-0007/0008/0009/0010 and subsequent non-upgrade fixes.
@@ -33,17 +31,6 @@ Upgrade execution, backend legacy-page conversion, AIO metadata and its WAL
 publication are introduced separately by "Resolve the upgrade issues".
 Core page layouts/accessors and the page-base exhaustion freeze fallback
 remain here because ordinary xid64 heap operations also require them.
-
-Additional original v67 credits:
-Author: Evgeny Voropaev <evgeny.voropaev@tantorlabs.com>
-Author: Maxim Orlov <orlovmg@gmail.com>
-Author: Pavel Borisov <pashkin.elfe@gmail.com>
-Reviewed-by: Yura Sokolov <funny.falcon@gmail.com>
-
-Includes adapted test/counter ideas from supplied tt186xid64 0002 and 0010
-and the supplied pg_combinebackup fixture correction (no author header).
-
-Original-author: Maxim Orlov <m.orlov@postgrespro.ru>
 ---
  contrib/amcheck/verify_heapam.c               |  227 ++--
  contrib/amcheck/verify_nbtree.c               |    6 +-
