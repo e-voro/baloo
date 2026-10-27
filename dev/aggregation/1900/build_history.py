@@ -241,9 +241,7 @@ Supplied patch author credits (names/emails preserved where supplied):
 Author: Evgeny Voropaev <evorop@gmail.com>
 Author: Artem Bugaenko
 Co-author: Andrey Borodin
-Co-author: Maksim Starkov
-Co-author: Maxim Starkov
-Co-author: Maksim Starkov <maksim.starkov@tantorlabs.com>
+Author: Maksim Starkov <maksim.starkov@tantorlabs.com>
 Co-author: Stanislav Antonov
 
 Names without email addresses are retained as written in the supplied
