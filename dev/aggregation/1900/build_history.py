@@ -243,8 +243,6 @@ Author: Andrey Borodin
 Author: Maksim Starkov <maksim.starkov@tantorlabs.com>
 Author: Stanislav Antonov
 
-Names without email addresses are retained as written in the supplied
-patches; no identities have been inferred from other repositories.
 '''
 commit(final_core, 'Resolve the upgrade issues', body, 'Evgeny Voropaev <evorop@gmail.com>')
 

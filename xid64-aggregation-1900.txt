@@ -6,7 +6,7 @@ Base: 3638289fb57bdabec00deda98ee9624a35f5d66a (Stamp 19beta3)
 Source snapshot: d64b5f0220f262b52dcc88a93cf66e9803d4d16b
 Preserved source branch: pg19beta3xid64_CODEX_OVERNIGHT_20261021
 Preserved Baloo snapshot: df5d86829d46b5ad174dcde45ff7182bc07ad817
-Source series tip: c5ce51e93b513b0a071f762b2d0a7d37121c9283
+Source series tip: c3fb4a068fe0d4119983d676d829c395b9d28103
 
 Apply the seven entries in patches/func/pg19xid64evoro1900/series in order.
 They contain source and native PostgreSQL tests/documentation only. They do
@@ -23,7 +23,7 @@ Source commits and exported filenames
 0004 2e5c05310c9dc53669da87bf18f1195ca70aec32 v1900-0004-Use-64-bit-GUCs.patch
 0005 7735de5694b71be25403f7e73eb63ad66961b153 v1900-0005-Use-64-bit-XIDs.patch
 0006 37a5e40707a1bd12478f6a3387693a6caee48da7 v1900-0006-README.XID64.patch
-0007 c5ce51e93b513b0a071f762b2d0a7d37121c9283 v1900-0007-Resolve-the-upgrade-issues.patch
+0007 c3fb4a068fe0d4119983d676d829c395b9d28103 v1900-0007-Resolve-the-upgrade-issues.patch
 
 Grouping
 --------
@@ -165,3 +165,7 @@ Every intermediate commit tree, author identity/date and infrastructure exclusio
 2026-10-27: removed the extra supplied-author heading from 0007 and used
 Author for Andrey Borodin and Stanislav Antonov, as requested. Commit trees,
 identities/dates and all seven exported patch diff payloads are unchanged.
+
+2026-10-27: removed the email/provenance explanation paragraph from the
+0007 commit message and generator as requested. All source trees, metadata
+identities/dates and exported diff payloads are unchanged.

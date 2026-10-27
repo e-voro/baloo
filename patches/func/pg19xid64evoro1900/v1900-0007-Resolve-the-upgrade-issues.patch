@@ -1,4 +1,4 @@
-From c5ce51e93b513b0a071f762b2d0a7d37121c9283 Mon Sep 17 00:00:00 2001
+From c3fb4a068fe0d4119983d676d829c395b9d28103 Mon Sep 17 00:00:00 2001
 From: Evgeny Voropaev <evorop@gmail.com>
 Date: Mon, 26 Oct 2026 19:27:52 +0800
 Subject: [PATCH v1900 7/7] Resolve the upgrade issues
@@ -42,9 +42,6 @@ Author: Artem Bugaenko
 Author: Andrey Borodin
 Author: Maksim Starkov <maksim.starkov@tantorlabs.com>
 Author: Stanislav Antonov
-
-Names without email addresses are retained as written in the supplied
-patches; no identities have been inferred from other repositories.
 ---
  src/backend/access/heap/README.XID64          |  27 +-
  src/backend/access/heap/heapam_visibility.c   |  34 +-
