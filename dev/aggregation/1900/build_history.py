@@ -237,12 +237,11 @@ parts of 0008 are superseded by the backend/immediate-WAL design.
 Original xid64 page-format/conversion authors:
 ''' + credits + '''
 
-Supplied patch author credits (names/emails preserved where supplied):
 Author: Evgeny Voropaev <evorop@gmail.com>
 Author: Artem Bugaenko
-Co-author: Andrey Borodin
+Author: Andrey Borodin
 Author: Maksim Starkov <maksim.starkov@tantorlabs.com>
-Co-author: Stanislav Antonov
+Author: Stanislav Antonov
 
 Names without email addresses are retained as written in the supplied
 patches; no identities have been inferred from other repositories.

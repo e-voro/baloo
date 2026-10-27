@@ -1,4 +1,4 @@
-From 64e28485513e21e9e18d4da5b1f3aec60202dea0 Mon Sep 17 00:00:00 2001
+From c5ce51e93b513b0a071f762b2d0a7d37121c9283 Mon Sep 17 00:00:00 2001
 From: Evgeny Voropaev <evorop@gmail.com>
 Date: Mon, 26 Oct 2026 19:27:52 +0800
 Subject: [PATCH v1900 7/7] Resolve the upgrade issues
@@ -37,12 +37,11 @@ Authors:
 - Yura Sokolov <y.sokolov@postgrespro.ru> <funny.falcon@gmail.com>
 - Aleksander Alekseev <aleksander@timescale.com>
 
-Supplied patch author credits (names/emails preserved where supplied):
 Author: Evgeny Voropaev <evorop@gmail.com>
 Author: Artem Bugaenko
-Co-author: Andrey Borodin
+Author: Andrey Borodin
 Author: Maksim Starkov <maksim.starkov@tantorlabs.com>
-Co-author: Stanislav Antonov
+Author: Stanislav Antonov
 
 Names without email addresses are retained as written in the supplied
 patches; no identities have been inferred from other repositories.
